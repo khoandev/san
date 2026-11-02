@@ -790,9 +790,30 @@ func unknownCommandResult(cmd string) string {
 	return fmt.Sprintf("Unknown command: /%s\nType /help for available commands.", cmd)
 }
 
+// SkillCommandInfos lists the active skills as slash-command entries for the
+// "/" menu and its autocomplete. It returns nothing when the user turned the
+// menu listing off (see setting.Data.SkillCommands) — dispatch is unaffected,
+// since Execute resolves "/<skill>" against the skill registry directly, so a
+// hidden skill still runs when typed.
 func SkillCommandInfos() []command.Info {
 	svc := skill.DefaultIfInit()
 	if svc == nil {
+		return nil
+	}
+	// Read the live handle: the menu hides/shows without rebuilding the
+	// command registry, since the provider is consulted on every keystroke.
+	show := true
+	if settings := setting.DefaultIfInit(); settings != nil {
+		show = settings.ShowSkillCommands()
+	}
+	return skillCommandInfos(svc, show)
+}
+
+// skillCommandInfos builds the menu entries for svc, or nothing when the
+// listing is turned off. Split out from SkillCommandInfos so the gate is
+// testable without the package-level settings handle.
+func skillCommandInfos(svc *skill.Registry, show bool) []command.Info {
+	if svc == nil || !show {
 		return nil
 	}
 	enabled := svc.ListEnabled()

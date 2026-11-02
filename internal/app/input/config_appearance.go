@@ -17,6 +17,11 @@
 //
 //   - AGENT OUTPUT — independent activity and result preview, 0–20 lines.
 //
+//   - SLASH MENU — whether the active skills are listed as slash commands in
+//     the "/" menu. On by default; Off hides them from the menu and its
+//     autocomplete while a typed "/<skill>" still runs. Left/right previews
+//     Off/On, Enter applies the row.
+//
 // All are personal preferences, so — unlike Self-Learning — they have no
 // project scope; selecting a row persists to the user settings file.
 package input
@@ -71,6 +76,12 @@ type AgentPreviewSavedMsg struct {
 	Lines int
 }
 
+// SkillCommandsSavedMsg is emitted after persisting the "/" menu's
+// skill-command visibility, already written to disk.
+type SkillCommandsSavedMsg struct {
+	On bool
+}
+
 // appearanceKind tags which setting a row applies when selected.
 type appearanceKind int
 
@@ -81,6 +92,7 @@ const (
 	kindThinkingDisplay
 	kindBashPreview
 	kindAgentPreview
+	kindSkillCommands
 )
 
 // appearanceOption is one selectable row. section heads the group it belongs
@@ -93,7 +105,7 @@ type appearanceOption struct {
 	label           string
 	desc            string
 	theme           string // kindTheme: the theme value to apply
-	barOn           bool   // kindContextBar / kindGitBar: the on/off value to apply
+	barOn           bool   // kindContextBar / kindGitBar / kindSkillCommands: the on/off value to apply
 	thinkingDisplay string // kindThinkingDisplay: the display mode to apply
 	previewLines    int    // kindBashPreview: the line count to apply
 }
@@ -113,6 +125,7 @@ func appearanceOptions() []appearanceOption {
 		{section: "THINKING", kind: kindThinkingDisplay, label: "Hidden", desc: "Draw nothing at all, not even \"Thought for 3.2s\"", thinkingDisplay: setting.ThinkingDisplayHidden},
 		{section: "SHELL OUTPUT", kind: kindBashPreview, label: "Preview lines", desc: "Last lines while a command runs"},
 		{section: "AGENT OUTPUT", kind: kindAgentPreview, label: "Agent preview", desc: "Activity and result preview lines"},
+		{section: "SLASH MENU", kind: kindSkillCommands, label: "Skills", desc: "List skills in the / menu"},
 	}
 }
 
@@ -125,12 +138,13 @@ type appearancePanel struct {
 	// Baselines are the values persisted on disk, marked "● current" in their
 	// group. A group is "dirty" while the cursor hovers a row that diverges
 	// from its baseline.
-	themeBaseline        string
-	barBaseline          bool
-	gitBarBaseline       bool
-	thinkingBaseline     string
-	bashPreviewBaseline  int
-	agentPreviewBaseline int
+	themeBaseline         string
+	barBaseline           bool
+	gitBarBaseline        bool
+	thinkingBaseline      string
+	bashPreviewBaseline   int
+	agentPreviewBaseline  int
+	skillCommandsBaseline bool
 
 	// saveErr holds the last failed persist so Render can surface it inline
 	// instead of silently swallowing it. Cleared on navigation / re-entry.
@@ -151,6 +165,7 @@ func (p *appearancePanel) Enter() {
 	p.thinkingBaseline = setting.DefaultThinkingDisplay
 	p.bashPreviewBaseline = setting.DefaultBashPreviewLines
 	p.agentPreviewBaseline = setting.DefaultAgentPreviewLines
+	p.skillCommandsBaseline = true
 	if p.settings != nil {
 		if data := p.settings.Snapshot(); data != nil {
 			if data.Theme != "" {
@@ -161,6 +176,7 @@ func (p *appearancePanel) Enter() {
 			p.thinkingBaseline = data.ThinkingDisplayMode()
 			p.bashPreviewBaseline = data.BashPreviewLineCount()
 			p.agentPreviewBaseline = data.AgentPreviewLineCount()
+			p.skillCommandsBaseline = data.ShowSkillCommands()
 		}
 	}
 	p.resetBarChoices()
@@ -191,7 +207,7 @@ func (p *appearancePanel) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	case "left", "h", "right", "l":
 		more := msg.String() == "right" || msg.String() == "l"
 		switch opt := &p.options[p.cursor]; {
-		case isAppearanceBar(*opt):
+		case isAppearanceToggle(*opt):
 			opt.barOn = more
 		case opt.kind == kindAgentPreview && more:
 			opt.previewLines = min(opt.previewLines+1, setting.MaxAgentPreviewLines)
@@ -265,12 +281,19 @@ func (p *appearancePanel) apply(opt appearanceOption) (tea.Cmd, bool) {
 		}
 		p.agentPreviewBaseline = opt.previewLines
 		return func() tea.Msg { return AgentPreviewSavedMsg{Lines: opt.previewLines} }, true
+	case kindSkillCommands:
+		if err := setting.SaveSkillCommands(opt.barOn); err != nil {
+			p.saveErr = err
+			return nil, false
+		}
+		p.skillCommandsBaseline = opt.barOn
+		return func() tea.Msg { return SkillCommandsSavedMsg{On: opt.barOn} }, true
 	}
 	return nil, false
 }
 
 func (p *appearancePanel) HintLine() string {
-	if isAppearanceBar(p.options[p.cursor]) {
+	if isAppearanceToggle(p.options[p.cursor]) {
 		return keycap("↑↓") + " move  " + keycap("←→") + " off/on  " + keycap("enter") + " apply"
 	}
 	if p.options[p.cursor].kind == kindBashPreview || p.options[p.cursor].kind == kindAgentPreview {
@@ -327,6 +350,8 @@ func (p *appearancePanel) isCurrent(opt appearanceOption) bool {
 		return opt.previewLines == p.bashPreviewBaseline
 	case kindAgentPreview:
 		return opt.previewLines == p.agentPreviewBaseline
+	case kindSkillCommands:
+		return opt.barOn == p.skillCommandsBaseline
 	default:
 		return opt.theme == p.themeBaseline
 	}

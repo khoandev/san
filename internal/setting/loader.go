@@ -558,6 +558,13 @@ func SaveGitBar(on bool) error {
 	return nil
 }
 
+// SaveSkillCommands persists whether skills are listed in the "/" command menu
+// to ~/.san/settings.json, as an explicit value so hiding them sticks. The
+// setting is a menu preference: a hidden skill still runs when typed.
+func SaveSkillCommands(on bool) error {
+	return updateSettingsFile(ScopeUser, func(d *Data) { d.SkillCommands = &on })
+}
+
 // SaveThinkingDisplay persists the reasoning-display choice to
 // ~/.san/settings.json, replacing the field. Callers pass one of the
 // ThinkingDisplay* constants; an unrecognized value resolves to the default on

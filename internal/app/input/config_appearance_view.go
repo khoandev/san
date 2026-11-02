@@ -54,7 +54,7 @@ func (p *appearancePanel) renderBody(width int) appearanceBody {
 			body.cursorRow = len(body.lines)
 		}
 		switch {
-		case isAppearanceBar(opt):
+		case isAppearanceToggle(opt):
 			body.lines = append(body.lines, renderBarToggle(opt, i == p.cursor, width))
 		case opt.kind == kindBashPreview || opt.kind == kindAgentPreview:
 			body.lines = append(body.lines, renderPreviewStepper(opt, i == p.cursor, width))

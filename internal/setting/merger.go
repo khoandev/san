@@ -31,6 +31,7 @@ func mergeSettings(base, overlay *Data) *Data {
 	result.AutoMemoryDirectory = coalesce(overlay.AutoMemoryDirectory, base.AutoMemoryDirectory)
 	result.ContextBar = coalescePtr(overlay.ContextBar, base.ContextBar)
 	result.GitBar = coalescePtr(overlay.GitBar, base.GitBar)
+	result.SkillCommands = coalescePtr(overlay.SkillCommands, base.SkillCommands)
 	result.ThinkingDisplay = coalesce(overlay.ThinkingDisplay, base.ThinkingDisplay)
 	result.BashPreviewLines = coalescePtr(overlay.BashPreviewLines, base.BashPreviewLines)
 	result.AgentPreviewLines = coalescePtr(overlay.AgentPreviewLines, base.AgentPreviewLines)

@@ -95,6 +95,15 @@ func (s *Settings) AllowBypass() bool {
 	return s.data == nil || s.data.AllowBypass == nil || *s.data.AllowBypass
 }
 
+// ShowSkillCommands reports whether skills are listed in the "/" command menu.
+// Opt-out: listed unless the user sets "skillCommands": false. Hiding is a menu
+// preference only — a skill still runs when its "/<skill>" is typed.
+func (s *Settings) ShowSkillCommands() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data == nil || s.data.SkillCommands == nil || *s.data.SkillCommands
+}
+
 func (s *Settings) IsGitRepo(cwd string) bool {
 	return IsGitRepo(cwd)
 }

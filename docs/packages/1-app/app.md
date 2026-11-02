@@ -325,6 +325,22 @@ pending, and completed plan items; rendering leaves task records intact.
   from `View` or synchronously in `Update`, expose remote credentials, or treat
   an unavailable snapshot as clean.
 
+### Skills in the `/` menu
+
+- **Configuration:** `/settings` → Appearance → SLASH MENU → Skills switches
+  whether the active skills appear as slash commands. `skillCommands` defaults
+  on; `input.SkillCommandsSavedMsg` reloads the effective setting and confirms.
+  See [configuration](../../reference/configuration.md).
+- **Flow:** `command.Registry` lists skills through the dynamic provider
+  `input.SkillCommandInfos`; it reads the live settings handle and returns no
+  entries when the listing is off. Dispatch never goes through that provider —
+  `lookupSkill` resolves a typed `/<skill>` against the skill registry — so a
+  hidden skill still runs, and `/skills` still lists it.
+- **Pitfalls:** the provider is consulted on every keystroke, so a toggled
+  setting takes effect on the next `/` without rebuilding the command registry.
+  Do not hide the skills by disabling them in `skills.json`; that changes what
+  the agent may use, not what the menu shows.
+
 ## Lifecycle
 
 - `cmd/san` calls `app.Run()` which builds the `tea.Program`,
@@ -351,6 +367,7 @@ internal/app/conv/tracker_view_test.go         — task tracker view.
 internal/app/conv/git_bar_test.go              — Git row content, CJK widths and truncation.
 internal/app/model_git_bar_test.go             — polling, stale events, settings and footer height.
 internal/app/input/config_git_bar_test.go      — Appearance toggle, persistence and short panels.
+internal/app/input/config_skill_commands_test.go — /menu skills toggle and persistence.
 internal/app/view_test.go                     — fixed composer, multiline input and candidates.
 internal/app/view_observability_test.go        — worker identities, modal height, notices and progress.
 internal/app/view_worker_budget_test.go        — mixed tools and competing workflow height budgets.

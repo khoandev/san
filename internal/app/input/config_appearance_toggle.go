@@ -10,8 +10,15 @@ import (
 	"github.com/genai-io/san/internal/app/kit"
 )
 
+// isAppearanceBar reports whether opt is one of the two status-bar switches.
 func isAppearanceBar(opt appearanceOption) bool {
 	return opt.kind == kindContextBar || opt.kind == kindGitBar
+}
+
+// isAppearanceToggle reports whether opt is a compact Off/On control, drawn in
+// the shared toggle layout and driven by ←/→.
+func isAppearanceToggle(opt appearanceOption) bool {
+	return isAppearanceBar(opt) || opt.kind == kindSkillCommands
 }
 
 // resetBarChoices initializes the compact toggles from the saved preferences.
@@ -24,6 +31,8 @@ func (p *appearancePanel) resetBarChoices() {
 			p.options[i].barOn = p.barBaseline
 		case kindGitBar:
 			p.options[i].barOn = p.gitBarBaseline
+		case kindSkillCommands:
+			p.options[i].barOn = p.skillCommandsBaseline
 		case kindBashPreview:
 			p.options[i].previewLines = p.bashPreviewBaseline
 		case kindAgentPreview:
@@ -33,7 +42,7 @@ func (p *appearancePanel) resetBarChoices() {
 }
 
 // renderBarToggle shares a label column and compact Off / On cells between
-// both preferences. Only the selected value has a background, not the row.
+// every compact switch (the status bars and the / menu skill listing). Only the selected value has a background, not the row.
 // Unfocused controls use a neutral fill; the focused value shares the popup's
 // active-tab accent so color marks navigation, not every enabled preference.
 func renderBarToggle(opt appearanceOption, hovered bool, width int) string {

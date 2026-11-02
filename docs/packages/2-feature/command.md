@@ -57,7 +57,10 @@ func ResetDefaultRegistry()          // test-only
 - `registry.go` — combines three sources at query time:
   - **Built-ins** registered from `builtin/` subpackage at init.
   - **Dynamic** — `DynamicProviders` callbacks returning `Info` slices
-    (used by skill/agent slash-command surfaces).
+    (used by skill/agent slash-command surfaces). A provider is consulted on
+    every match, so it can gate its own entries on live state without a
+    registry rebuild — the skill provider, for example, returns nothing when
+    `settings.skillCommands` is off.
   - **Custom** — markdown files under `~/.san/commands/` and
     `<project>/.san/commands/`, plus plugin-scoped paths returned by
     `PluginCommandPaths`.

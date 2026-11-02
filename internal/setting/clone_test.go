@@ -31,6 +31,7 @@ func TestCloneCopiesEveryField(t *testing.T) {
 		HookUITimeout:           "30s",
 		ContextBar:              &yes,
 		GitBar:                  &yes,
+		SkillCommands:           &no,
 		ThinkingDisplay:         ThinkingDisplayCollapsed,
 		BashPreviewLines:        &three,
 		AgentPreviewLines:       &three,

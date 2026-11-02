@@ -101,6 +101,12 @@ type Data struct {
 	// GitBar enables the optional repository status row. Nil means off;
 	// a pointer preserves an explicit false across settings overlays.
 	GitBar *bool `json:"gitBar,omitempty"`
+	// SkillCommands lists the active skills as slash commands in the "/" menu.
+	// Opt-out: nil/absent means listed; a pointer keeps an explicit false across
+	// settings overlays. A menu preference only — a hidden skill still runs when
+	// its "/<skill>" is typed, and /skills still lists it. Read via
+	// Data.ShowSkillCommands().
+	SkillCommands *bool `json:"skillCommands,omitempty"`
 	// ThinkingDisplay selects how the model's reasoning is drawn: "full",
 	// "collapsed", or "hidden" (see the ThinkingDisplay* constants). Empty or
 	// unrecognized resolves to DefaultThinkingDisplay. Read via
@@ -435,6 +441,12 @@ func (s *Data) ShowContextBar() bool {
 // ShowGitBar reports whether the optional repository status row is enabled.
 func (s *Data) ShowGitBar() bool {
 	return s != nil && s.GitBar != nil && *s.GitBar
+}
+
+// ShowSkillCommands reports whether skills are listed in the "/" command menu.
+// Opt-out: nil (unset) means listed.
+func (s *Data) ShowSkillCommands() bool {
+	return s == nil || s.SkillCommands == nil || *s.SkillCommands
 }
 
 // DefaultBashPreviewLines and MaxBashPreviewLines bound a shell row's output
@@ -850,6 +862,7 @@ func (s *Data) Clone() *Data {
 	dst.AutoMemory = clonePtr(s.AutoMemory)
 	dst.ContextBar = clonePtr(s.ContextBar)
 	dst.GitBar = clonePtr(s.GitBar)
+	dst.SkillCommands = clonePtr(s.SkillCommands)
 	dst.BashPreviewLines = clonePtr(s.BashPreviewLines)
 	dst.AgentPreviewLines = clonePtr(s.AgentPreviewLines)
 	empty := NewData() // the maps are never nil on a clone

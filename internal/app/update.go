@@ -423,6 +423,28 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.conv.AddNotice("Agent preview: " + preview)
 		return m, nil
+	case input.SkillCommandsSavedMsg:
+		// The menu reads the live setting on every keystroke, so a reload is
+		// all it takes for the next "/" to reflect the choice.
+		if err := m.services.Setting.Reload(m.env.CWD); err != nil {
+			log.Logger().Warn("reload settings after slash-menu save failed", zap.Error(err))
+		}
+		// Report the effective value: a project or persona setting outranks the
+		// user level the panel writes.
+		shown := m.services.Setting.ShowSkillCommands()
+		switch {
+		case shown != msg.On:
+			state := "hidden from"
+			if shown {
+				state = "listed in"
+			}
+			m.conv.AddNotice("Saved, but a project setting keeps skills " + state + " the / menu")
+		case shown:
+			m.conv.AddNotice("Skills listed in the / menu")
+		default:
+			m.conv.AddNotice("Skills hidden from the / menu — typing /<skill> still runs one")
+		}
+		return m, nil
 	case input.AutoUpdateSavedMsg:
 		if err := m.services.Setting.Reload(m.env.CWD); err != nil {
 			log.Logger().Warn("reload settings after auto-update save failed", zap.Error(err))

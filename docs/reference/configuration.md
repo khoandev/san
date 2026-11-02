@@ -34,6 +34,7 @@ Configuration is loaded from multiple files at different scopes. Higher-priority
   "theme": "dark",
   "contextBar": true,
   "gitBar": true,
+  "skillCommands": true,
   "thinkingDisplay": "collapsed",
   "bashPreviewLines": 3,
   "agentPreviewLines": 3
@@ -63,6 +64,17 @@ Reads are asynchronous (two-second timeout, three-second delay between polls),
 local-only and never fetch. Workspace changes clear the snapshot and reread;
 disabling cancels polling. The row hides outside a repository, without Git, or
 on read failure.
+
+### `skillCommands`
+
+Whether the active skills are listed as slash commands in the `/` menu and its
+autocomplete; defaults to `true`. Set it in `/settings` → Appearance → SLASH
+MENU → Skills: Left / Right previews Off / On; Enter saves to
+`~/.san/settings.json`. Project/local settings can override this preference.
+
+It is a menu preference only: with it off, typing `/my-skill` still runs the
+skill, and `/skills` still lists and toggles it. Use it when a large skill set
+crowds the built-in commands out of the first screenful.
 
 ### `bashPreviewLines`
 

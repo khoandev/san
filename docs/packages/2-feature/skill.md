@@ -96,6 +96,10 @@ func ResetDefaultRegistry()           // test-only
   the model via the `skills-directory` reminder attached to each user
   message; enable-only skills surface as slash commands but stay out of
   the model's awareness entirely.
+- The `/` menu lists enabled skills through `internal/app/input`'s
+  `SkillCommandInfos` provider; `/settings` → Appearance → SLASH MENU can
+  hide that listing (`skillCommands`) without changing any skill's state —
+  a typed `/<skill>` still dispatches.
 
 ## Lifecycle
 
