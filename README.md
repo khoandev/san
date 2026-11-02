@@ -241,7 +241,7 @@ matching ladder and diagnostics included.
 | Per edit, 2,000-line Go file | Sloppy patch | The shapes it replaced |
 |---|---|---|
 | Payload to change one line in a 42-line function | **232 B** (2 quoted lines + elided body) | line anchors: ~1.1 KB of replacement text; exact string: ~2.2 KB quoting the range twice |
-| Apply, server side | ~4–5 ms · 5.2 MB | ~2 ms · 1.5 MB |
+| Apply, server side | ~3.3 ms · 5.1 MB | ~2 ms · 1.5 MB |
 | Read row | `42\|content` (unchanged line numbers, 3 bytes shorter) | `  42 qwert│content` (+8 bytes per line) |
 
 <sub>Go 1.27, darwin/amd64, i5-8257U. `go test ./internal/tool/fs/ -run XXX -bench 'Edit'` reproduces the timings; `TestEditPayloadSize` pins the byte counts. On a 200-line file the same edit takes ~1.1 ms: the engine normalizes the whole file per payload, so its cost follows file size.</sub>
@@ -256,7 +256,7 @@ exactly — while uniqueness and atomicity keep the tool fail-closed: every
 operation plans against the original text, so either the whole payload lands or
 the file is untouched.
 
-The trade is explicit: ~2–3 ms more server-side per edit on a 2,000-line file,
+The trade is explicit: ~1 ms more server-side per edit on a 2,000-line file,
 against seconds of model time and a round-trip per mishap. Anchoring also needs
 a current view — `Read` first, and a file changed on disk afterwards says so
 instead of guessing — and one call edits one file, because one approval reviews
