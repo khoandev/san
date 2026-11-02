@@ -49,11 +49,15 @@ func RecordFileWritten(filePath string) {
 // ResetFileViews forgets every recorded observation. The app calls it when
 // the conversation the model sees is replaced (/clear, loading another
 // session), so "observed this session" keeps meaning the current
-// conversation rather than the process lifetime.
+// conversation rather than the process lifetime. Line anchors are dropped with
+// the views: an anchor is a handle into one conversation's Read output, and
+// carrying it across a reset would let a new conversation edit a line it was
+// never shown.
 func ResetFileViews() {
 	fileViewsMu.Lock()
-	defer fileViewsMu.Unlock()
 	clear(fileViews)
+	fileViewsMu.Unlock()
+	resetAnchors()
 }
 
 // Viewed reports whether the model's view of filePath is current, so showing

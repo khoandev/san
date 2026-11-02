@@ -98,6 +98,17 @@ func NewErrorResult(title, errorMsg string) ToolResult {
 // must stay one definition.
 const LineNumberFormat = "%6d\t%s\n"
 
+// AnchorSep separates a line's anchor from its text. It is the anchor row's
+// delimiter everywhere a row is printed or parsed, so it lives with the format
+// that prints it rather than with either side's parser.
+const AnchorSep = "│"
+
+// AnchorLineFormat is a Read row for a file whose lines carry anchors: the line
+// number (what a human reads), the anchor (what an edit targets), then the
+// line. The anchor sits between the two so the line text still starts at a
+// stable column.
+const AnchorLineFormat = "%6d %s" + AnchorSep + "%s\n"
+
 // FormatForLLM returns a plain text representation of the result for LLM consumption
 func (r ToolResult) FormatForLLM() string {
 	if !r.Success {
@@ -114,6 +125,10 @@ func (r ToolResult) FormatForLLM() string {
 		if len(r.Lines) > 0 {
 			sb.Grow(len(r.Lines) * 40)
 			for _, line := range r.Lines {
+				if line.Hash != "" {
+					fmt.Fprintf(&sb, AnchorLineFormat, line.LineNo, line.Hash, line.Text)
+					continue
+				}
 				fmt.Fprintf(&sb, LineNumberFormat, line.LineNo, line.Text)
 			}
 			// A trailing note (e.g. "output truncated at line N") must reach

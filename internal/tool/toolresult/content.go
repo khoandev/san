@@ -16,4 +16,5 @@ type ContentLine struct {
 	Text   string   // Line content
 	Type   LineType // Line type
 	File   string   // File path (for grep results)
+	Hash   string   // Line anchor for Edit; empty when the line carries none
 }

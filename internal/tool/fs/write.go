@@ -131,6 +131,9 @@ func (t *WriteTool) ExecuteApproved(ctx context.Context, params map[string]any, 
 	if err := atomicfile.WriteFile(filePath, []byte(content), mode); err != nil {
 		return toolresult.NewErrorResult(t.Name(), "failed to write file: "+err.Error())
 	}
+	// Write replaces the whole file: every anchor the model holds for the old
+	// content is worthless, so the next Read mints fresh ones.
+	forgetAnchors(filePath)
 	RecordFileWritten(filePath)
 
 	duration := time.Since(start)
