@@ -83,8 +83,8 @@ modelcache.go  the cached listings, and the context window resolved from them
 cost.go        Money, the multi-currency total, and per-provider/auth pricing
 logging.go     CompletionOptions, as the log package reads it
 vendor*.go     every vendor, over genai-io/sdk-go
-opencode.go    the one vendor that gates on the request's shape: session token, headers
-opencode_tls.go  the same vendor's transport: the TLS handshake the gate reads
+opencode.go    the one vendor that gates on the client: request identity, shaping, and the
+               TLS handshake it is read on
 data/          the model data built into the binary (see Model data)
 ```
 
@@ -138,7 +138,7 @@ Worth knowing beyond the names:
   request the gate would accept, byte for byte, sent from curl, OpenSSL, Node
   or Go still comes back 429 with a nineteen-hour `Retry-After`, while the
   same bytes from Bun are answered: what the gate reads is the ClientHello.
-  `opencode_tls.go` therefore handshakes with Bun's — no GREASE, no padding,
+  `opencode.go` therefore handshakes with Bun's — no GREASE, no padding,
   TLS 1.2 and 1.3, `X25519MLKEM768` as the first key share, and ALPN offering
   only `http/1.1`, which also keeps the connection off Go's HTTP/2 stack. The
   vendor is built with that client (`configureOpenCodeZen`), the SDK's

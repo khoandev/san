@@ -16,6 +16,10 @@
 //	vendor_models.go       the one endpoint that answers about its models its own way
 //	vendor_data.go         what the models are: lineups, limits, prices, reasoning efforts
 //	vendor_data_refresh.go keeping that data current from models.dev
+//
+// One vendor is not a catalog row at all and carries its own wire: opencode.go
+// is OpenCode Zen — the request identity, the shaping, and the handshake the
+// free tier reads.
 package llm
 
 import (
