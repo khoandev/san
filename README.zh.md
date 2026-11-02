@@ -200,35 +200,43 @@ plugins-local/      # 本地插件（git-ignored）
 
 </details>
 
-## 编辑：用锚点，而不是重抄文本
+## 编辑：一份锚点补丁，原子生效
 
-`Read` 会在每行前面打印一个短句柄，`Edit` 用首尾两个句柄指定要替换的区间，而不是把原文抄一遍：
+`Read` 把每一行打印成 `42|内容`；`Edit` 只收一份 payload，只引用用来定位的那几行 —— 下面这个例子改了函数名，却不用重抄 40 行函数体：
 
 ```
-  1204 qwert│func handler(ctx context.Context, req *Request) (*Response, error) {
-  1205 abcfg│    return nil, err
+*** SM:EDIT src/users.go
+*** SM:FIND
+func load(…) {
+	…
+	return old(…)
+}
+*** SM:PUT
+func load(…) {
+	…
+	return fresh(…)
+}
 ```
 
-```json
-{"file_path": "src/a.go", "remove_from": "qwert", "remove_to": "abcfg", "text": "func handler() (*Response, error) {\n\treturn nil, err"}
-```
+- `…` 省略锚点没有重述的片段，并在替换文本里按顺序回放；`⟪旧│新⟫` 直接在原地改片段，不需要动作头。
+- 锚点采用容忍匹配 —— 缩进、空格、排版标点与文件中不一致也能命中 —— 但必须**唯一**。锚点缺失或存在歧义时，整份 payload 不生效，绝不会退化成整文件重写。
+- 错误是写给模型看的：语法错误是 `error[SM102]`，附上 payload 行号与修法；匹配失败会返回最接近的区域，以及一份可直接重发的 payload。
 
-抄 `abcfg` 和重打一行服务端代码不是同一件事：没有缩进可写错，没有行尾空格会丢，而且模型看到的句柄一旦失效会被指名拒绝，而不是落到某个看起来差不多的邻行。锚点编辑是 San 的默认 `Edit` 形态，`old_string`/`new_string` 保留为仍然适用的场景的兜底。
+这就是 Edit 的全部形态：San 早先的两种形态 —— 行锚点（`remove_from`/`remove_to`）与精确字符串替换（`old_string`/`new_string`）—— 已被删除，因为两者都要求模型重述它已经读过的文本。载荷格式逐字节兼容 [pulseaiclub/phi](https://github.com/pulseaiclub/phi) 的 sloppy edit 引擎，匹配阶梯与诊断一并移植。
 
-| 单次编辑，2000 行 Go 文件 | 锚点 | 传统 | |
-|---|---|---|---|
-| 替换 5 行时模型要发出的调用 | 179 B | 529 B | **小 3.0 倍** |
-| 替换 40 行时模型要发出的调用 | 179 B | 3,119 B | **小 17.4 倍** |
-| Edit 调用，服务端耗时 | ~1.7–2.4 ms | ~1.9–2.1 ms | 持平 |
-| 完整「读取后编辑」一轮 | ~4.0–4.4 ms · 4,364 allocs | ~4.1–5.5 ms · 4,345 allocs | 持平 |
-| Read 输出开销 | 每行 +8 字节 | — | 代价 |
+| 单次编辑，2000 行 Go 文件 | Sloppy 补丁 | 被它取代的形态 |
+|---|---|---|
+| 改 42 行函数里的 1 行，模型要发出的调用 | **232 B**（2 行锚点 + 省略函数体） | 行锚点：约 1.1 KB 替换文本；精确匹配：约 2.2 KB，整个区间抄两遍 |
+| 应用，服务端耗时 | ~4–5 ms · 5.2 MB | ~2 ms · 1.5 MB |
+| Read 行 | `42\|内容`（行号不变，每行少 3 字节） | `  42 qwert│内容`（每行 +8 字节） |
 
-<sub>Go 1.27，darwin/amd64，i5-8257U。耗时用 `go test ./internal/tool/fs/ -run XXX -bench 'Edit'` 复现；字节数由 `TestEditRequestPayloadSize` 固定。</sub>
+<sub>Go 1.27，darwin/amd64，i5-8257U。耗时用 `go test ./internal/tool/fs/ -run XXX -bench 'Edit'` 复现；字节数由 `TestEditPayloadSize` 固定。同样的编辑在 200 行文件上约 1.1 ms：引擎每次都会把整个文件归一化，所以开销随文件大小增长。</sub>
 
-**为什么 San 选它。** 用户等的是模型写调用，不是 San 解析调用 —— 所以真正重要的是模型为了描述一次修改要生成多少 token。抄一个 40 行的函数约 800 token，而一次抄错就换来一次失败调用和一次重读；两个锚点无论区间多大都约 15 token。安全性来自同一个性质：编辑落在模型真正看过的行上，失效的句柄会被拒绝并附上当前行，重试不需要额外 `Read`。
+**为什么 San 选它。** 用户等的是模型写调用，不是 San 解析调用，所以真正重要的是模型为了描述一次修改要生成多少 token。重抄 40 行函数约 800 token，而一次抄错就换来一次失败调用和一次重读；两行锚点加一个 `…` 无论函数体多长都约 50 token。容忍匹配消除了另一种失败模式 —— 模型不必逐字复现缩进与空格 —— 而唯一性和原子性让工具保持 fail-closed：所有操作都对着原始文本规划，整份 payload 要么全部生效，要么文件分毫不动。
 
-客户端耗时按设计保持中性（上面的基准守住这一点），Read 的开销真实但很小：每行 8 字节，2000 行约 16 KB —— 比一次抄错后被迫重读还要少。锚点属于会话状态，`/clear` 时一并丢弃，和其他「读过这个文件」的记录一样。
+代价是明确的：2000 行文件上每次编辑多花约 2–3 ms 服务端时间，换来的是几秒级的模型时间，以及避免每次失误多一轮往返。锚点还要求「当前视图」—— 先 `Read`；之后文件在磁盘上变了会直接说明，而不是猜 —— 并且一次调用只改一个文件，因为一次审批只审一份 diff。
 
+## 基准测试：San vs Claude Code
 ## 基准测试：San vs Claude Code
 
 在 Apple Silicon 上对比 [Claude Code](https://claude.ai/code) v2.1.112，使用相同模型（`claude-sonnet-4-6`）：

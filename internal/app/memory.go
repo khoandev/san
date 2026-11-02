@@ -11,6 +11,7 @@ import (
 	"github.com/genai-io/san/internal/core/system"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool"
+	"github.com/genai-io/san/internal/tool/perm"
 )
 
 // autoMemory is the auto-memory stores the main agent maintains, zero when
@@ -29,7 +30,9 @@ func autoMemoryStore(s system.MemoryStores, toolName string, args map[string]any
 	if toolName != "Write" && toolName != "Edit" {
 		return ""
 	}
-	path, _ := args["file_path"].(string)
+	// Edit names the file inside its payload header, so ask the shared
+	// resolver rather than the argument the call may not carry.
+	path := perm.CallFile(toolName, args)
 	if !strings.HasSuffix(path, ".md") || !filepath.IsAbs(path) {
 		return ""
 	}

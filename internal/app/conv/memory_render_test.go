@@ -64,9 +64,18 @@ func TestTurnMemory(t *testing.T) {
 	index := filepath.Join(mem, "MEMORY.md")
 	call := func(id, name, path string, extra map[string]string) core.ToolCall {
 		args := map[string]string{"file_path": path}
+		if _, payloadOnly := extra["payload"]; payloadOnly {
+			// Edit names its file in the payload header, never in an argument.
+			args = map[string]string{}
+		}
 		maps.Copy(args, extra)
 		b, _ := json.Marshal(args)
 		return core.ToolCall{ID: id, Name: name, Input: string(b)}
+	}
+	edit := func(id, path, find, put string) core.ToolCall {
+		return call(id, "Edit", "", map[string]string{
+			"payload": "*** SM:EDIT " + path + "\n*** SM:FIND\n" + find + "\n*** SM:PUT\n" + put + "\n",
+		})
 	}
 	write := func(name, body string) string {
 		p := filepath.Join(mem, name)
@@ -111,10 +120,10 @@ func TestTurnMemory(t *testing.T) {
 		{Role: core.ChatUser, ToolResult: &core.ToolResult{ToolCallID: "r3", ToolName: "Read", Content: ai.TextContent(attached)}},
 		{Role: core.ChatAssistant, ToolCalls: []core.ToolCall{
 			call("w1", "Write", terse, nil),
-			call("e1", "Edit", terse, nil),
-			call("e2", "Edit", freeze, map[string]string{"old_string": "description: freeze until 10/30", "new_string": "description: freeze until 11/5"}),
+			edit("e1", terse, "name: terse", "name: terse-short"),
+			edit("e2", freeze, "description: freeze until 10/30", "description: freeze until 11/5"),
 			{ID: "d1", Name: "Bash", Input: `{"command":"rm ` + tabsGone + `"}`},
-			call("e3", "Edit", index, map[string]string{"old_string": "- [Old note](old.md) — x\n- [Freeze](freeze.md) — y", "new_string": "- [Freeze](freeze.md) — y"}),
+			edit("e3", index, "- [Old note](old.md) — x\n- [Freeze](freeze.md) — y", "- [Freeze](freeze.md) — y"),
 		}},
 	}}
 	var got []string

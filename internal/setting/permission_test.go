@@ -90,7 +90,9 @@ func TestBuildRule(t *testing.T) {
 		{
 			"edit file",
 			"Edit",
-			map[string]any{"file_path": "/path/to/file.go", "old_string": "foo", "new_string": "bar"},
+			// Edit names its target in the payload header, never in file_path:
+			// the rule has to read it from there or it would match every call.
+			map[string]any{"payload": "*** SM:EDIT /path/to/file.go\n*** SM:FIND\nfoo\n*** SM:PUT\nbar\n"},
 			"Edit(/path/to/file.go)",
 		},
 		{

@@ -54,21 +54,29 @@ provides; when san grows a generic piece, move it to sdk-go and drop san's
 copy. san keeps its own policy and UI. See sdk-go's CONTRIBUTING.md, "What
 belongs here".
 
-## Anchored Editing
+## Editing
 
-`Read` prints `  12 qwert│text`; `Edit` targets `remove_from`/`remove_to`
-anchors by default, and the legacy `old_string`/`new_string` shape stays as a
-fallback for small, unique replacements. Keep that ordering: anchored is the
-default path, so it must never be the slower or the less safe one.
+`Read` prints `42|content`; `Edit` takes one `payload` in the sloppy anchored
+format ported from [pulseaiclub/phi](https://github.com/pulseaiclub/phi):
+`*** SM:EDIT path`, then `*** SM:FIND` + `*** SM:PUT` | `*** SM:AFTER` | `⟪old│new⟫`.
+It is the only Edit shape — do not reintroduce string or line-range arguments
+without deleting this one in the same change. A payload must fail closed: an
+absent or ambiguous anchor applies nothing, and no path may fall back to a
+whole-file rewrite.
 
-- `internal/tool/fs/anchor.go` — anchor minting, validation, line fingerprints.
-- `internal/tool/fs/anchor_store.go` — per-session snapshot of the anchors the
-  model was shown; dropped by `fs.ResetFileViews()` (`/clear`, session load).
-- `internal/tool/fs/anchor_edit.go` — pure planning (`applyAnchorEdit`), shared
-  by the permission preview and the approved execution.
-- `internal/tool/fs/edit_bench_test.go` — anchored vs legacy benchmarks and the
-  request-payload test; `README.md`'s comparison table comes from here.
+- `internal/tool/fs/sloppy/` — payload lexer/parser and diagnostics (`error[SMxxx]`).
+- `internal/tool/fs/sloppyedit/` — apply engine: tolerant matching ladder,
+  ambiguity checks, atomic planning.
+- `internal/tool/fs/edit_sloppy.go` — san's wiring: one file per call, current
+  view required, BOM/CRLF preserved.
+- `internal/tool/fs/edit_bench_test.go` — apply cost and payload-size test;
+  `README.md`'s numbers come from here.
+- `internal/tool/perm/call.go` — `CallFile` resolves the file a call targets.
+  The payload header names it, so permission rules, path checks and previews
+  must ask there rather than read a `file_path` argument Edit never sends.
 
+Keep the two ported packages byte-compatible with upstream semantics; a local
+dialect would cost a failed round-trip per novel payload mistake.
 ## Common Commands
 
 See `docs/operations/development.md` for build / test / lint / format

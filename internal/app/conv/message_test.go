@@ -1471,6 +1471,39 @@ func TestRenderFileChangeInputPreviewUsesFailedLegacyEdit(t *testing.T) {
 	}
 }
 
+func TestRenderFileChangeInputPreviewUsesFailedPayload(t *testing.T) {
+	input := `{"payload":"*** SM:EDIT main.go\n*** SM:FIND\nfirst old\n*** SM:PUT\nfirst new\n*** SM:FIND\nsecond old\n*** SM:PUT\nsecond new\n"}`
+	preview := stripANSI(renderFileChangeInputPreview(input, "Operation 2 did not match main.go", 80))
+	if !strings.Contains(preview, "- second old") || !strings.Contains(preview, "+ second new") {
+		t.Fatalf("preview should show the payload's quoted and requested text, got %q", preview)
+	}
+}
+
+func TestRenderFileChangeInputPreviewExpandsInlineSelection(t *testing.T) {
+	input := `{"payload":"*** SM:EDIT main.go\n*** SM:FIND\n\t⟪old := 1│fresh := 2⟫\n"}`
+	preview := stripANSI(renderFileChangeInputPreview(input, "Operation 1 did not match main.go", 80))
+	// The directive itself must not reach the user: its two sides are the
+	// change, so they render as the "-" and "+" lines.
+	if !strings.Contains(preview, "old := 1") || !strings.Contains(preview, "fresh := 2") || strings.Contains(preview, "⟪") {
+		t.Fatalf("preview of an inline selection should show both sides, got %q", preview)
+	}
+}
+
+func TestRenderFileChangeInputPreviewIgnoresMalformedPayload(t *testing.T) {
+	// The diagnostic already quotes the offending line; a preview built from a
+	// payload that does not parse would be a guess.
+	if preview := stripANSI(renderFileChangeInputPreview(`{"payload":"*** SM:EDIT\n*** SM:FIND\nx\n"}`, "Error: error[SM102]", 80)); preview != "" {
+		t.Fatalf("malformed payload preview = %q, want none", preview)
+	}
+}
+
+func TestExtractToolArgsReadsPayloadHeader(t *testing.T) {
+	input := `{"payload":"*** SM:EDIT internal/app/main.go\n*** SM:FIND\nold\n*** SM:PUT\nnew\n"}`
+	if got := extractToolArgs(input); got != "internal/app/main.go" {
+		t.Fatalf("extractToolArgs() = %q, want the payload's target path", got)
+	}
+}
+
 func TestRenderFileChangeInputPreviewWrapsLongContent(t *testing.T) {
 	preview := stripANSI(renderFileChangeInputPreview(`{"content":"`+strings.Repeat("x", 100)+`"}`, "", 40))
 	for line := range strings.SplitSeq(strings.TrimSuffix(preview, "\n"), "\n") {

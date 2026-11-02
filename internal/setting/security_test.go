@@ -63,7 +63,7 @@ func TestEditDenyUsesFilePath(t *testing.T) {
 	d := NewData()
 	d.Permissions.Deny = []string{"Edit(**/.env)"}
 	s := &SessionPermissions{Mode: ModeAutoAccept}
-	args := map[string]any{"file_path": "/repo/.env", "old_string": "old", "new_string": "new"}
+	args := map[string]any{"payload": "*** SM:EDIT /repo/.env\n*** SM:FIND\nold\n*** SM:PUT\nnew\n"}
 	if got := d.HasPermissionToUseTool("Edit", args, s); got.Behavior != perm.Reject {
 		t.Fatalf("Edit deny = %+v, want Reject", got)
 	}

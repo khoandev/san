@@ -132,7 +132,7 @@ func (s *Data) confirmationPromptReason(toolName string, args map[string]any, se
 
 	if session != nil && len(session.WorkingDirectories) > 0 {
 		if toolName == "Edit" || toolName == "Write" {
-			if fp, ok := args["file_path"].(string); ok && !isInWorkingDirectory(fp, session.WorkingDirectories) {
+			if fp := perm.CallFile(toolName, args); fp != "" && !isInWorkingDirectory(fp, session.WorkingDirectories) {
 				return "outside working directory", false
 			}
 		}
@@ -278,9 +278,10 @@ func BuildRule(toolName string, args map[string]any) string {
 		}
 
 	case "Read", "Write", "Edit":
-		if fp, ok := args["file_path"].(string); ok {
-			argStr = fp
-		}
+		// Edit names its file inside the payload, so the rule must read it
+		// the way the tool does: an empty argument would make a saved rule
+		// match every call.
+		argStr = perm.CallFile(toolName, args)
 
 	case "PowerShell":
 		// The whole command, so a grant covers exactly the command approved.
@@ -609,7 +610,7 @@ func RecoverableReason(toolName string, args map[string]any) string {
 func UnrecoverableReason(toolName string, args map[string]any) string {
 	switch toolName {
 	case "Edit", "Write", "NotebookEdit":
-		if fp, ok := args["file_path"].(string); ok {
+		if fp := perm.CallFile(toolName, args); fp != "" {
 			if reason := isSensitivePath(fp); reason != "" {
 				return reason
 			}

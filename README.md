@@ -202,50 +202,67 @@ plugins-local/      # Local plugins (git-ignored)
 
 </details>
 
-## Editing: anchors, not retyped text
+## Editing: one anchored patch, applied atomically
 
-`Read` prints each line with a short handle in front of it, and `Edit` names the
-range it replaces by the first and last handle instead of by a copy of the text:
+`Read` prints each line as `42|content`. `Edit` takes a single payload that
+quotes only the lines which identify the change — here, renaming a function
+without restating its 40-line body:
 
 ```
-  1204 qwert│func handler(ctx context.Context, req *Request) (*Response, error) {
-  1205 abcfg│    return nil, err
+*** SM:EDIT src/users.go
+*** SM:FIND
+func load(…) {
+	…
+	return old(…)
+}
+*** SM:PUT
+func load(…) {
+	…
+	return fresh(…)
+}
 ```
 
-```json
-{"file_path": "src/a.go", "remove_from": "qwert", "remove_to": "abcfg", "text": "func handler() (*Response, error) {\n\treturn nil, err"}
-```
+- `…` elides a run the anchor does not restate and replays it in the
+  replacement; `⟪old│new⟫` rewrites a fragment in place, with no action header.
+- The anchor is matched tolerantly — indentation, spacing and typographic
+  punctuation may drift from the file — but it must be **unique**. A missing or
+  ambiguous anchor applies nothing; it never falls back to a whole-file rewrite.
+- Failures are written for the model: a syntax error is `error[SM102]` with the
+  payload line and the fix, a missed anchor returns the region it nearly matched
+  and a copy-ready payload to resend.
 
-Copying `abcfg` is not the same task as retyping a server line: there is no
-indentation to get wrong, no trailing whitespace to drop, and a handle that no
-longer describes what the model saw is refused by name instead of landing on a
-plausible neighbour. Anchored editing is San's default `Edit` shape;
-`old_string`/`new_string` stays as the fallback for the cases it still fits.
+This is the whole Edit surface: san's earlier shapes — line anchors
+(`remove_from`/`remove_to`) and exact string replacement
+(`old_string`/`new_string`) — were deleted, because both asked the model to
+reproduce text it had already read. The payload format is a byte-compatible port
+of [pulseaiclub/phi](https://github.com/pulseaiclub/phi)'s sloppy edit engine,
+matching ladder and diagnostics included.
 
-| Per edit, 2,000-line Go file | Anchored | Legacy | |
-|---|---|---|---|
-| Call the model must emit, 5-line replacement | 179 B | 529 B | **3.0x smaller** |
-| Call the model must emit, 40-line replacement | 179 B | 3,119 B | **17.4x smaller** |
-| Edit call, server side | ~1.7–2.4 ms | ~1.9–2.1 ms | parity |
-| Whole Read-then-edit cycle | ~4.0–4.4 ms · 4,364 allocs | ~4.1–5.5 ms · 4,345 allocs | parity |
-| Read output overhead | +8 bytes per line | — | the price |
+| Per edit, 2,000-line Go file | Sloppy patch | The shapes it replaced |
+|---|---|---|
+| Payload to change one line in a 42-line function | **232 B** (2 quoted lines + elided body) | line anchors: ~1.1 KB of replacement text; exact string: ~2.2 KB quoting the range twice |
+| Apply, server side | ~4–5 ms · 5.2 MB | ~2 ms · 1.5 MB |
+| Read row | `42\|content` (unchanged line numbers, 3 bytes shorter) | `  42 qwert│content` (+8 bytes per line) |
 
-<sub>Go 1.27, darwin/amd64, i5-8257U. `go test ./internal/tool/fs/ -run XXX -bench 'Edit'` for the timings; `TestEditRequestPayloadSize` pins the byte counts.</sub>
+<sub>Go 1.27, darwin/amd64, i5-8257U. `go test ./internal/tool/fs/ -run XXX -bench 'Edit'` reproduces the timings; `TestEditPayloadSize` pins the byte counts. On a 200-line file the same edit takes ~1.1 ms: the engine normalizes the whole file per payload, so its cost follows file size.</sub>
 
 **Why San adopted it.** What a user waits on is the model writing the call, not
-San parsing it — so the number that matters is how many tokens the model has to
-generate to describe a change. Quoting a 40-line function costs ~800 tokens and
-one transcription slip costs a failed call and a re-read; two anchors cost ~15
-tokens whatever the range. The safety follows from the same property: an edit
-targets a line the model was actually shown, and a handle that has gone stale is
-rejected with the current rows attached, so the retry needs no extra `Read`.
+San parsing it, so the number that matters is how many tokens the model must
+generate to describe a change. Restating a 40-line function costs ~800 tokens
+and one transcription slip costs a failed call and a re-read; two anchored lines
+and a `…` cost ~50 tokens regardless of the body. Tolerance removes the other
+failure mode — the model does not have to reproduce indentation or spacing
+exactly — while uniqueness and atomicity keep the tool fail-closed: every
+operation plans against the original text, so either the whole payload lands or
+the file is untouched.
 
-The client-side cost is neutral by design (the benchmarks above keep it there),
-and the Read overhead is real but small: 8 bytes per line, ~16 KB on a
-2,000-line read — less than the re-read a single mistyped legacy edit forces.
-Anchors live for the session and are dropped on `/clear`, like every other
-observation of the file.
+The trade is explicit: ~2–3 ms more server-side per edit on a 2,000-line file,
+against seconds of model time and a round-trip per mishap. Anchoring also needs
+a current view — `Read` first, and a file changed on disk afterwards says so
+instead of guessing — and one call edits one file, because one approval reviews
+one diff.
 
+## Benchmark: San vs Claude Code
 ## Benchmark: San vs Claude Code
 
 Compared with [Claude Code](https://claude.ai/code) v2.1.112 on Apple Silicon, same model (`claude-sonnet-4-6`):

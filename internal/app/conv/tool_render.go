@@ -14,6 +14,7 @@ import (
 	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool"
+	"github.com/genai-io/san/internal/tool/perm"
 	"github.com/genai-io/san/internal/tool/toolresult"
 )
 
@@ -437,6 +438,10 @@ func renderNestedFileChangeResultInline(data ToolResultData) string {
 // renderFileChangeInputPreview shows the requested change when the edit did
 // not apply. It uses tool input rather than diagnostics so the user can compare
 // the intended replacement with the actual-file diagnostic below.
+//
+// Edit's shape is its payload, read first. The argument shapes below stay for
+// transcripts recorded before the payload migration: replaying an old session
+// must still show what its failed edit asked for.
 func renderFileChangeInputPreview(input, diagnostic string, width int) string {
 	var params struct {
 		OldString string `json:"old_string"`
@@ -455,6 +460,11 @@ func renderFileChangeInputPreview(input, diagnostic string, width int) string {
 		return ""
 	}
 	old, new := params.OldString, params.NewString
+	if payloadOld, payloadNew, ok := payloadPreviewPair(input); ok {
+		// Edit's only shape: the payload carries the quoted text and the
+		// rewrite, so the preview needs no argument the call never had.
+		old, new = payloadOld, payloadNew
+	}
 	if old == "" && new == "" {
 		old, new = params.OldText, params.NewText
 	}
@@ -1323,6 +1333,11 @@ func extractToolArgs(input string) string {
 	}
 
 	if fp, ok := params["file_path"].(string); ok {
+		return fp
+	}
+	// An input carrying a payload is an Edit call: it names its file in the
+	// payload header, so the row shows the target instead of the patch.
+	if fp := perm.CallFile("Edit", params); fp != "" {
 		return fp
 	}
 	if c, ok := params["command"].(string); ok {

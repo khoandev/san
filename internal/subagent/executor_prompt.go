@@ -9,6 +9,7 @@ import (
 	"github.com/genai-io/san/internal/skill"
 	"github.com/genai-io/san/internal/todo"
 	"github.com/genai-io/san/internal/tool"
+	"github.com/genai-io/san/internal/tool/perm"
 )
 
 func effectiveToolConstraints(config *AgentConfig, permMode PermissionMode, schemas []core.ToolSchema) []string {
@@ -64,10 +65,11 @@ func (e *Executor) buildBrief(config *AgentConfig, permMode PermissionMode) syst
 }
 
 // toolActivityParams maps tool names to the parameter key used for display.
+// Edit is absent on purpose: it names its file inside the payload, so its
+// activity line comes from perm.CallFile like its permission checks do.
 var toolActivityParams = map[string]string{
 	"Read":       "file_path",
 	"Write":      "file_path",
-	"Edit":       "file_path",
 	"Bash":       "command",
 	"PowerShell": "command",
 	"WebFetch":   "url",
@@ -96,12 +98,14 @@ func formatToolActivityLimit(toolName string, params map[string]any, maxChars in
 	}
 
 	paramKey, ok := toolActivityParams[toolName]
-	if !ok {
-		return fmt.Sprintf("%s()", toolName)
+	value := ""
+	switch {
+	case toolName == "Edit":
+		value = perm.CallFile(toolName, params)
+	case ok:
+		value, _ = params[paramKey].(string)
 	}
-
-	value, ok := params[paramKey].(string)
-	if !ok {
+	if value == "" {
 		return fmt.Sprintf("%s()", toolName)
 	}
 

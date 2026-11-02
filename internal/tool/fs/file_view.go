@@ -20,7 +20,7 @@ type fileStamp struct {
 // schemas promise: modifying a file "requires a current view" — the file
 // must have been read (or written) before it is modified, and one that
 // changed on disk since must be re-read. Without this, an edit against an
-// outdated view surfaces as a confusing "old_string was not found" failure
+// outdated view surfaces as a confusing "anchor did not match" failure
 // instead of naming the real cause.
 var (
 	fileViewsMu sync.Mutex
@@ -49,15 +49,11 @@ func RecordFileWritten(filePath string) {
 // ResetFileViews forgets every recorded observation. The app calls it when
 // the conversation the model sees is replaced (/clear, loading another
 // session), so "observed this session" keeps meaning the current
-// conversation rather than the process lifetime. Line anchors are dropped with
-// the views: an anchor is a handle into one conversation's Read output, and
-// carrying it across a reset would let a new conversation edit a line it was
-// never shown.
+// conversation rather than the process lifetime.
 func ResetFileViews() {
 	fileViewsMu.Lock()
 	clear(fileViews)
 	fileViewsMu.Unlock()
-	resetAnchors()
 }
 
 // Viewed reports whether the model's view of filePath is current, so showing
@@ -78,7 +74,7 @@ const (
 
 // viewOf reports how the file's on-disk state relates to the model's last
 // observation of it. Edit distinguishes stale from none: a stale view may
-// still be edited when old_string matches unambiguously (the result carries
+// still be edited when the anchor matches unambiguously (the result carries
 // a warning), while a never-observed file is always rejected.
 func viewOf(filePath string) (fileView, error) {
 	fileViewsMu.Lock()

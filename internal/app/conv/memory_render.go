@@ -16,6 +16,7 @@ import (
 	"github.com/genai-io/san/internal/reminder"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool"
+	"github.com/genai-io/san/internal/tool/perm"
 )
 
 // MemoryStores are the session's auto-memory stores, set by the app whenever
@@ -38,13 +39,13 @@ func parseMemoryOp(toolName, input string) (memoryOp, bool) {
 	if toolName != tool.ToolWrite && toolName != tool.ToolEdit && toolName != tool.ToolRead {
 		return memoryOp{}, false
 	}
-	var args struct {
-		FilePath string `json:"file_path"`
-	}
-	if json.Unmarshal([]byte(input), &args) != nil || !MemoryStores.Contains(args.FilePath) {
+	// An Edit names the file in its payload header, so resolve the target the
+	// way the tool does instead of reading a file_path the call may not carry.
+	path := perm.CallFile(toolName, payloadArgs(input))
+	if path == "" || !MemoryStores.Contains(path) {
 		return memoryOp{}, false
 	}
-	op := memoryOp{path: args.FilePath, index: filepath.Base(args.FilePath) == system.AutoMemoryIndexName}
+	op := memoryOp{path: path, index: filepath.Base(path) == system.AutoMemoryIndexName}
 	switch toolName {
 	case tool.ToolRead:
 		op.verb = "Read"
@@ -267,11 +268,9 @@ func (m *ConversationModel) TurnMemory(openedBy string, recalled []string) []Mem
 				note(filepath.Clean(op.path), turnVerb[op.verb])
 				continue
 			}
-			var edit struct {
-				Old string `json:"old_string"`
-			}
-			_ = json.Unmarshal([]byte(tc.Input), &edit)
-			for _, l := range indexLink.FindAllStringSubmatch(edit.Old, -1) {
+			// The line an index Edit drops is quoted in its payload, so the
+			// forgotten memory keeps the title it had there.
+			for _, l := range indexLink.FindAllStringSubmatch(payloadQuotedText(tc.Input), -1) {
 				dropped[filepath.Join(filepath.Dir(op.path), l[2])] = l[1] // a forgotten memory keeps its title
 			}
 		}

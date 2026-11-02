@@ -85,14 +85,26 @@ not change `Agent.run_in_background` or task lifecycle metadata. See
 - Subpackages own their tools: `fs/` for filesystem, `web/` for fetch,
   `agent/` for the Agent tool, `task/` for task tools, `skill/` for skill
   invocation, etc.
-- Anchored editing (`fs/anchor.go`, `fs/anchor_store.go`, `fs/anchor_edit.go`) —
-  `Read` attaches a 5-letter anchor to every row it prints and records which
-  rows the model was actually shown; `Edit` resolves `remove_from`/`remove_to`
-  against that record instead of matching copied text. The snapshot is session
-  state: `fs.ResetFileViews()` (called on `/clear` and session load) drops it,
-  and a file changed on disk invalidates its anchors. The legacy
-  `old_string`/`new_string` shape remains as the fallback; one call carries one
-  shape, never both.
+- Editing (`fs/edit.go`, `fs/edit_sloppy.go`, `fs/sloppy/`, `fs/sloppyedit/`) —
+  `Read` prints rows as `42|content`, and `Edit` takes one `payload` in the
+  sloppy anchored format ported from pulseaiclub/phi: `*** SM:EDIT path`,
+  `*** SM:FIND` anchor, then `*** SM:PUT`, `*** SM:AFTER`, or `⟪old│new⟫`
+  selections. The parser (`fs/sloppy`) produces the operation IR and
+  `error[SMxxx]` diagnostics; the engine (`fs/sloppyedit`) locates each anchor
+  through a tolerant matching ladder and plans all splices against the original
+  text, so a payload applies atomically or not at all. One call edits one file
+  (`[E_MULTI_FILE]` otherwise) because a permission review covers one diff, and
+  the file must have a current view (`fs.ResetFileViews()` on `/clear` clears
+  it). Matching is fail-closed: an absent or ambiguous anchor never falls back
+  to a whole-file rewrite.
+- The payload header, not an argument, names the file, so anything outside the
+  tool that scopes or previews a call reads the target through
+  `perm.CallFile(toolName, args)` (`internal/tool/perm/call.go`): permission
+  rules, the working-directory and sensitive-path checks, the auto-memory
+  exemption, the subagent activity line, and the conversation's Edit preview.
+  Reading `args["file_path"]` directly works only for `Read` and `Write`; for
+  `Edit` it silently yields an empty path, which turns a narrow rule into one
+  that matches every call.
 
 ## Lifecycle
 
@@ -127,8 +139,11 @@ internal/tool/fs/write_failure_test.go — failed writes preserve original conte
 internal/tool/fs/shell_options_test.go — mode/default/null/legacy parsing and runtime execution.
 internal/tool/fs/shell_schema_test.go — canonical nullable schemas sent through both OpenAI protocols.
 internal/tool/fs/shell_output_test.go — bounded capture and complete background logs.
-internal/tool/fs/anchor_edit_test.go  — anchored edits: anchors, stale refs, mixed shapes, reset.
-internal/tool/fs/edit_bench_test.go   — anchored vs legacy edit cost and request-payload size.
+internal/tool/fs/edit_test.go          — Edit payloads: apply, atomicity, view gate, staleness, limits.
+internal/tool/fs/edit_bench_test.go    — apply cost and request-payload size.
+internal/tool/fs/sloppy/               — payload parsing, pattern tokens, diagnostics.
+internal/tool/fs/sloppyedit/           — apply engine, matching ladder, parity fixtures, fuzzing.
+internal/tool/perm/call_test.go       — the file a call targets, from file_path or the payload header.
 ```
 
 ## See Also

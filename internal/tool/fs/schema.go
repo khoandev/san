@@ -5,7 +5,6 @@ import (
 
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/tool"
-	"github.com/genai-io/san/internal/tool/toolresult"
 )
 
 // Schema returns the model-facing tool definition for Read. The limits and
@@ -18,10 +17,10 @@ func (t *ReadTool) Schema() core.ToolSchema {
 
 - Prefer relative paths for files inside the session working directory; absolute for targets outside it
 - Reads up to %d lines from the start by default; when you already know which part of a large file you need, read just that part with offset/limit
-- Each row is "line number, anchor, %s, content" — e.g. "    42 qwert%stotal := 0". The 5-letter anchor is the handle Edit targets: pass the first line's anchor as remove_from and the last line's as remove_to
-- Lines over %d characters end with “%s” and cannot be edited until you read them in smaller pieces
+- Each body line is "N|content" — e.g. "42|total := 0". The "N|" prefix is not part of the file: quote only the content in an Edit payload, and the prefix is stripped for you
+- Lines over %d characters end with “%s”; a line cut short was not shown in full, so do not quote it in an Edit payload until you read it in smaller pieces
 - Do not re-read a file to verify your own Edit/Write — a failed change errors, and successful results keep your view current
-- Image files are recognized but cannot be displayed yet; ask the user to attach the image to a message instead`, maxReadLines, toolresult.AnchorSep, toolresult.AnchorSep, maxLineLen, lineTruncationMarker),
+- Image files are recognized but cannot be displayed yet; ask the user to attach the image to a message instead`, maxReadLines, maxLineLen, lineTruncationMarker),
 		Definition: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -43,59 +42,34 @@ func (t *ReadTool) Schema() core.ToolSchema {
 	}
 }
 
-// Schema returns the model-facing tool definition for Edit. It carries both
-// shapes: anchored editing is what the tool is for, and the legacy string
-// replacement stays documented because many models reach for it by habit and a
-// refusal they did not expect costs a turn.
+// Schema returns the model-facing tool definition for Edit: an anchored sloppy
+// patch. The format is spelled out because a payload the model cannot write
+// from memory costs a failed round-trip per novel mistake, and because the
+// anti-patterns below are the ones real payloads hit.
 func (t *EditTool) Schema() core.ToolSchema {
 	return core.ToolSchema{
 		Name: "Edit",
-		Description: fmt.Sprintf(`Edits a file, in one of two shapes.
+		Description: `Edits one file with an anchored patch: quote current text under *** SM:FIND, then replace it under *** SM:PUT, insert after it under *** SM:AFTER, or rewrite fragments in place with ⟪old│new⟫. Elide unchanged runs with ….
 
-Anchored — replace a range of lines by its anchors (preferred):
-- remove_from and remove_to are the 5-letter anchors of the first and last line to replace, copied from Read output; use the same anchor twice to replace one line
-- text is the exact replacement text: a line break separates lines, "" deletes the range, and a trailing line break belongs to the last line rather than adding a blank one
-- Anchors must come from Read output for this file in this conversation. A stale anchor, or a range you were never shown, is refused with the current rows and their fresh anchors — retry with those
-
-Legacy — exact string replacement:
-- old_string must match the file exactly after stripping Read's "line number, anchor, %s" prefix (preserve indentation) and must be unique — add surrounding context if not, or set replace_all to change every occurrence. Trailing-whitespace-only mismatches apply automatically; other whitespace slips fail with the actual lines echoed
-
-- Requires a current view: Read first, unless successful Write/Edit already observed the file this session. Re-read after external changes.
-- Apply several changes to one file with multiple Edit calls in one message; they run in order. Anchor ranges in one message must not overlap.
-- Do not Read and Edit the same file in one message.`, toolresult.AnchorSep),
+- *** SM:EDIT relative/path opens the file. One call edits one file; every operation applies atomically, so a payload that fails writes nothing.
+- Copy the anchor verbatim from the latest Read output — not from memory, diffs, or summaries. Read rows are "N|content": quote the content, not the "N|" prefix. The anchor must match the file exactly once; on ambiguity add surrounding context, never retry the bare line.
+- *** SM:PUT states the complete final text that replaces the whole match; an empty body deletes it. *** SM:AFTER keeps the match and inserts its body after the last matched line. A FIND body carrying ⟪old│new⟫ selections needs no action header: each selection rewrites old to new in place, with exactly one "│" divider. Omitting an action without selections is an error.
+- Anchors address the file as you read it, never as this payload rewrites it: an anchor cannot match text an earlier operation in the same payload wrote. Plan every anchor against the current file.
+- Headers stand alone; bodies are raw lines until the next header or EOF, with no closing delimiter. Never use diff prefixes (+/-/space) or @@ hunks.
+- In FIND, … captures omitted text: a gap with content after it on its line stays on that line; a gap at line end spans lines. In PUT, each … re-emits the next capture in order. A whole-line … with no capture is an error — type those lines out.
+- PUT and AFTER indentation is written verbatim. A failure applies nothing: a match failure returns a copy-ready payload to resend, a syntax error returns error[SMxxx] with the payload line and the fix.
+- Requires a current view: Read first, unless a successful Write/Edit already observed the file this session. For a new file or a whole-file rewrite use Write.`,
 		Definition: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"file_path": map[string]any{
-					"type":        "string",
-					"description": "Path to the file to modify. Relative paths are resolved from the current session working directory.",
-				},
-				"remove_from": map[string]any{
-					"type":        "string",
-					"description": "5-letter anchor of the FIRST line to replace (anchored shape)",
-				},
-				"remove_to": map[string]any{
-					"type":        "string",
-					"description": "5-letter anchor of the LAST line to replace; the same anchor as remove_from for a single line (anchored shape)",
-				},
-				"text": map[string]any{
-					"type":        []string{"string", "array"},
-					"description": "The exact replacement text; line breaks separate lines and \"\" deletes the range (anchored shape)",
-				},
-				"old_string": map[string]any{
-					"type":        "string",
-					"description": "The exact text to replace (legacy shape)",
-				},
-				"new_string": map[string]any{
-					"type":        "string",
-					"description": "The replacement text, which must differ from old_string (legacy shape)",
-				},
-				"replace_all": map[string]any{
-					"type":        "boolean",
-					"description": "Replace every occurrence of old_string (legacy shape; default false)",
+				"payload": map[string]any{
+					"type": "string",
+					"description": "The anchored patch: *** SM:EDIT <path> / *** SM:FIND <current text> / " +
+						"*** SM:PUT <new text> or *** SM:AFTER <inserted text>. Example: " +
+						"*** SM:EDIT src/app.go\n*** SM:FIND\nconst timeout = 1000\n*** SM:PUT\nconst timeout = 5000",
 				},
 			},
-			"required": []string{"file_path"},
+			"required": []string{"payload"},
 		},
 	}
 }

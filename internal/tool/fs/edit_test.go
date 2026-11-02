@@ -12,6 +12,30 @@ import (
 	"github.com/genai-io/san/internal/tool/toolresult"
 )
 
+// The tests below exercise Edit through its one payload shape: a "*** SM:EDIT"
+// header, then anchored operations. Anything that reaches for the deleted
+// remove_from/to or old_string/new_string arguments must fail on shape alone,
+// which TestEditRejectsMissingPayload pins.
+
+// editOp renders one FIND/PUT operation for a file.
+func editOp(filePath, find, put string) string {
+	return "*** SM:EDIT " + filePath + "\n*** SM:FIND\n" + find + "\n*** SM:PUT\n" + put + "\n"
+}
+
+// editAllOp renders one FIND/PUT operation whose header asks for every match.
+func editAllOp(filePath, find, put string) string {
+	return "*** SM:EDIT " + filePath + " all\n*** SM:FIND\n" + find + "\n*** SM:PUT\n" + put + "\n"
+}
+
+// runEdit sends a payload the way the model does.
+func runEdit(payload, cwd string) toolresult.ToolResult {
+	return (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{"payload": payload}, cwd)
+}
+
+func editOnce(filePath, find, put, cwd string) toolresult.ToolResult {
+	return runEdit(editOp(filePath, find, put), cwd)
+}
+
 func TestFileToolsKeepSymlinkAndPermissions(t *testing.T) {
 	for _, name := range []string{"Write", "Edit"} {
 		t.Run(name, func(t *testing.T) {
@@ -53,15 +77,7 @@ func TestFileToolsKeepSymlinkAndPermissions(t *testing.T) {
 	}
 }
 
-func editOnce(filePath, oldString, newString, cwd string) toolresult.ToolResult {
-	return (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{
-		"file_path":  filePath,
-		"old_string": oldString,
-		"new_string": newString,
-	}, cwd)
-}
-
-func TestEditReplaceAll(t *testing.T) {
+func TestEditAmbiguousAnchorOffersAll(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "rename.go")
 	content := "count := 1\nprint(count)\nreturn count\n"
@@ -70,20 +86,29 @@ func TestEditReplaceAll(t *testing.T) {
 	}
 	readForEdit(t, filePath, tmpDir)
 
-	// Without replace_all the ambiguity is an error that names the way out.
+	// An anchor matching three places is refused: the model must narrow it or
+	// say it means every match. The error carries the payload that does the
+	// latter, so the retry is a copy rather than a rewrite.
 	res := editOnce(filePath, "count", "total", tmpDir)
-	if res.Success || !strings.Contains(res.Error, "matches 3 locations") || !strings.Contains(res.Error, "replace_all") {
-		t.Fatalf("ambiguous edit should count matches and suggest replace_all, got: %+v", res)
+	if res.Success {
+		t.Fatalf("ambiguous anchor must not apply, got: %+v", res)
+	}
+	for _, want := range []string{"ambiguous", "*** SM:EDIT " + filePath + " all", "No operations were applied"} {
+		if !strings.Contains(res.Error, want) {
+			t.Fatalf("ambiguity error should carry %q, got:\n%s", want, res.Error)
+		}
+	}
+	if got, _ := os.ReadFile(filePath); string(got) != content {
+		t.Fatalf("ambiguous payload changed the file to %q", got)
 	}
 
-	result := (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{
-		"file_path":   filePath,
-		"old_string":  "count",
-		"new_string":  "total",
-		"replace_all": true,
-	}, tmpDir)
-	if !result.Success || !strings.Contains(result.Output, "3 replacement(s)") {
-		t.Fatalf("replace_all should report every occurrence, got: %+v", result)
+	result := runEdit(editAllOp(filePath, "count", "total"), tmpDir)
+	if !result.Success {
+		t.Fatalf("all-match edit failed: %s", result.Error)
+	}
+	details, ok := result.Details.(toolresult.FileChangeDetails)
+	if !ok || details.EditCount != 1 || details.AddedLines != 3 || details.RemovedLines != 3 {
+		t.Fatalf("Edit details = %#v", result.Details)
 	}
 	got, _ := os.ReadFile(filePath)
 	if string(got) != "total := 1\nprint(total)\nreturn total\n" {
@@ -91,7 +116,7 @@ func TestEditReplaceAll(t *testing.T) {
 	}
 }
 
-func TestEditRejectsIdenticalStrings(t *testing.T) {
+func TestEditRejectsNoOp(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "noop.txt")
 	if err := os.WriteFile(filePath, []byte("hello\n"), 0o644); err != nil {
@@ -99,25 +124,28 @@ func TestEditRejectsIdenticalStrings(t *testing.T) {
 	}
 	readForEdit(t, filePath, tmpDir)
 
+	// A rewrite that lands the same bytes is a mistake worth saying out loud:
+	// it usually means the model misremembered what it was changing.
 	res := editOnce(filePath, "hello", "hello", tmpDir)
-	if res.Success || !strings.Contains(res.Error, "must be different") {
+	if res.Success || !strings.Contains(res.Error, "makes no change") {
 		t.Fatalf("a no-op edit must be rejected, got: %+v", res)
 	}
 }
 
-func TestEditTrailingWhitespaceFallback(t *testing.T) {
+func TestEditToleratesWhitespaceDrift(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "code.go")
-	// File lines carry trailing spaces the model's old_string won't have.
+	// The file's lines carry trailing spaces the anchor will not restate: the
+	// matching ladder folds whitespace before giving up.
 	content := "func main() {  \n\tprintln(\"hi\")\t\n}\n"
 	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	readForEdit(t, filePath, tmpDir)
 
-	res := editOnce(filePath, "func main() {\n\tprintln(\"hi\")\n}\n", "func main() {\n\tprintln(\"bye\")\n}\n", tmpDir)
+	res := editOnce(filePath, "func main() {\n\tprintln(\"hi\")\n}", "func main() {\n\tprintln(\"bye\")\n}", tmpDir)
 	if !res.Success {
-		t.Fatalf("trailing-whitespace fallback should apply, got: %s", res.Error)
+		t.Fatalf("whitespace-tolerant match should apply, got: %s", res.Error)
 	}
 	got, err := os.ReadFile(filePath)
 	if err != nil {
@@ -128,7 +156,7 @@ func TestEditTrailingWhitespaceFallback(t *testing.T) {
 	}
 }
 
-func TestEditIndentationMismatchEchoesFileLines(t *testing.T) {
+func TestEditMissNamesClosestRegion(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "code.go")
 	content := "func main() {\n\tif ok {\n\t\tprintln(\"hi\")\n\t}\n}\n"
@@ -137,22 +165,19 @@ func TestEditIndentationMismatchEchoesFileLines(t *testing.T) {
 	}
 	readForEdit(t, filePath, tmpDir)
 
-	// Model transcribed the leading tabs as spaces — must NOT be applied
-	// (new_string carries the same broken indentation), but the error must
-	// locate the lines and echo the file's real bytes.
-	res := editOnce(filePath, "    if ok {\n        println(\"hi\")\n    }", "    if ok {\n        println(\"bye\")\n    }", tmpDir)
+	// A missing anchor is a miss, never a guess; the error locates the region
+	// it nearly matched and shows the file's own bytes.
+	res := editOnce(filePath, "func handler() {\n\treturn nil\n}", "func handler() {\n\treturn err\n}", tmpDir)
 	if res.Success {
-		t.Fatal("indentation mismatch must not be applied")
+		t.Fatal("a missing anchor must not apply")
 	}
-	if !strings.Contains(res.Error, "lines 2-4") {
-		t.Fatalf("error should locate the mismatch, got: %s", res.Error)
+	for _, want := range []string{"did not match", "No operations were applied", "func main() {"} {
+		if !strings.Contains(res.Error, want) {
+			t.Fatalf("miss error should carry %q, got:\n%s", want, res.Error)
+		}
 	}
-	if !strings.Contains(res.Error, "\tif ok {") {
-		t.Fatalf("error should echo the file's actual tab-indented lines, got: %s", res.Error)
-	}
-	got, _ := os.ReadFile(filePath)
-	if string(got) != content {
-		t.Fatalf("file must be unchanged, got %q", got)
+	if got, _ := os.ReadFile(filePath); string(got) != content {
+		t.Fatalf("failed edit changed the file to %q", got)
 	}
 }
 
@@ -283,6 +308,171 @@ func TestEditKeepsOwnWriteFresh(t *testing.T) {
 	}
 	if res := editOnce(filePath, "two", "2", tmpDir); !res.Success || strings.Contains(res.Output, "applied cleanly") {
 		t.Fatalf("second edit after own write should stay current, got: %+v", res)
+	}
+}
+
+// TestEditRejectsMissingPayload keeps the deleted shapes dead: a call carrying
+// anything but a payload fails on shape, so the old arguments cannot linger as
+// a silent fallback.
+func TestEditRejectsMissingPayload(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "legacy.txt")
+	if err := os.WriteFile(filePath, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	readForEdit(t, filePath, tmpDir)
+
+	for name, params := range map[string]map[string]any{
+		"old strings": {"file_path": filePath, "old_string": "old", "new_string": "new"},
+		"line range":  {"file_path": filePath, "remove_from": "abcde", "remove_to": "abcde", "text": "new"},
+		"empty":       {},
+	} {
+		res := (&EditTool{}).ExecuteApproved(context.Background(), params, tmpDir)
+		if res.Success || !strings.Contains(res.Error, "[E_BAD_SHAPE]") {
+			t.Fatalf("%s: the removed shape must fail on shape, got: %+v", name, res)
+		}
+	}
+}
+
+func TestEditRejectsMultipleFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("one\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		readForEdit(t, filepath.Join(tmpDir, name), tmpDir)
+	}
+
+	payload := editOp("a.txt", "one", "1") + editOp("b.txt", "one", "1")
+	res := runEdit(payload, tmpDir)
+	if res.Success || !strings.Contains(res.Error, "[E_MULTI_FILE]") {
+		t.Fatalf("a multi-file payload must be split, got: %+v", res)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if got, _ := os.ReadFile(filepath.Join(tmpDir, name)); string(got) != "one\n" {
+			t.Fatalf("%s changed to %q", name, got)
+		}
+	}
+}
+
+func TestEditRejectsDisagreeingFilePin(t *testing.T) {
+	tmpDir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("one\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		readForEdit(t, filepath.Join(tmpDir, name), tmpDir)
+	}
+
+	res := (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{
+		"file_path": "b.txt",
+		"payload":   editOp("a.txt", "one", "1"),
+	}, tmpDir)
+	if res.Success || !strings.Contains(res.Error, "name different files") {
+		t.Fatalf("a file_path disagreeing with the header must be refused, got: %+v", res)
+	}
+}
+
+func TestEditSyntaxErrorIsDiagnostic(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "diag.txt")
+	if err := os.WriteFile(filePath, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	readForEdit(t, filePath, tmpDir)
+
+	// A malformed payload is answered with the parser's diagnostic — code,
+	// payload location and fix — rather than a matching failure.
+	res := runEdit("*** SM:EDIT\n*** SM:FIND\nhello\n*** SM:PUT\nbye\n", tmpDir)
+	if res.Success {
+		t.Fatalf("a payload without a path must fail, got: %+v", res)
+	}
+	for _, want := range []string{"error[SM1", "help:", "path"} {
+		if !strings.Contains(res.Error, want) {
+			t.Fatalf("diagnostic should carry %q, got:\n%s", want, res.Error)
+		}
+	}
+}
+
+func TestEditAppliesPayloadAtomically(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "atomic.txt")
+	content := "alpha\nbeta\n"
+	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	readForEdit(t, filePath, tmpDir)
+
+	// The first operation matches, the second does not: nothing lands. A
+	// partial apply would leave the model's view and the file disagreeing.
+	payload := "*** SM:EDIT " + filePath + "\n*** SM:FIND\nalpha\n*** SM:PUT\nALPHA\n" +
+		"*** SM:FIND\nmissing line\n*** SM:PUT\nwhatever\n"
+	res := runEdit(payload, tmpDir)
+	if res.Success || !strings.Contains(res.Error, "No operations were applied") {
+		t.Fatalf("a partial payload must apply nothing, got: %+v", res)
+	}
+	if got, _ := os.ReadFile(filePath); string(got) != content {
+		t.Fatalf("file content = %q, want it untouched", got)
+	}
+}
+
+func TestEditAfterAndSelectionShapes(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "shapes.go")
+	content := "func main() {\n\told := 1\n}\n"
+	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	readForEdit(t, filePath, tmpDir)
+
+	// ⟪old│new⟫ rewrites a fragment in place with no action header.
+	res := runEdit("*** SM:EDIT "+filePath+"\n*** SM:FIND\n\t⟪old := 1│name := 1⟫\n", tmpDir)
+	if !res.Success {
+		t.Fatalf("selection rewrite failed: %s", res.Error)
+	}
+	// *** SM:AFTER keeps the anchor and inserts the body after it.
+	res = runEdit("*** SM:EDIT "+filePath+"\n*** SM:FIND\n\tname := 1\n*** SM:AFTER\n\tname++\n", tmpDir)
+	if !res.Success {
+		t.Fatalf("after insert failed: %s", res.Error)
+	}
+	got, _ := os.ReadFile(filePath)
+	if string(got) != "func main() {\n\tname := 1\n\tname++\n}\n" {
+		t.Fatalf("file content = %q", got)
+	}
+}
+
+func TestEditTailorsPreviewToPayload(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "preview.txt")
+	if err := os.WriteFile(filePath, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	readForEdit(t, filePath, tmpDir)
+
+	payload := editOp(filePath, "alpha", "ALPHA")
+	request, err := (&EditTool{}).PreparePermission(context.Background(), map[string]any{"payload": payload}, tmpDir)
+	if err != nil {
+		t.Fatalf("PreparePermission failed: %v", err)
+	}
+	if request.FilePath != filePath {
+		t.Fatalf("preview file path = %q, want %q", request.FilePath, filePath)
+	}
+	if request.Description != "Apply 1 anchored edit(s)" {
+		t.Fatalf("preview description = %q", request.Description)
+	}
+	if !strings.Contains(request.DiffMeta.UnifiedDiff, "+ALPHA") {
+		t.Fatalf("preview diff should show the change, got:\n%s", request.DiffMeta.UnifiedDiff)
+	}
+
+	// The preview and the apply must plan the same edit: the diff the user
+	// approves is the change that lands.
+	res := runEdit(payload, tmpDir)
+	if !res.Success {
+		t.Fatalf("approved edit failed: %s", res.Error)
+	}
+	details, ok := res.Details.(toolresult.FileChangeDetails)
+	if !ok || details.UnifiedDiff != request.DiffMeta.UnifiedDiff {
+		t.Fatalf("applied diff %q differs from the previewed %q", details.UnifiedDiff, request.DiffMeta.UnifiedDiff)
 	}
 }
 

@@ -151,21 +151,7 @@ func (t *ReadTool) Execute(ctx context.Context, params map[string]any, cwd strin
 		return toolresult.NewErrorResult(t.Name(), "error reading file: "+err.Error())
 	}
 
-	// Attach a line anchor to every row: the handle Edit targets instead of
-	// copied text. A row cut short by the length cap is printed with its anchor
-	// but not recorded as served — the model has not seen the line's real text,
-	// so an anchored edit must not be allowed to replace it blind.
-	rows := make([]anchorRow, len(lines))
-	for i, line := range lines {
-		rows[i] = anchorRow{
-			lineNo:   line.LineNo,
-			text:     line.Text,
-			editable: !strings.HasSuffix(line.Text, lineTruncationMarker),
-		}
-	}
-	for i, anchor := range anchorRows(filePath, info, rows) {
-		lines[i].Hash = anchor
-	}
+	recordFileRead(filePath, info)
 
 	recordFileRead(filePath, info)
 

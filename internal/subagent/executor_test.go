@@ -278,6 +278,20 @@ func TestBuildUnfinishedAgentResultUsesPreparedRunMetadata(t *testing.T) {
 	}
 }
 
+// An Edit call carries no file_path; its activity line still has to name the
+// file, or the user cannot tell which one the subagent is changing.
+func TestFormatToolActivityNamesEditTarget(t *testing.T) {
+	got := formatToolActivity("Edit", map[string]any{
+		"payload": "*** SM:EDIT internal/app/main.go\n*** SM:FIND\nold\n*** SM:PUT\nnew\n",
+	})
+	if got != "Edit(internal/app/main.go)" {
+		t.Fatalf("formatToolActivity(Edit) = %q, want the payload's target path", got)
+	}
+	if got := formatToolActivity("Edit", map[string]any{}); got != "Edit()" {
+		t.Fatalf("formatToolActivity(Edit, no payload) = %q, want %q", got, "Edit()")
+	}
+}
+
 func TestFormatToolActivityUsesReadableAgentLabel(t *testing.T) {
 	got := formatToolActivity("Agent", map[string]any{
 		"name":        "custom-reviewer",
@@ -609,7 +623,7 @@ func TestExploreModeCannotElevateThroughAllowTools(t *testing.T) {
 		allowed bool
 	}{
 		{name: "write", allow: ToolNames("Write"), tool: "Write", input: map[string]any{"file_path": "x", "content": "x"}},
-		{name: "edit", allow: ToolNames("Edit"), tool: "Edit", input: map[string]any{"file_path": "x", "old_string": "a", "new_string": "b"}},
+		{name: "edit", allow: ToolNames("Edit"), tool: "Edit", input: map[string]any{"payload": "*** SM:EDIT x\n*** SM:FIND\na\n*** SM:PUT\nb\n"}},
 		{name: "bare bash touch", allow: ToolNames("Bash"), tool: "Bash", input: map[string]any{"command": "touch x"}},
 		{name: "configured npm install", allow: ToolList{{Name: "Bash", Pattern: "npm install*"}}, tool: "Bash", input: map[string]any{"command": "npm install"}},
 		{name: "git commit", allow: ToolNames("Bash"), tool: "Bash", input: map[string]any{"command": "git commit -m x"}},

@@ -181,13 +181,9 @@ func TestEditPreservesBomAndCrlf(t *testing.T) {
 	}
 	readForEdit(t, filePath, tmpDir)
 
-	// Sequential edits, the way multiple changes land under the CC-shaped
-	// schema. old_string/new_string arrive LF-normalized like model output.
-	result := (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{
-		"file_path":  filePath,
-		"old_string": "title: old\n",
-		"new_string": "title: new\n",
-	}, tmpDir)
+	// Sequential edits, one payload each. Anchors arrive LF-normalized like
+	// model output; the CRLF convention is the file's and is restored on write.
+	result := editOnce(filePath, "title: old", "title: new", tmpDir)
 	if !result.Success {
 		t.Fatalf("first edit failed: %s", result.FormatForLLM())
 	}
@@ -212,14 +208,14 @@ func TestEditPreservesBomAndCrlf(t *testing.T) {
 	}
 	readForEdit(t, filePath, tmpDir)
 	for _, test := range []struct {
-		oldString, want string
+		name, find, want string
 	}{
-		{"missing", "old_string was not found"},
-		{"old", "old_string matches 2 locations"},
+		{"missing anchor", "missing", "did not match"},
+		{"ambiguous anchor", "old", "is ambiguous"},
 	} {
-		failed := editOnce(filePath, test.oldString, "replacement", tmpDir)
+		failed := editOnce(filePath, test.find, "replacement", tmpDir)
 		if failed.Success || !strings.Contains(failed.Error, test.want) {
-			t.Fatalf("invalid edit = %+v, want %q", failed, test.want)
+			t.Fatalf("%s: invalid edit = %+v, want %q", test.name, failed, test.want)
 		}
 		content, err = os.ReadFile(filePath)
 		if err != nil {

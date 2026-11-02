@@ -667,7 +667,7 @@ func TestConsecutiveToolCommitsStayOutOfManagedFrameAndPrintOnceInOrder(t *testi
 		t.Fatalf("first commit commands = %#v, want one active print", firstCmds)
 	}
 
-	editCall := core.ToolCall{ID: "edit-1", Name: "Edit", Input: `{"file_path":"main.go","old_string":"old","new_string":"EDIT_RESULT_SENTINEL"}`}
+	editCall := core.ToolCall{ID: "edit-1", Name: "Edit", Input: `{"payload":"*** SM:EDIT main.go\n*** SM:FIND\nold\n*** SM:PUT\nEDIT_RESULT_SENTINEL\n"}`}
 	m.conv.Messages = append(m.conv.Messages,
 		core.ChatMessage{Role: core.ChatAssistant, ToolCalls: []core.ToolCall{editCall}},
 		core.ChatMessage{Role: core.ChatUser, ToolResult: &core.ToolResult{
