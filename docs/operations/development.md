@@ -19,6 +19,11 @@ Build targets do not rewrite source files. `make format` is the explicit
 mutating command; `make release` runs `format-check` and fails when the tree
 needs formatting.
 
+`make build-amd64` cross-compiles just `linux/amd64` and `darwin/amd64` into
+`bin/`. `.github/workflows/build.yml` runs it on every push to `master` and on
+manual dispatch, then uploads both binaries as workflow artifacts. Tagged
+releases still come from `release.yml` / `make release`.
+
 ## Sandbox-Friendly Test Command
 
 Some environments block writes to the default Go build cache. Use a writable

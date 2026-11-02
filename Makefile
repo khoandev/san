@@ -20,7 +20,7 @@ GOVULNCHECK_VERSION := v1.7.0
 # command up to 5 times with linear backoff: RETRY go install foo@v1.
 RETRY := sh -c 'n=1; while ! "$$@"; do [ $$n -ge 5 ] && exit 1; echo "retry $$n/5: $$*" >&2; sleep $$((n*5)); n=$$((n+1)); done' --
 
-.PHONY: build build-all install clean release release-push test cover format format-check lint lint-go install-format-tools install-lint-tools check-format-tools check-lint-tools
+.PHONY: build build-all build-amd64 install clean release release-push test cover format format-check lint lint-go install-format-tools install-lint-tools check-format-tools check-lint-tools
 
 build:
 	@mkdir -p $(BINDIR)
@@ -133,6 +133,14 @@ serve-site:
 	@echo ""
 	@open http://localhost:8080 2>/dev/null || true
 	python3 -m http.server 8080 -d site/
+
+# build-amd64 cross-compiles only the platforms .github/workflows/build.yml
+# publishes as downloadable artifacts. CGO is off, so one Linux runner can emit
+# both binaries. `release` stays the full, signed matrix.
+build-amd64:
+	@mkdir -p $(BINDIR)
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BINDIR)/$(BINARY)_darwin_amd64 $(SRCDIR)
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINDIR)/$(BINARY)_linux_amd64 $(SRCDIR)
 
 release: format-check
 	@mkdir -p $(BINDIR)
