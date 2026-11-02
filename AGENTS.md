@@ -77,6 +77,7 @@ whole-file rewrite.
 
 Keep the two ported packages byte-compatible with upstream semantics; a local
 dialect would cost a failed round-trip per novel payload mistake.
+
 ## Common Commands
 
 See `docs/operations/development.md` for build / test / lint / format
