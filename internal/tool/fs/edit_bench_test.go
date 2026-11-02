@@ -155,19 +155,24 @@ func TestEditRequestPayloadSize(t *testing.T) {
 		anchors[line.LineNo] = line.Hash
 	}
 
-	const rangeLines = 5
-	start := 50
+	const start = 50
+	// Two sizes: one a model writes by hand, one it would not. The anchored
+	// call is the same size for both while the legacy call grows with the range
+	// — that difference, not client CPU, is what the model pays for.
 	lines := splitFileLines(content)
-	oldText := strings.Join(lines[start-1:start-1+rangeLines], "\n") + "\n"
-	legacy := len(fmt.Sprintf(`{"file_path":%q,"old_string":%q,"new_string":%q}`, filePath, oldText, "replacement"))
-	anchored := len(fmt.Sprintf(`{"file_path":%q,"remove_from":%q,"remove_to":%q,"text":%q}`, filePath, anchors[start], anchors[start+rangeLines-1], "replacement"))
+	for _, rangeLines := range []int{5, 40} {
+		oldText := strings.Join(lines[start-1:start-1+rangeLines], "\n") + "\n"
+		legacy := len(fmt.Sprintf(`{"file_path":%q,"old_string":%q,"new_string":%q}`, filePath, oldText, "replacement"))
+		anchored := len(fmt.Sprintf(`{"file_path":%q,"remove_from":%q,"remove_to":%q,"text":%q}`, filePath, anchors[start], anchors[start+rangeLines-1], "replacement"))
 
-	if anchored >= legacy/2 {
-		t.Fatalf("anchored payload %d bytes should be far below the legacy %d bytes for a %d-line replacement", anchored, legacy, rangeLines)
+		if anchored >= legacy/2 {
+			t.Fatalf("anchored payload %d bytes should be far below the legacy %d bytes for a %d-line replacement", anchored, legacy, rangeLines)
+		}
+		t.Logf("replacing %d lines: anchored request %d bytes, legacy request %d bytes (%.1fx)", rangeLines, anchored, legacy, float64(legacy)/float64(anchored))
 	}
-	t.Logf("replacing %d lines: anchored request %d bytes, legacy request %d bytes (%.1fx)", rangeLines, anchored, legacy, float64(legacy)/float64(anchored))
 
-	// The anchored call must actually be accepted for that range.
+	// The anchored call must actually be accepted for the range.
+	const rangeLines = 5
 	res := (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{
 		"file_path":   filePath,
 		"remove_from": anchors[start],

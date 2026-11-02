@@ -200,6 +200,35 @@ plugins-local/      # 本地插件（git-ignored）
 
 </details>
 
+## 编辑：用锚点，而不是重抄文本
+
+`Read` 会在每行前面打印一个短句柄，`Edit` 用首尾两个句柄指定要替换的区间，而不是把原文抄一遍：
+
+```
+  1204 qwert│func handler(ctx context.Context, req *Request) (*Response, error) {
+  1205 abcfg│    return nil, err
+```
+
+```json
+{"file_path": "src/a.go", "remove_from": "qwert", "remove_to": "abcfg", "text": "func handler() (*Response, error) {\n\treturn nil, err"}
+```
+
+抄 `abcfg` 和重打一行服务端代码不是同一件事：没有缩进可写错，没有行尾空格会丢，而且模型看到的句柄一旦失效会被指名拒绝，而不是落到某个看起来差不多的邻行。锚点编辑是 San 的默认 `Edit` 形态，`old_string`/`new_string` 保留为仍然适用的场景的兜底。
+
+| 单次编辑，2000 行 Go 文件 | 锚点 | 传统 | |
+|---|---|---|---|
+| 替换 5 行时模型要发出的调用 | 179 B | 529 B | **小 3.0 倍** |
+| 替换 40 行时模型要发出的调用 | 179 B | 3,119 B | **小 17.4 倍** |
+| Edit 调用，服务端耗时 | ~1.7–2.4 ms | ~1.9–2.1 ms | 持平 |
+| 完整「读取后编辑」一轮 | ~4.0–4.4 ms · 4,364 allocs | ~4.1–5.5 ms · 4,345 allocs | 持平 |
+| Read 输出开销 | 每行 +8 字节 | — | 代价 |
+
+<sub>Go 1.27，darwin/amd64，i5-8257U。耗时用 `go test ./internal/tool/fs/ -run XXX -bench 'Edit'` 复现；字节数由 `TestEditRequestPayloadSize` 固定。</sub>
+
+**为什么 San 选它。** 用户等的是模型写调用，不是 San 解析调用 —— 所以真正重要的是模型为了描述一次修改要生成多少 token。抄一个 40 行的函数约 800 token，而一次抄错就换来一次失败调用和一次重读；两个锚点无论区间多大都约 15 token。安全性来自同一个性质：编辑落在模型真正看过的行上，失效的句柄会被拒绝并附上当前行，重试不需要额外 `Read`。
+
+客户端耗时按设计保持中性（上面的基准守住这一点），Read 的开销真实但很小：每行 8 字节，2000 行约 16 KB —— 比一次抄错后被迫重读还要少。锚点属于会话状态，`/clear` 时一并丢弃，和其他「读过这个文件」的记录一样。
+
 ## 基准测试：San vs Claude Code
 
 在 Apple Silicon 上对比 [Claude Code](https://claude.ai/code) v2.1.112，使用相同模型（`claude-sonnet-4-6`）：

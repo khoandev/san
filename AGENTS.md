@@ -54,6 +54,21 @@ provides; when san grows a generic piece, move it to sdk-go and drop san's
 copy. san keeps its own policy and UI. See sdk-go's CONTRIBUTING.md, "What
 belongs here".
 
+## Anchored Editing
+
+`Read` prints `  12 qwert│text`; `Edit` targets `remove_from`/`remove_to`
+anchors by default, and the legacy `old_string`/`new_string` shape stays as a
+fallback for small, unique replacements. Keep that ordering: anchored is the
+default path, so it must never be the slower or the less safe one.
+
+- `internal/tool/fs/anchor.go` — anchor minting, validation, line fingerprints.
+- `internal/tool/fs/anchor_store.go` — per-session snapshot of the anchors the
+  model was shown; dropped by `fs.ResetFileViews()` (`/clear`, session load).
+- `internal/tool/fs/anchor_edit.go` — pure planning (`applyAnchorEdit`), shared
+  by the permission preview and the approved execution.
+- `internal/tool/fs/edit_bench_test.go` — anchored vs legacy benchmarks and the
+  request-payload test; `README.md`'s comparison table comes from here.
+
 ## Common Commands
 
 See `docs/operations/development.md` for build / test / lint / format

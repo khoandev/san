@@ -202,6 +202,50 @@ plugins-local/      # Local plugins (git-ignored)
 
 </details>
 
+## Editing: anchors, not retyped text
+
+`Read` prints each line with a short handle in front of it, and `Edit` names the
+range it replaces by the first and last handle instead of by a copy of the text:
+
+```
+  1204 qwert│func handler(ctx context.Context, req *Request) (*Response, error) {
+  1205 abcfg│    return nil, err
+```
+
+```json
+{"file_path": "src/a.go", "remove_from": "qwert", "remove_to": "abcfg", "text": "func handler() (*Response, error) {\n\treturn nil, err"}
+```
+
+Copying `abcfg` is not the same task as retyping a server line: there is no
+indentation to get wrong, no trailing whitespace to drop, and a handle that no
+longer describes what the model saw is refused by name instead of landing on a
+plausible neighbour. Anchored editing is San's default `Edit` shape;
+`old_string`/`new_string` stays as the fallback for the cases it still fits.
+
+| Per edit, 2,000-line Go file | Anchored | Legacy | |
+|---|---|---|---|
+| Call the model must emit, 5-line replacement | 179 B | 529 B | **3.0x smaller** |
+| Call the model must emit, 40-line replacement | 179 B | 3,119 B | **17.4x smaller** |
+| Edit call, server side | ~1.7–2.4 ms | ~1.9–2.1 ms | parity |
+| Whole Read-then-edit cycle | ~4.0–4.4 ms · 4,364 allocs | ~4.1–5.5 ms · 4,345 allocs | parity |
+| Read output overhead | +8 bytes per line | — | the price |
+
+<sub>Go 1.27, darwin/amd64, i5-8257U. `go test ./internal/tool/fs/ -run XXX -bench 'Edit'` for the timings; `TestEditRequestPayloadSize` pins the byte counts.</sub>
+
+**Why San adopted it.** What a user waits on is the model writing the call, not
+San parsing it — so the number that matters is how many tokens the model has to
+generate to describe a change. Quoting a 40-line function costs ~800 tokens and
+one transcription slip costs a failed call and a re-read; two anchors cost ~15
+tokens whatever the range. The safety follows from the same property: an edit
+targets a line the model was actually shown, and a handle that has gone stale is
+rejected with the current rows attached, so the retry needs no extra `Read`.
+
+The client-side cost is neutral by design (the benchmarks above keep it there),
+and the Read overhead is real but small: 8 bytes per line, ~16 KB on a
+2,000-line read — less than the re-read a single mistyped legacy edit forces.
+Anchors live for the session and are dropped on `/clear`, like every other
+observation of the file.
+
 ## Benchmark: San vs Claude Code
 
 Compared with [Claude Code](https://claude.ai/code) v2.1.112 on Apple Silicon, same model (`claude-sonnet-4-6`):
