@@ -10,7 +10,7 @@ import (
 // literals; the pruning rules keep those captures sane.
 type search struct {
 	content      string
-	nt           normText
+	nt           *normText // built lazily; nil in the literal mode, which never maps offsets
 	pat          *compiledPattern
 	mode         matchMode
 	litIdx       []int
@@ -26,7 +26,7 @@ type search struct {
 // whether the search gave up early.
 func collectCandidates(
 	content string,
-	nt normText,
+	nt *normText,
 	pat *compiledPattern,
 	mode matchMode,
 	allowPunctuation bool,
@@ -52,9 +52,9 @@ func collectCandidates(
 		case modeRaw:
 			occ = exactOccurrences(content, tok.text)
 		case modeNormalized:
-			occ = exactOccurrences(nt.text, tok.norm)
+			occ = exactOccurrences(nt.matching(), tok.norm)
 		case modeFuzzy:
-			occ = fuzzyOccurrences(nt.text, tok.norm, allowPunctuation)
+			occ = fuzzyOccurrences(nt.matching(), tok.norm, allowPunctuation)
 		}
 		if len(occ) == 0 {
 			return nil, false
@@ -71,14 +71,14 @@ func collectCandidates(
 // sourceStart maps an offset in the searched text to the source byte where the
 // matched text starts.
 func (s *search) sourceStart(offset int) int {
-	if s.mode == modeRaw {
+	if s.mode == modeRaw || s.nt == nil {
 		return offset
 	}
 	return s.nt.sourceStart(offset, len(s.content))
 }
 
 func (s *search) sourceEnd(offset int) int {
-	if s.mode == modeRaw {
+	if s.mode == modeRaw || s.nt == nil {
 		return offset
 	}
 	return s.nt.sourceEnd(offset, len(s.content))

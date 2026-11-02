@@ -7,41 +7,92 @@ import (
 
 // normText is source text mapped into the matching space: whitespace is
 // dropped and typographic characters fold to their ASCII spellings, so pattern
-// and file may differ in indentation, spacing, and punctuation style. starts
-// and ends map every normalized byte back to the source byte range it came
-// from, so matched spans and captures can be cut out of the original text.
+// and file may differ in indentation, spacing, and punctuation style.
+//
+// Both views — the matching-space text and the map from every normalized byte
+// back to the source byte it came from — are built on first use. An anchor
+// copied from the file matches at the literal rung without either, and folding
+// a whole file is the engine's largest per-edit allocation, so it is paid only
+// when the tolerant rungs run.
 type normText struct {
-	text   string
-	starts []int // starts[i] is the source byte offset where normalized byte i begins
-	ends   []int // ends[i] is the source byte offset where normalized byte i ends
+	source string
+	built  bool
+	norm   string
+	starts []int // starts[i] is the source byte where normalized byte i begins
 }
 
-// normalizeText maps source into the matching space in one pass.
-func normalizeText(source string) normText {
-	var (
-		text   strings.Builder
-		starts []int
-		ends   []int
-	)
+// normalizeText prepares source for the matching space. Nothing is folded
+// until the matching space or the source map is asked for.
+func normalizeText(source string) normText { return normText{source: source} }
+
+// matching is the source in the matching space.
+func (n *normText) matching() string {
+	n.build()
+	return n.norm
+}
+
+// normalizeString is the matching-space text of source, for the callers that
+// need only the text and never a source offset.
+func normalizeString(source string) string {
+	text, _ := foldSource(source, false)
+	return text
+}
+
+// build folds the source once, keeping both views of the result.
+func (n *normText) build() {
+	if n.built {
+		return
+	}
+	n.built = true
+	n.norm, n.starts = foldSource(n.source, true)
+}
+
+// foldSource maps source into the matching space in one pass, returning that
+// text and, when wantMap is set, the source byte every normalized byte starts
+// at.
+func foldSource(source string, wantMap bool) (string, []int) {
+	var text strings.Builder
+	text.Grow(len(source))
+	var starts []int
+	if wantMap {
+		starts = make([]int, 0, len(source))
+	}
 	for offset := 0; offset < len(source); {
 		r, width := utf8.DecodeRuneInString(source[offset:])
-		end := offset + width
-		if isFoldedWhitespace(r) {
+		switch {
+		case isFoldedWhitespace(r):
+			offset += width
+		case r < utf8.RuneSelf:
+			// Plain ASCII copies byte for byte, so take the whole run in one
+			// write rather than one write per character.
+			end := offset + width
+			for end < len(source) && isPlainASCII(source[end]) {
+				end++
+			}
+			if wantMap {
+				for at := offset; at < end; at++ {
+					starts = append(starts, at)
+				}
+			}
+			text.WriteString(source[offset:end])
 			offset = end
-			continue
+		default:
+			spelling := foldRune(r)
+			if wantMap {
+				for range len(spelling) {
+					starts = append(starts, offset)
+				}
+			}
+			text.WriteString(spelling)
+			offset += width
 		}
-		replacement := string(r)
-		if r >= utf8.RuneSelf {
-			replacement = foldRune(r)
-		}
-		text.WriteString(replacement)
-		for range len(replacement) {
-			starts = append(starts, offset)
-			ends = append(ends, end)
-		}
-		offset = end
 	}
-	return normText{text: text.String(), starts: starts, ends: ends}
+	return text.String(), starts
+}
+
+// isPlainASCII reports a byte the matching space copies verbatim.
+func isPlainASCII(b byte) bool {
+	return b < utf8.RuneSelf && !isFoldedWhitespace(rune(b))
 }
 
 // isFoldedWhitespace reports the characters the matching space erases: ASCII
@@ -79,7 +130,8 @@ func foldRune(r rune) string {
 
 // sourceStart maps a normalized byte offset to the source byte where that
 // byte's source character starts.
-func (n normText) sourceStart(offset, fallback int) int {
+func (n *normText) sourceStart(offset, fallback int) int {
+	n.build()
 	if offset < len(n.starts) {
 		return n.starts[offset]
 	}
@@ -87,15 +139,19 @@ func (n normText) sourceStart(offset, fallback int) int {
 }
 
 // sourceEnd maps a normalized byte offset to the source byte where the
-// previous normalized byte's source character ends.
-func (n normText) sourceEnd(offset, fallback int) int {
+// previous normalized byte's source character ends. The end is the width of
+// the source rune the map points at, so only the starts are stored.
+func (n *normText) sourceEnd(offset, fallback int) int {
 	if offset == 0 {
 		return 0
 	}
-	if offset-1 < len(n.ends) {
-		return n.ends[offset-1]
+	n.build()
+	if offset-1 >= len(n.starts) {
+		return fallback
 	}
-	return fallback
+	start := n.starts[offset-1]
+	_, width := utf8.DecodeRuneInString(n.source[start:])
+	return start + width
 }
 
 // levenshteinDistance is the edit distance over Unicode characters, with the

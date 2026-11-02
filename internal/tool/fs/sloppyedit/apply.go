@@ -567,14 +567,14 @@ func reconcileOverlap(content string, left, right plannedEdit) (plannedEdit, boo
 // normalizedContains reports whether content already holds stated text,
 // ignoring whitespace and typographic differences.
 func normalizedContains(content, stated string) bool {
-	needle := normalizeText(stated).text
-	return needle != "" && strings.Contains(normalizeText(content).text, needle)
+	needle := normalizeString(stated)
+	return needle != "" && strings.Contains(normalizeString(content), needle)
 }
 
 // closestDesiredSpan slides a window of the stated text's line count over the
 // file and returns the unique block that plausibly is a garbled copy of it.
 func closestDesiredSpan(content, stated string) ([2]int, bool) {
-	statedNorm := normalizeText(stated).text
+	statedNorm := normalizeString(stated)
 	if len(statedNorm) < 12 || len(statedNorm) > 1000 {
 		return [2]int{}, false
 	}
@@ -589,7 +589,7 @@ func closestDesiredSpan(content, stated string) ([2]int, bool) {
 	}
 	scores := make([]scored, 0, len(lines)-count+1)
 	for index := 0; index+count <= len(lines); index++ {
-		current := normalizeText(strings.Join(lines[index:index+count], "\n")).text
+		current := normalizeString(strings.Join(lines[index:index+count], "\n"))
 		denominator := max(len(statedNorm), len(current), 1)
 		affix := strings.HasPrefix(statedNorm, current) || strings.HasPrefix(current, statedNorm) ||
 			strings.HasSuffix(statedNorm, current) || strings.HasSuffix(current, statedNorm)

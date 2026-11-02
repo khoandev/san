@@ -4,8 +4,24 @@ import "testing"
 
 func TestNormalizeTextDropsWhitespaceAndFoldsPunctuation(t *testing.T) {
 	got := normalizeText("\tconst  x = “a” ≠ b;\n")
-	if want := `constx="a"!=b;`; got.text != want {
-		t.Errorf("normalized text = %q, want %q", got.text, want)
+	if want := `constx="a"!=b;`; got.matching() != want {
+		t.Errorf("normalized text = %q, want %q", got.matching(), want)
+	}
+}
+
+// TestNormalizeTextFoldsLazily pins the engine's largest per-edit saving: an
+// anchor that matches the file as written never folds it, so a literal match
+// must not touch the matching space at all.
+func TestNormalizeTextFoldsLazily(t *testing.T) {
+	got := normalizeText("a b")
+	if got.built {
+		t.Fatal("normalizeText folded the source before anyone asked for the matching space")
+	}
+	if want := "ab"; got.matching() != want {
+		t.Errorf("normalized text = %q, want %q", want, got.matching())
+	}
+	if !got.built {
+		t.Error("matching() returned text without building the matching space")
 	}
 }
 
@@ -13,8 +29,8 @@ func TestNormalizeTextMapsNormalizedBytesBackToSource(t *testing.T) {
 	source := "a\u00a0😀 b"
 	got := normalizeText(source)
 
-	if want := "a😀b"; got.text != want {
-		t.Fatalf("normalized text = %q, want %q", got.text, want)
+	if want := "a😀b"; got.matching() != want {
+		t.Fatalf("normalized text = %q, want %q", got.matching(), want)
 	}
 	if start := got.sourceStart(0, -1); start != 0 {
 		t.Errorf("sourceStart(0) = %d, want 0", start)
@@ -40,28 +56,29 @@ func TestNormalizeTextMapsNormalizedBytesBackToSource(t *testing.T) {
 
 func TestNormalizeTextKeepsNonASCIICharactersVerbatim(t *testing.T) {
 	got := normalizeText("中文 = 1")
-	if want := "中文=1"; got.text != want {
-		t.Errorf("normalized text = %q, want %q", got.text, want)
+	if want := "中文=1"; got.matching() != want {
+		t.Errorf("normalized text = %q, want %q", got.matching(), want)
 	}
-	if len(got.starts) != len(got.text) {
-		t.Fatalf("starts has %d entries, want %d (one per normalized byte)", len(got.starts), len(got.text))
+	if len(got.starts) != len(got.matching()) {
+		t.Fatalf("starts has %d entries, want %d (one per normalized byte)", len(got.starts), len(got.matching()))
 	}
-	for i, start := range got.starts {
-		if start >= got.ends[i] {
-			t.Errorf("starts[%d] = %d, want < ends[%d] = %d", i, start, i, got.ends[i])
+	for i := range len(got.matching()) {
+		start, end := got.sourceStart(i, -1), got.sourceEnd(i+1, -1)
+		if start < 0 || start >= end {
+			t.Errorf("normalized byte %d maps to source [%d,%d), want a non-empty span", i, start, end)
 		}
 	}
 }
 
 func TestSourceOffsetsFallBackAtEnds(t *testing.T) {
 	got := normalizeText("ab")
-	if start := got.sourceStart(len(got.text), 42); start != 42 {
+	if start := got.sourceStart(len(got.matching()), 42); start != 42 {
 		t.Errorf("sourceStart past the end = %d, want fallback 42", start)
 	}
 	if end := got.sourceEnd(0, 42); end != 0 {
 		t.Errorf("sourceEnd(0) = %d, want 0", end)
 	}
-	if end := got.sourceEnd(len(got.text), 42); end != 2 {
+	if end := got.sourceEnd(len(got.matching()), 42); end != 2 {
 		t.Errorf("sourceEnd past the end = %d, want 2", end)
 	}
 }

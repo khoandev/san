@@ -101,7 +101,11 @@ not change `Agent.run_in_background` or task lifecycle metadata. See
   (`[E_MULTI_FILE]` otherwise) because a permission review covers one diff, and
   the file must have a current view (`fs.ResetFileViews()` on `/clear` clears
   it). Matching is fail-closed: an absent or ambiguous anchor never falls back
-  to a whole-file rewrite.
+  to a whole-file rewrite. The ladder starts on the raw file, and the fold into
+  the matching space (whitespace dropped, punctuation folded) is built on first
+  use: an anchor copied from the file never pays for it, and a retyped one pays
+  once. Folding a whole file is the engine's largest per-edit allocation, so
+  keep it behind that lazy boundary.
 - The payload header, not an argument, names the file, so anything outside the
   tool that scopes or previews a call reads the target through
   `perm.CallFile(toolName, args)` (`internal/tool/perm/call.go`): permission

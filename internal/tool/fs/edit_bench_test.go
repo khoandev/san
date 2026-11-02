@@ -95,6 +95,49 @@ func BenchmarkEditPayload(b *testing.B)          { benchmarkEdit(b, 40, benchLin
 func BenchmarkEditPayloadLargeBody(b *testing.B) { benchmarkEdit(b, 400, benchLineCount) }
 func BenchmarkEditPayloadSmallFile(b *testing.B) { benchmarkEdit(b, 40, benchSmallFile) }
 
+// benchmarkRestoredEdit times one call against a file restored before every
+// iteration, so each call takes the same rung of the matching ladder. It is
+// the frame the old Edit shapes were measured in, which makes the comparison
+// table in the README like for like.
+func benchmarkRestoredEdit(b *testing.B, payload func(path string) string) {
+	dir, filePath := benchPrepared(b, 40, benchLineCount)
+	content := benchFileOf(40, benchLineCount)
+	body := payload(filePath)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+			b.Fatal(err)
+		}
+		ResetFileViews()
+		if read := (&ReadTool{}).Execute(context.Background(), map[string]any{"file_path": filePath}, dir); !read.Success {
+			b.Fatalf("Read failed: %s", read.Error)
+		}
+		b.StartTimer()
+		if res := (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{"payload": body}, dir); !res.Success {
+			b.Fatalf("edit failed: %s", res.Error)
+		}
+	}
+}
+
+// BenchmarkEditRestored is an anchor copied exactly from the file: the literal
+// rung, which needs no normalization at all.
+func BenchmarkEditRestored(b *testing.B) {
+	benchmarkRestoredEdit(b, func(path string) string { return benchEditPayload(path, 40) })
+}
+
+// BenchmarkEditRestoredTolerant is the same edit with an anchor the model
+// retyped — its body indented by spaces where the file uses a tab. The literal
+// rung misses and the tolerant rungs fold the file into the matching space, so
+// this is the cost of tolerance.
+func BenchmarkEditRestoredTolerant(b *testing.B) {
+	benchmarkRestoredEdit(b, func(path string) string {
+		return strings.Replace(benchEditPayload(path, 40),
+			"\nfunc target(", "\n    func target(", 1)
+	})
+}
+
 // BenchmarkApplyOnly isolates the engine from the tool: parse, match, apply and
 // splice, without reading, diffing or writing the file. It is the part of an
 // edit a payload shape can make faster or slower, so it is the number to watch
@@ -178,6 +221,67 @@ func TestEditPayloadSize(t *testing.T) {
 		if res := (&EditTool{}).ExecuteApproved(context.Background(), map[string]any{"payload": payload}, dir); !res.Success {
 			t.Fatalf("%s payload failed: %s", name, res.Error)
 		}
+	}
+}
+
+// comparePath is the path the comparison below quotes: as short as a repository
+// file, so the numbers describe the call rather than a temp directory.
+const comparePath = "src/users.go"
+
+// compareFunction builds the 42-line function the comparison edits: a
+// 40-line body kept verbatim, and a last line that changes.
+func compareFunction(name, returned string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "func %s(ctx context.Context) error {\n", name)
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&sb, "\tvalue%04d := compute(%d)\n", i, i)
+	}
+	fmt.Fprintf(&sb, "\treturn %s(ctx)\n}\n", returned)
+	return sb.String()
+}
+
+// compareSloppyPayload is the anchored patch: the lines that identify the
+// change, the body between them elided.
+func compareSloppyPayload() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "*** SM:EDIT %s\n", comparePath)
+	sb.WriteString("*** SM:FIND\nfunc load(ctx context.Context) error {\n…\n\treturn old(ctx)\n}\n")
+	sb.WriteString("*** SM:PUT\nfunc fresh(ctx context.Context) error {\n…\n\treturn fresh(ctx)\n}\n")
+	return sb.String()
+}
+
+// compareExactPayload is the old_string/new_string shape for the same change.
+// The change is not one contiguous line, so the exact shape quotes everything
+// between the two sites — once per side.
+func compareExactPayload() string {
+	return comparePath + "\n" + compareFunction("load", "old") + compareFunction("fresh", "fresh")
+}
+
+// compareAnchorPayload is the line-anchor shape: a path, two 5-character
+// handles from Read output, and the whole range restated once.
+func compareAnchorPayload() string {
+	return comparePath + "\nqwert\nqwert\n" + compareFunction("fresh", "fresh")
+}
+
+// TestEditPayloadComparison pins the three call shapes the README's table
+// quotes for the same change — rename a function and what it returns, keeping
+// its 40-line body. The bytes are the text the call carries, JSON quoting
+// aside: quoting scales with the text, so the ratios hold either way.
+//
+// The point is not that an anchored patch is small; it is that its size does
+// not follow the body it keeps, while both removed shapes had to restate the
+// range — the exact shape twice.
+func TestEditPayloadComparison(t *testing.T) {
+	sloppy := len(compareSloppyPayload())
+	anchor := len(compareAnchorPayload())
+	exact := len(compareExactPayload())
+	t.Logf("same 42-line edit: anchored patch %d B, line anchors %d B (%.1fx), exact string %d B (%.1fx)",
+		sloppy, anchor, float64(anchor)/float64(sloppy), exact, float64(exact)/float64(sloppy))
+	if sloppy >= anchor/2 {
+		t.Fatalf("anchored patch %d B should be far below the %d B line-anchor call", sloppy, anchor)
+	}
+	if sloppy >= exact/4 {
+		t.Fatalf("anchored patch %d B should be far below the %d B exact-string call", sloppy, exact)
 	}
 }
 

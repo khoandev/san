@@ -67,7 +67,7 @@ func selectionTokens(body string, sel sloppy.Selection) []patToken {
 			return
 		}
 		text := sel.Old[literal:end]
-		out = append(out, patToken{kind: tokLiteral, text: text, norm: normalizeText(text).text})
+		out = append(out, patToken{kind: tokLiteral, text: text, norm: normalizeString(text)})
 		literal = -1
 	}
 	for i := 0; i < len(sel.Old); {
@@ -180,7 +180,7 @@ func compilePattern(pat sloppy.Pattern, number int) (*compiledPattern, error) {
 			continue // an edge gap ate this literal's joining newline; the neighbors abut
 		}
 		c.tokens = append(c.tokens, patToken{
-			kind: tokLiteral, text: tok.Text, norm: normalizeText(tok.Text).text,
+			kind: tokLiteral, text: tok.Text, norm: normalizeString(tok.Text),
 		})
 	}
 	remap[len(pat.Tokens)] = len(c.tokens)
@@ -339,17 +339,17 @@ func buildLiteralFallback(pat sloppy.Pattern, insertion bool) *literalFallback {
 	for i, sel := range pat.Selections {
 		b.WriteString(pat.Body[pos:sel.Start])
 		if i == 0 {
-			selectionStart = len(normalizeText(b.String()).text)
+			selectionStart = len(normalizeString(b.String()))
 		}
 		b.WriteString(sel.Old)
 		if i == 0 {
-			selectionEnd = len(normalizeText(b.String()).text)
+			selectionEnd = len(normalizeString(b.String()))
 		}
 		pos = sel.End
 	}
 	b.WriteString(pat.Body[pos:])
 	return &literalFallback{
-		norm:           normalizeText(b.String()).text,
+		norm:           normalizeString(b.String()),
 		selectionStart: selectionStart,
 		selectionEnd:   selectionEnd,
 		insertion:      insertion,
@@ -358,17 +358,26 @@ func buildLiteralFallback(pat sloppy.Pattern, insertion bool) *literalFallback {
 
 // exactOccurrences reports every place pattern occurs in content, including
 // overlapping ones. An empty pattern matches nothing.
+//
+// The scan rides on strings.Index, so a file that does not contain the pattern
+// at all — the common miss and the common exact hit alike — costs one
+// vectorized search per literal instead of one comparison per character.
 func exactOccurrences(content, pattern string) []occurrence {
 	if pattern == "" {
 		return nil
 	}
 	var out []occurrence
-	for i := 0; i+len(pattern) <= len(content); {
-		if strings.HasPrefix(content[i:], pattern) {
-			out = append(out, occurrence{start: i, end: i + len(pattern)})
+	for from := 0; from+len(pattern) <= len(content); {
+		at := strings.Index(content[from:], pattern)
+		if at < 0 {
+			break
 		}
-		_, width := utf8.DecodeRuneInString(content[i:])
-		i += width
+		start := from + at
+		out = append(out, occurrence{start: start, end: start + len(pattern)})
+		// Resume one character later: an overlapping occurrence still counts,
+		// and a pattern can never shift the scan by zero.
+		_, width := utf8.DecodeRuneInString(content[start:])
+		from = start + width
 	}
 	return out
 }

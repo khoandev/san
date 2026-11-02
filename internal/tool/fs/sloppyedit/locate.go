@@ -15,18 +15,29 @@ import (
 // ladder from literal to tolerant, claims only unambiguous anchors, and on
 // failure explains where the pattern nearly matched.
 func (a *applier) locate(op *sloppy.Operation, pat *compiledPattern, number int) ([]candidate, error) {
-	nt := normalizeText(a.content)
-	raw, overflow := collectCandidates(a.content, nt, pat, modeRaw, false)
+	// The literal rung needs no preparation: an anchor copied from the file
+	// matches it as written, so the whole file is folded into the matching
+	// space only when that rung misses. Nothing here maps a normalized offset
+	// back to a source offset until a tolerant rung finds something.
+	raw, overflow := collectCandidates(a.content, nil, pat, modeRaw, false)
 	if overflow {
 		return nil, a.tooBroadError(number)
 	}
+	var nt *normText
+	normalized := func() *normText {
+		if nt == nil {
+			prepared := normalizeText(a.content)
+			nt = &prepared
+		}
+		return nt
+	}
 
 	if len(raw) == 0 && pat.fallback != nil {
-		hits := exactOccurrences(nt.text, pat.fallback.norm)
+		hits := exactOccurrences(normalized().matching(), pat.fallback.norm)
 		if len(hits) > 0 && (op.All || len(hits) == 1) {
 			candidates := make([]candidate, 0, len(hits))
 			for _, hit := range hits {
-				candidates = append(candidates, fallbackCandidate(nt, pat, hit))
+				candidates = append(candidates, fallbackCandidate(normalized(), pat, hit))
 			}
 			return candidates, nil
 		}
@@ -35,19 +46,19 @@ func (a *applier) locate(op *sloppy.Operation, pat *compiledPattern, number int)
 	result := raw
 	if len(result) == 0 {
 		var overflow bool
-		result, overflow = collectCandidates(a.content, nt, pat, modeNormalized, false)
+		result, overflow = collectCandidates(a.content, normalized(), pat, modeNormalized, false)
 		if overflow {
 			return nil, a.tooBroadError(number)
 		}
 	}
 	if len(result) == 0 {
 		var overflow bool
-		result, overflow = collectCandidates(a.content, nt, pat, modeFuzzy, false)
+		result, overflow = collectCandidates(a.content, normalized(), pat, modeFuzzy, false)
 		if overflow {
 			return nil, a.tooBroadError(number)
 		}
 		if len(result) == 0 && !op.All {
-			punctuation, punctuationOverflow := collectCandidates(a.content, nt, pat, modeFuzzy, true)
+			punctuation, punctuationOverflow := collectCandidates(a.content, normalized(), pat, modeFuzzy, true)
 			if !punctuationOverflow && len(punctuation) == 1 {
 				result = punctuation
 			}
@@ -72,10 +83,10 @@ func (a *applier) locate(op *sloppy.Operation, pat *compiledPattern, number int)
 
 // fallbackCandidate builds an anchor from the literal fallback: the pattern
 // was matched with its "…" glyphs spelled out, so a PUT "…" is literal too.
-func fallbackCandidate(nt normText, pat *compiledPattern, hit occurrence) candidate {
+func fallbackCandidate(nt *normText, pat *compiledPattern, hit occurrence) candidate {
 	fb := pat.fallback
 	matchStart := nt.sourceStart(hit.start, 0)
-	matchEnd := nt.sourceEnd(hit.end, len(nt.text))
+	matchEnd := nt.sourceEnd(hit.end, len(nt.matching()))
 	start := matchEnd
 	if fb.selectionStart != len(fb.norm) {
 		start = nt.sourceStart(hit.start+fb.selectionStart, matchEnd)
@@ -116,7 +127,7 @@ func identicalOutcomes(content string, op *sloppy.Operation, pat *compiledPatter
 		default:
 			outcome = content[:candidate.matchStart] + op.Rewrite.Text + content[candidate.matchEnd:]
 		}
-		seen[normalizeText(outcome).text] = true
+		seen[normalizeString(outcome)] = true
 	}
 	return len(seen) == 1
 }
@@ -177,7 +188,7 @@ func (*applier) tooBroadError(number int) error {
 func (a *applier) noMatchError(op *sloppy.Operation, pat *compiledPattern, number int) error {
 	nt := normalizeText(a.content)
 	literal, needle := firstLiteral(pat)
-	occurrences := exactOccurrences(nt.text, needle)
+	occurrences := exactOccurrences(nt.matching(), needle)
 	closest, closestOffset, closestScore := closestFragment(a.content, needle)
 
 	reason := fmt.Sprintf("Failed fragment: %s could not align.", displayFragment(literal))
@@ -283,7 +294,7 @@ func firstLiteral(pat *compiledPattern) (string, string) {
 			return tok.text, tok.norm
 		}
 	}
-	return pat.body, normalizeText(pat.body).text
+	return pat.body, normalizeString(pat.body)
 }
 
 // operationPayload renders one operation as a copy-ready payload fragment.
@@ -377,7 +388,7 @@ func closestFragment(content, pattern string) (string, int, float64) {
 	var ranked []rankedLine
 	offset := 0
 	for line := range strings.SplitSeq(content, "\n") {
-		norm := normalizeText(line).text
+		norm := normalizeString(line)
 		if norm != "" {
 			denominator := max(len(pattern), len(norm), 1)
 			score := float64(levenshteinDistance(pattern, norm)) / float64(denominator)
