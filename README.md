@@ -278,8 +278,8 @@ below expresses that one edit of a 2,000-line Go file:
 -bench 'Edit|Apply'` reproduces the timings, and `TestEditPayloadComparison` pins
 the byte counts. The call row restores the file before every iteration, so each
 measurement is the same edit — `BenchmarkEditRestored` is that frame. The
-removed shapes' rows were measured on the parent commit, against the same file
-and the same edit, because those tools are gone from this tree.</sub>
+removed shapes' rows come from the commit that still had them (`86ea52a2^`), on
+the same file and the same edit, because those tools are gone from this tree.</sub>
 
 **Why San adopted it.** What a user waits on is the model writing the call, not
 San parsing it, so the number that matters is how many bytes the model must
@@ -299,9 +299,8 @@ rather than copied forces the tolerant rungs, which fold the file, and costs
 ~0.5 ms and ~0.7 MB more than an exact anchor. That is the price of matching a
 call the other shapes would have rejected.
 
-The rest of the trade is structural. Anchoring needs a current view — `Read`
-first, and a file changed on disk afterwards says so instead of guessing — and
-one call edits one file, because one approval reviews one diff.
+The rest of the trade is structural: anchoring needs a current view — `Read`
+first, and a file changed on disk afterwards says so instead of guessing.
 
 ## Benchmark: San vs Claude Code
 

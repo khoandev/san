@@ -272,16 +272,21 @@ func compareAnchorPayload() string {
 // not follow the body it keeps, while both removed shapes had to restate the
 // range — the exact shape twice.
 func TestEditPayloadComparison(t *testing.T) {
-	sloppy := len(compareSloppyPayload())
+	payload := compareSloppyPayload()
+	sections, err := sloppy.Parse(payload)
+	if err != nil || len(sections) != 1 || len(sections[0].Ops) != 1 {
+		t.Fatalf("the anchored payload the table quotes must be a real one: sections=%d err=%v", len(sections), err)
+	}
+	patch := len(payload)
 	anchor := len(compareAnchorPayload())
 	exact := len(compareExactPayload())
 	t.Logf("same 42-line edit: anchored patch %d B, line anchors %d B (%.1fx), exact string %d B (%.1fx)",
-		sloppy, anchor, float64(anchor)/float64(sloppy), exact, float64(exact)/float64(sloppy))
-	if sloppy >= anchor/2 {
-		t.Fatalf("anchored patch %d B should be far below the %d B line-anchor call", sloppy, anchor)
+		patch, anchor, float64(anchor)/float64(patch), exact, float64(exact)/float64(patch))
+	if patch >= anchor/2 {
+		t.Fatalf("anchored patch %d B should be far below the %d B line-anchor call", patch, anchor)
 	}
-	if sloppy >= exact/4 {
-		t.Fatalf("anchored patch %d B should be far below the %d B exact-string call", sloppy, exact)
+	if patch >= exact/4 {
+		t.Fatalf("anchored patch %d B should be far below the %d B exact-string call", patch, exact)
 	}
 }
 
