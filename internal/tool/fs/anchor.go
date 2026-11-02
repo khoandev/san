@@ -67,6 +67,23 @@ var (
 func mintAnchor() string {
 	anchorSeqMu.Lock()
 	defer anchorSeqMu.Unlock()
+	return mintAnchorLocked()
+}
+
+// mintAnchors hands out n anchors under one lock acquisition, which is what an
+// edit that rewrites a range needs — a per-line lock would take the cursor
+// mutex once per written line.
+func mintAnchors(n int) []string {
+	anchorSeqMu.Lock()
+	defer anchorSeqMu.Unlock()
+	out := make([]string, n)
+	for i := range out {
+		out[i] = mintAnchorLocked()
+	}
+	return out
+}
+
+func mintAnchorLocked() string {
 	for {
 		anchor := anchorAt(anchorSeq)
 		anchorSeq++

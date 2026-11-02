@@ -15,17 +15,37 @@ type anchorEntry struct {
 // anchorSnapshot is one file's anchors as of the on-disk state in stamp. lines
 // is sparse: only the lines a Read actually printed have anchors, so reading a
 // 2,000-line window of a 100,000-line file costs 2,000 entries, and paging
-// later fills the gap. served records the anchors whose rows the model was
-// shown, with the checksum of the row it saw: an edit may only touch a line the
-// model has actually looked at.
+// later fills the gap. byAnchor is the same data keyed the way an edit looks it
+// up — an anchor resolves in constant time instead of scanning every line the
+// model has seen. served records the anchors whose rows the model was shown,
+// with the checksum of the row it saw: an edit may only touch a line the model
+// has actually looked at.
 type anchorSnapshot struct {
-	stamp  fileStamp
-	lines  map[int]anchorEntry
-	served map[string]uint64
+	stamp    fileStamp
+	lines    map[int]anchorEntry
+	byAnchor map[string]int
+	served   map[string]uint64
 }
 
 func (s *anchorSnapshot) current(info os.FileInfo) bool {
 	return s.stamp.modTime.Equal(info.ModTime()) && s.stamp.size == info.Size()
+}
+
+// set records a line's anchor in both directions. The two maps are always
+// written together; a stale byAnchor entry would resolve an edit to a line
+// whose anchor it is not.
+func (s *anchorSnapshot) set(line int, entry anchorEntry) {
+	if s.lines == nil {
+		s.lines = map[int]anchorEntry{}
+	}
+	if s.byAnchor == nil {
+		s.byAnchor = make(map[string]int, len(s.lines)+1)
+	}
+	if old, ok := s.lines[line]; ok && old.anchor != entry.anchor {
+		delete(s.byAnchor, old.anchor)
+	}
+	s.lines[line] = entry
+	s.byAnchor[entry.anchor] = line
 }
 
 var (
@@ -63,7 +83,7 @@ func snapshotFor(filePath string, info os.FileInfo) *anchorSnapshot {
 	snap, ok := anchorSnapshots[key]
 	stamp := fileStamp{modTime: info.ModTime(), size: info.Size()}
 	if !ok || !snap.current(info) {
-		snap = &anchorSnapshot{stamp: stamp}
+		snap = &anchorSnapshot{}
 		anchorSnapshots[key] = snap
 	}
 	snap.stamp = stamp
@@ -84,11 +104,8 @@ func anchorRows(filePath string, info os.FileInfo, rows []anchorRow) []string {
 		checksum := lineChecksum(row.text)
 		entry, ok := snap.lines[row.lineNo]
 		if !ok || entry.checksum != checksum {
-			if snap.lines == nil {
-				snap.lines = map[int]anchorEntry{}
-			}
 			entry = anchorEntry{anchor: mintAnchor(), checksum: checksum}
-			snap.lines[row.lineNo] = entry
+			snap.set(row.lineNo, entry)
 		}
 		out[i] = entry.anchor
 		if row.editable {
@@ -101,118 +118,61 @@ func anchorRows(filePath string, info os.FileInfo, rows []anchorRow) []string {
 	return out
 }
 
-// anchorLineOf resolves an anchor to the 1-based line it was minted for. ok is
-// false when the anchor is unknown to this file or the file has changed since
-// the anchors were handed out — in both cases the model's handle no longer
-// names a line it can safely edit.
-func anchorLineOf(filePath string, info os.FileInfo, anchor string) (int, bool) {
+// anchorRange is the outcome of resolving an anchored edit against one file
+// snapshot. stale lists the lines in the range the model was never shown (or
+// that changed after it was); missing is set when an anchor does not resolve at
+// all.
+type anchorRange struct {
+	start, end int
+	reversed   bool
+	stale      []int
+	missing    string
+}
+
+// resolveAnchoredRange resolves both anchors and verifies the whole range
+// inside one lock hold: an edit otherwise pays three acquisitions and two full
+// scans of the same snapshot. boundariesOnly checks just the two end lines,
+// which is enough for a deletion — the interior is removed, not rewritten.
+func resolveAnchoredRange(filePath string, info os.FileInfo, lines []string, from, to string, boundariesOnly bool) (anchorRange, bool) {
 	anchorsMu.Lock()
 	defer anchorsMu.Unlock()
 	snap, ok := anchorSnapshots[fileViewKey(filePath)]
 	if !ok || !snap.current(info) {
-		return 0, false
+		return anchorRange{}, false
 	}
-	for line, entry := range snap.lines {
-		if entry.anchor == anchor {
-			return line, true
-		}
-	}
-	return 0, false
-}
 
-// servedChecksumOf reports the fingerprint of the row the model was shown for
-// this anchor. A missing entry means the model never saw that line.
-func servedChecksumOf(filePath, anchor string) (uint64, bool) {
-	anchorsMu.Lock()
-	defer anchorsMu.Unlock()
-	snap, ok := anchorSnapshots[fileViewKey(filePath)]
-	if !ok || snap.served == nil {
-		return 0, false
-	}
-	checksum, ok := snap.served[anchor]
-	return checksum, ok
-}
-
-// recordAnchorEdit moves the snapshot onto the file as it is after an edit: the
-// replaced range loses its anchors, the lines after it shift by delta, and the
-// new lines are minted and served. Serving the new rows is what lets a
-// follow-up anchored edit land without a second Read — the edit result prints
-// the same anchors.
-func recordAnchorEdit(filePath string, info os.FileInfo, start, end int, replacement []string, replacementTexts []string) []string {
-	anchorsMu.Lock()
-	defer anchorsMu.Unlock()
-	snap, ok := anchorSnapshots[fileViewKey(filePath)]
+	start, ok := snap.byAnchor[from]
 	if !ok {
-		snap = &anchorSnapshot{}
-		anchorSnapshots[fileViewKey(filePath)] = snap
+		return anchorRange{missing: from}, true
+	}
+	end, ok := snap.byAnchor[to]
+	if !ok {
+		return anchorRange{missing: to}, true
+	}
+	resolved := anchorRange{start: start, end: end}
+	if start > end {
+		resolved.start, resolved.end = end, start
+		resolved.reversed = true
+	}
+	if resolved.end > len(lines) {
+		return anchorRange{missing: to}, true
 	}
 
-	removed := end - start + 1
-	delta := len(replacement) - removed
-	moved := make(map[int]anchorEntry, len(snap.lines))
-	for line, entry := range snap.lines {
-		switch {
-		case line < start:
-			moved[line] = entry
-		case line > end:
-			moved[line+delta] = entry
-		}
-	}
-	if snap.lines == nil {
-		snap.lines = map[int]anchorEntry{}
-	}
-	snap.lines = moved
-	snap.stamp = fileStamp{modTime: info.ModTime(), size: info.Size()}
-
-	live := make(map[string]struct{}, len(moved))
-	for _, entry := range moved {
-		live[entry.anchor] = struct{}{}
-	}
-	for anchor := range snap.served {
-		if _, ok := live[anchor]; !ok {
-			delete(snap.served, anchor)
-		}
-	}
-
-	for i, anchor := range replacement {
-		checksum := lineChecksum(replacementTexts[i])
-		snap.lines[start+i] = anchorEntry{anchor: anchor, checksum: checksum}
-		if snap.served == nil {
-			snap.served = map[string]uint64{}
-		}
-		snap.served[anchor] = checksum
-	}
-	return replacement
-}
-
-// verifyServedRange reports the lines in [start,end] that were never shown to
-// the model or that changed after they were shown, and whether the snapshot
-// still describes the file at all. A deletion is checked at its two boundary
-// lines only: the interior costs a full scan to validate and is being removed
-// anyway, so trusting it is the cheap, safe choice — the boundaries are what
-// an off-by-one range would get wrong.
-func verifyServedRange(filePath string, info os.FileInfo, lines []string, start, end int, boundariesOnly bool) (stale []int, current bool) {
-	anchorsMu.Lock()
-	defer anchorsMu.Unlock()
-	snap, ok := anchorSnapshots[fileViewKey(filePath)]
-	if !ok || !snap.current(info) {
-		return nil, false
-	}
-	for line := start; line <= end; line++ {
-		if boundariesOnly && line != start && line != end {
+	for line := resolved.start; line <= resolved.end; line++ {
+		if boundariesOnly && line != resolved.start && line != resolved.end {
 			continue
 		}
 		entry, ok := snap.lines[line]
 		if !ok {
-			stale = append(stale, line)
+			resolved.stale = append(resolved.stale, line)
 			continue
 		}
 		served, ok := snap.served[entry.anchor]
 		if !ok || served != lineChecksum(lines[line-1]) {
-			stale = append(stale, line)
+			resolved.stale = append(resolved.stale, line)
 		}
 	}
-	return stale, true
+	return resolved, true
 }
 
 // serveRange mints anchors for any line in [start,end] that has none and marks
@@ -223,9 +183,6 @@ func serveRange(filePath string, info os.FileInfo, lines []string, start, end in
 	anchorsMu.Lock()
 	defer anchorsMu.Unlock()
 	snap := snapshotFor(filePath, info)
-	if snap.lines == nil {
-		snap.lines = map[int]anchorEntry{}
-	}
 	if snap.served == nil {
 		snap.served = map[string]uint64{}
 	}
@@ -235,12 +192,73 @@ func serveRange(filePath string, info os.FileInfo, lines []string, start, end in
 		entry, ok := snap.lines[line]
 		if !ok || entry.checksum != checksum {
 			entry = anchorEntry{anchor: mintAnchor(), checksum: checksum}
-			snap.lines[line] = entry
+			snap.set(line, entry)
 		}
 		snap.served[entry.anchor] = checksum
 		out = append(out, entry.anchor)
 	}
 	return out
+}
+
+// recordAnchorEdit moves the snapshot onto the file as it is after an edit: the
+// replaced range loses its anchors, the lines after it shift by delta, and the
+// new lines are minted and served. Serving the new rows is what lets a
+// follow-up anchored edit land without a second Read — the edit result prints
+// the same anchors.
+func recordAnchorEdit(filePath string, info os.FileInfo, start, end int, replacement []string, replacementTexts []string) {
+	anchorsMu.Lock()
+	defer anchorsMu.Unlock()
+	snap, ok := anchorSnapshots[fileViewKey(filePath)]
+	if !ok {
+		snap = &anchorSnapshot{}
+		anchorSnapshots[fileViewKey(filePath)] = snap
+	}
+
+	removed := end - start + 1
+	delta := len(replacement) - removed
+	if delta == 0 {
+		// Same-size replacement: nothing shifts, so the surrounding anchors are
+		// already correct and only the range is rewritten. This is the common
+		// case (edit one line, write one line) and it stays O(range) instead of
+		// rebuilding both maps for the whole file on every edit.
+		for line := start; line <= end; line++ {
+			if entry, ok := snap.lines[line]; ok {
+				delete(snap.byAnchor, entry.anchor)
+				delete(snap.lines, line)
+				delete(snap.served, entry.anchor)
+			}
+		}
+	} else {
+		moved := make(map[int]anchorEntry, len(snap.lines))
+		byAnchor := make(map[string]int, len(snap.lines)+len(replacement))
+		for line, entry := range snap.lines {
+			switch {
+			case line < start:
+				moved[line] = entry
+				byAnchor[entry.anchor] = line
+			case line > end:
+				moved[line+delta] = entry
+				byAnchor[entry.anchor] = line + delta
+			}
+		}
+		snap.lines = moved
+		snap.byAnchor = byAnchor
+		// Anchors that left the file stop being served; the rest keep their rows.
+		for anchor := range snap.served {
+			if _, ok := byAnchor[anchor]; !ok {
+				delete(snap.served, anchor)
+			}
+		}
+	}
+	if snap.served == nil {
+		snap.served = map[string]uint64{}
+	}
+	for i, anchor := range replacement {
+		checksum := lineChecksum(replacementTexts[i])
+		snap.set(start+i, anchorEntry{anchor: anchor, checksum: checksum})
+		snap.served[anchor] = checksum
+	}
+	snap.stamp = fileStamp{modTime: info.ModTime(), size: info.Size()}
 }
 
 // changedLineRange locates the range of lines an edit rewrote, comparing the

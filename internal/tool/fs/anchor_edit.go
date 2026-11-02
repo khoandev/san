@@ -3,7 +3,6 @@ package fs
 import (
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -40,16 +39,6 @@ type anchoredEditResult struct {
 	added    int // lines written in place of the range
 	warnings []string
 }
-
-var (
-	// numberedAnchorRe matches one of our own Read rows, whose anchor follows
-	// the line number: "  12 qwert│text".
-	numberedAnchorRe = regexp.MustCompile(`^\s*\d+\s+([A-Za-z]{5,6})│`)
-	// rowAnchorRe matches a bare or diff-marked anchor row: "qwert│text".
-	rowAnchorRe = regexp.MustCompile(`^([+-]?)([A-Za-z]{5,6})│`)
-	// parenLineRe matches an anchor annotated with the line it came from.
-	parenLineRe = regexp.MustCompile(`^([A-Za-z]{5,6})\s*\(\s*lines?\s+\d+(\s*[-–—]\s*\d+)?\s*\)$`)
-)
 
 // parseAnchorEdit validates the anchored payload. Shape errors are reported
 // before any file is touched, with the field name that is wrong.
@@ -126,30 +115,39 @@ func payloadLines(raw any) ([]string, error) {
 // Read row pasted back, a diff line's "+" or "-" prefix kept, the anchor
 // wrapped in quotes, an annotated "(line 12)" left on, or uppercase letters.
 // Each repair is echoed as a warning so the model learns the expected shape.
+//
+// The scan is hand-rolled rather than regexp-based: this runs on every anchored
+// edit, twice per anchor (preview and execution), and three regexp matches per
+// anchor dominated the edit's CPU profile.
 func normalizeAnchorRef(raw, field string) (anchor string, warning string, err error) {
 	ref := strings.TrimSpace(raw)
 	if len(ref) >= 2 && (ref[0] == '"' || ref[0] == '\'') && ref[len(ref)-1] == ref[0] {
 		ref = strings.TrimSpace(ref[1 : len(ref)-1])
 	}
 
-	switch {
-	case rowAnchorRe.MatchString(ref):
-		match := rowAnchorRe.FindStringSubmatch(ref)
-		ref = match[2]
-		switch match[1] {
-		case "+":
-			warning = fmt.Sprintf("[W_BAD_REF] stripped the diff \"+\" marker from %s", field)
-		case "-":
-			warning = fmt.Sprintf("[W_BAD_REF] stripped the leading \"-\" marker from %s", field)
+	if cut := strings.Index(ref, toolresult.AnchorSep); cut >= 0 {
+		row := strings.TrimSpace(ref[:cut])
+		switch {
+		case strings.HasPrefix(row, "+"), strings.HasPrefix(row, "-"):
+			marker := row[:1]
+			ref = strings.TrimSpace(row[1:])
+			if marker == "+" {
+				warning = fmt.Sprintf("[W_BAD_REF] stripped the diff \"+\" marker from %s", field)
+			} else {
+				warning = fmt.Sprintf("[W_BAD_REF] stripped the leading \"-\" marker from %s", field)
+			}
+		case strings.ContainsAny(row, " \t"):
+			ref = row[strings.LastIndexAny(row, " \t")+1:]
+			warning = fmt.Sprintf("[W_BAD_REF] stripped the line number and content from %s — pass the anchor alone", field)
 		default:
+			ref = row
 			warning = fmt.Sprintf("[W_BAD_REF] stripped the anchor row's content from %s — pass the anchor alone", field)
 		}
-	case numberedAnchorRe.MatchString(ref):
-		ref = numberedAnchorRe.FindStringSubmatch(ref)[1]
-		warning = fmt.Sprintf("[W_BAD_REF] stripped the line number and content from %s — pass the anchor alone", field)
-	case parenLineRe.MatchString(ref):
-		ref = parenLineRe.FindStringSubmatch(ref)[1]
-		warning = fmt.Sprintf("[W_BAD_REF] stripped the \"(line N)\" suffix from %s", field)
+	} else if cut := strings.IndexByte(ref, '('); cut > 0 {
+		if suffix := strings.TrimSpace(ref[cut:]); strings.HasPrefix(suffix, "(line") {
+			ref = strings.TrimSpace(ref[:cut])
+			warning = fmt.Sprintf("[W_BAD_REF] stripped the \"(line N)\" suffix from %s", field)
+		}
 	}
 
 	lower := strings.ToLower(ref)
@@ -194,20 +192,18 @@ func applyAnchorEdit(filePath string, info os.FileInfo, content string, edit anc
 	lines := splitFileLines(content)
 	var warnings []string
 
-	start, ok := anchorLineOf(filePath, info, edit.removeFrom)
-	if !ok {
+	// One lock hold resolves both anchors and validates the range: an edit is
+	// on the hot path of every change the agent makes.
+	resolved, current := resolveAnchoredRange(filePath, info, lines, edit.removeFrom, edit.removeTo, len(edit.lines) == 0)
+	if !current {
 		return anchoredEditResult{}, staleAnchorError(filePath, edit.removeFrom)
 	}
-	end, ok := anchorLineOf(filePath, info, edit.removeTo)
-	if !ok {
-		return anchoredEditResult{}, staleAnchorError(filePath, edit.removeTo)
+	if resolved.missing != "" {
+		return anchoredEditResult{}, staleAnchorError(filePath, resolved.missing)
 	}
-	if start > end {
-		start, end = end, start
+	start, end := resolved.start, resolved.end
+	if resolved.reversed {
 		warnings = append(warnings, fmt.Sprintf("[H_RANGE_REVERSED] remove_from came after remove_to; lines %d-%d were replaced in document order", start, end))
-	}
-	if end > len(lines) {
-		return anchoredEditResult{}, staleAnchorError(filePath, edit.removeTo)
 	}
 
 	unchanged := len(edit.lines) == end-start+1
@@ -234,12 +230,8 @@ func applyAnchorEdit(filePath string, info os.FileInfo, content string, edit anc
 		}
 	}
 
-	stale, current := verifyServedRange(filePath, info, lines, start, end, len(edit.lines) == 0)
-	if !current {
-		return anchoredEditResult{}, staleAnchorError(filePath, edit.removeFrom)
-	}
-	if len(stale) > 0 {
-		return anchoredEditResult{}, rangeStaleError(filePath, info, lines, start, end, stale)
+	if len(resolved.stale) > 0 {
+		return anchoredEditResult{}, rangeStaleError(filePath, info, lines, start, end, resolved.stale)
 	}
 
 	out := make([]string, 0, len(lines)-(end-start+1)+len(edit.lines))

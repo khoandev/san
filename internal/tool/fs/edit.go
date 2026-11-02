@@ -64,9 +64,11 @@ type editPlan struct {
 	warnings   []string
 }
 
-func (t *EditTool) Name() string        { return "Edit" }
-func (t *EditTool) Description() string { return "Edit file contents by line anchor or exact string replacement" }
-func (t *EditTool) Icon() string        { return IconEdit }
+func (t *EditTool) Name() string { return "Edit" }
+func (t *EditTool) Description() string {
+	return "Edit file contents by line anchor or exact string replacement"
+}
+func (t *EditTool) Icon() string { return IconEdit }
 
 func (t *EditTool) RequiresPermission() bool { return true }
 
@@ -259,20 +261,25 @@ func recordEditAnchors(filePath, oldContent, newContent string) []anchorRow {
 		forgetAnchors(filePath)
 		return nil
 	}
-	first, last, count, ok := changedLineRange(oldContent, newContent)
+	// Anchors number the lines Read shows, so both sides are compared in the
+	// normalized form Read scans: a CRLF file's rows carry no trailing CR.
+	_, oldBody, _, oldErr := normalizeForEdit(oldContent)
+	_, newBody, _, newErr := normalizeForEdit(newContent)
+	if oldErr != nil || newErr != nil {
+		forgetAnchors(filePath)
+		return nil
+	}
+	first, last, count, ok := changedLineRange(oldBody, newBody)
 	if !ok {
 		return nil
 	}
-	lines := splitFileLines(newContent)
+	lines := splitFileLines(newBody)
 	if first < 1 || first-1+count > len(lines) {
 		forgetAnchors(filePath)
 		return nil
 	}
 	texts := lines[first-1 : first-1+count]
-	anchors := make([]string, count)
-	for i := range anchors {
-		anchors[i] = mintAnchor()
-	}
+	anchors := mintAnchors(count)
 	recordAnchorEdit(filePath, info, first, last, anchors, texts)
 
 	rows := make([]anchorRow, count)
