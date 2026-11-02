@@ -82,6 +82,9 @@ func (m *model) handleSubscriptionUsageTick(msg subscriptionUsageTick) tea.Cmd {
 }
 
 func (m model) subscriptionUsageLabel() string {
+	if m.usesCopilot() {
+		return m.copilotQuotaLabel()
+	}
 	if !llm.ChatGPTSubscription(m.env.CurrentModel) || !m.subscriptionUsage.active {
 		return ""
 	}
@@ -124,11 +127,24 @@ func formatSubscriptionUsage(usage auth.CodexUsage, now time.Time) string {
 }
 
 func compactUsageDuration(d time.Duration) string {
-	if d >= 24*time.Hour && d%(24*time.Hour) == 0 {
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	if d >= 24*time.Hour {
+		days := d / (24 * time.Hour)
+		hours := d % (24 * time.Hour) / time.Hour
+		if hours == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd %dh", days, hours)
 	}
 	if d >= time.Hour {
-		return fmt.Sprintf("%dh", int(d.Hours()))
+		hours := d / time.Hour
+		minutes := d % time.Hour / time.Minute
+		if minutes == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
-	return fmt.Sprintf("%dm", max(1, int(d.Minutes())))
+	if d >= time.Minute {
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+	return "<1m"
 }
