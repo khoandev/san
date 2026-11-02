@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/genai-io/san/internal/confdir"
 	"github.com/genai-io/san/internal/setting"
 )
 
@@ -407,5 +408,51 @@ func TestLoadAllSkillsFollowsSymlinks(t *testing.T) {
 	}
 	if _, ok := skills["jenkins"]; !ok {
 		t.Fatal("the symlinked jenkins skill was not loaded")
+	}
+}
+
+// ~/.agents/skills/ is a user-level source like ~/.san/skills/: it wins over
+// the Claude-compat user directory, loses to ~/.san/skills/ on a name
+// collision (scanned first), and loses to project scopes.
+func TestLoadAgentsUserSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeSkill := func(root, name, description string) {
+		t.Helper()
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: " + description + "\n---\n\nBody.\n"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	agentsDir := filepath.Join(home, ".agents", "skills")
+	writeSkill(agentsDir, "agents-only", "from agents")
+	writeSkill(agentsDir, "over-claude", "from agents")
+	writeSkill(agentsDir, "under-san", "from agents")
+	writeSkill(filepath.Join(home, ".claude", "skills"), "over-claude", "from claude")
+	writeSkill(filepath.Join(home, confdir.Name, "skills"), "under-san", "from san")
+
+	skills, err := (&loader{cwd: t.TempDir()}).loadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	agentsOnly, ok := skills["agents-only"]
+	if !ok {
+		t.Fatal("agents-only skill from ~/.agents/skills was not loaded")
+	}
+	if agentsOnly.Scope != ScopeUser {
+		t.Errorf("Scope = %s, want %s", agentsOnly.Scope, ScopeUser)
+	}
+	if got := skills["over-claude"].Description; got != "from agents" {
+		t.Errorf("over-claude description = %q, want %q", got, "from agents")
+	}
+	if got := skills["under-san"].Description; got != "from san" {
+		t.Errorf("under-san description = %q, want %q", got, "from san")
 	}
 }

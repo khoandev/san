@@ -64,10 +64,13 @@ type SkillWriteObserver func(action, name, note string)
 // SkillManager is the L1-only skill write surface. Skills live directly in
 // san's existing user/project scopes — ~/.san/skills/<name>/ and
 // ./.san/skills/<name>/ — distinguished by the origin frontmatter field, not a
-// subdirectory.
+// subdirectory. ~/.agents/skills/ is a shared user-level directory other
+// agent tools read; it is listed like any user skill but san writes only to
+// its own dirs.
 type SkillManager struct {
 	userDir    string
 	projectDir string
+	agentsDir  string // ~/.agents/skills/ (shared user-level dir, may be empty)
 	perms      SkillPermissions
 	onWrite    SkillWriteObserver
 
@@ -77,16 +80,19 @@ type SkillManager struct {
 // NewSkillManager returns the manager for cwd with the given action
 // permissions. The skill dirs are created lazily on first create. When
 // the user home directory is unavailable (sandboxed exec, unset HOME),
-// userDir is left empty and any user-scope write fails loudly via
-// dirFor — better than silently aliasing user-scope onto cwd/.san/skills.
+// userDir and agentsDir are left empty and any user-scope write fails loudly
+// via dirFor — better than silently aliasing user-scope onto cwd/.san/skills.
 func NewSkillManager(cwd string, perms SkillPermissions) *SkillManager {
 	userDir := ""
+	agentsDir := ""
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		userDir = filepath.Join(confdir.Dir(home), "skills")
+		agentsDir = filepath.Join(home, ".agents", "skills")
 	}
 	return &SkillManager{
 		userDir:    userDir,
 		projectDir: filepath.Join(confdir.Dir(cwd), "skills"),
+		agentsDir:  agentsDir,
 		perms:      perms,
 	}
 }
@@ -119,8 +125,9 @@ type SkillInfo struct {
 // User-created skills are read-only to the reviewer at every setting.
 func (i SkillInfo) Editable() bool { return i.Origin == agentOrigin }
 
-// Inventory lists existing skills across both scopes (project entries shadow
-// user entries of the same name, matching loader precedence).
+// Inventory lists existing skills across both scopes plus the shared
+// ~/.agents/skills/ user directory (project entries shadow user entries,
+// matching loader precedence).
 //
 // Why the disk scan instead of consulting skill.Registry: the registry is
 // initialized once at startup and only refreshed on
@@ -135,7 +142,11 @@ func (m *SkillManager) Inventory() []SkillInfo {
 	for _, scope := range []struct {
 		dir   string
 		level string
-	}{{m.projectDir, "project"}, {m.userDir, "user"}} {
+	}{
+		{m.projectDir, "project"},
+		{m.userDir, "user"},
+		{m.agentsDir, "user"},
+	} {
 		if scope.dir == "" {
 			continue
 		}
@@ -188,7 +199,8 @@ func (m *SkillManager) dirFor(level string) (string, error) {
 }
 
 // resolve finds an existing skill's SKILL.md by name, project scope first
-// (higher priority), then user. Returns the path or an error if absent.
+// (higher priority), then user, then the shared ~/.agents/skills/ directory.
+// Returns the path or an error if absent.
 func (m *SkillManager) resolve(name string) (string, error) {
 	// Validate before touching the filesystem: every action except create
 	// reaches the disk through here, and only create validated the name
@@ -199,7 +211,7 @@ func (m *SkillManager) resolve(name string) (string, error) {
 	if !skillNameRe.MatchString(name) {
 		return "", fmt.Errorf("invalid skill name %q", name)
 	}
-	for _, dir := range []string{m.projectDir, m.userDir} {
+	for _, dir := range []string{m.projectDir, m.userDir, m.agentsDir} {
 		if dir == "" {
 			continue
 		}

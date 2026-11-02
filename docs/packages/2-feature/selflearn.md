@@ -131,7 +131,10 @@ func (m *SkillManager) Delete(name, note string) (string, error)
   and wall-clock budget.
 - `SkillManager` reads and writes San skill directories directly so the review
   sees its own mid-session writes without relying on the startup skill
-  registry cache.
+  registry cache. `Inventory` also lists `~/.agents/skills/` (the shared
+  user-level directory other agent tools read) so the reviewer does not
+  re-create a skill that already exists there; san writes only to its own
+  directories.
 - Write observers are used by `internal/app` to update the live self-learning
   indicator and final recap.
 

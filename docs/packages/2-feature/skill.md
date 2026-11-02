@@ -16,10 +16,12 @@ A skill is a markdown file (with YAML frontmatter) that the model can be
 made aware of (`active`), made invocable via slash command (`enabled`), or
 hidden (`disabled`). This package:
 
-1. Discovers skills across six scopes
-   (`~/.claude/skills/`, `~/.san/plugins/*/skills/`, `~/.san/skills/`,
-   `.claude/skills/`, `.san/plugins/*/skills/`, `.san/skills/`) with
-   project overriding user overriding Claude-compat.
+1. Discovers skills in user scope (`~/.san/skills/`, `~/.agents/skills/`,
+   `~/.san/plugins/*/skills/`) and project scope (`.san/skills/`,
+   `.san/plugins/*/skills/`), plus the Claude-compat directories
+   (`~/.claude/skills/`, `.claude/skills/`), with project overriding user
+   overriding Claude-compat. `~/.agents/skills/` is the shared user-level
+   directory other agent tools read; `~/.san/skills/` wins a name collision.
 2. Persists per-skill state in user / project state stores.
 3. Renders the active-skills block consumed by the `skills-directory`
    reminder provider in `internal/app`.
@@ -85,7 +87,7 @@ func ResetDefaultRegistry()           // test-only
   - `userStore`, `projectStore` — JSON-backed persistence of per-skill
     `SkillState`
   - `cwd` — for project-scope resolution
-- `loader.go` walks the six scopes in priority order, parsing
+- `loader.go` walks the scopes in priority order, parsing
   `SKILL.md` frontmatter and bundled resource directories
   (`scripts/` / `references/` / `assets/`).
 - State (`disable` → `enable` → `active` → `disable`) cycles via

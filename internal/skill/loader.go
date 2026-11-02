@@ -60,16 +60,24 @@ func (l *loader) getSearchPaths() []searchPath {
 		scope: ScopeUser,
 	})
 
-	// 4. .claude/skills/ (Claude project compat)
+	// 4. ~/.agents/skills/ (shared user-level skills directory used by other
+	// agent tools; same scope as ~/.san/skills, which wins a name collision
+	// because it is scanned first)
+	paths = append(paths, searchPath{
+		path:  filepath.Join(homeDir, ".agents", "skills"),
+		scope: ScopeUser,
+	})
+
+	// 5. .claude/skills/ (Claude project compat)
 	paths = append(paths, searchPath{
 		path:  filepath.Join(l.cwd, ".claude", "skills"),
 		scope: ScopeClaudeProject,
 	})
 
-	// 5. Project-scope plugin skills
+	// 6. Project-scope plugin skills
 	paths = append(paths, projectPlugins...)
 
-	// 6. .san/skills/ (Project level - highest priority)
+	// 7. .san/skills/ (Project level - highest priority)
 	paths = append(paths, searchPath{
 		path:  filepath.Join(confdir.Dir(l.cwd), "skills"),
 		scope: ScopeProject,

@@ -13,10 +13,12 @@ and [`concepts/extension-model.md`](../concepts/extension-model.md).
 |---|---|---|
 | Project | `<project>/.san/skills/<name>/SKILL.md` | Skill tied to this project (lives in the repo). |
 | User | `~/.san/skills/<name>/SKILL.md` | Personal skill shared across projects. |
+| Cross-tool user | `~/.agents/skills/<name>/SKILL.md` | Personal skill shared across projects and the other agent tools that read this directory. |
 | Claude-compat | `<project>/.claude/skills/<name>/SKILL.md` or `~/.claude/skills/<name>/SKILL.md` | If you also use Claude Code. |
 
-Project scope wins over user; user wins over Claude-compat. The directory
-name is the skill name.
+Project scope wins over user; `~/.san/skills/` wins over
+`~/.agents/skills/` when both define the same name; user wins over
+Claude-compat. The directory name is the skill name.
 
 ## Minimal Example
 

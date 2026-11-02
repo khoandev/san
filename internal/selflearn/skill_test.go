@@ -374,3 +374,62 @@ func mustJSON(v map[string]any) string {
 	}
 	return string(b)
 }
+
+// ~/.agents/skills/ is a user-level source: the reviewer sees it (so it does
+// not re-create an existing skill) but never writes there.
+func TestInventoryIncludesAgentsSkillsReadOnly(t *testing.T) {
+	mgr, _ := newTestSkillManager(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(home, ".agents", "skills")
+	for _, name := range []string{"agents-only", "duplicate-name"} {
+		dir := filepath.Join(agentsDir, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\ndescription: from agents\n---\n\nBody.\n"
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := mgr.Create("san-only", "from san user", "Body.", "user", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	inv := map[string]SkillInfo{}
+	for _, info := range mgr.Inventory() {
+		inv[info.Name] = info
+	}
+
+	agentsOnly, ok := inv["agents-only"]
+	if !ok {
+		t.Fatal("agents-only skill absent from inventory")
+	}
+	if agentsOnly.Level != "user" {
+		t.Errorf("Level = %q, want user", agentsOnly.Level)
+	}
+	if agentsOnly.Editable() {
+		t.Error("agents-user skill must be read-only")
+	}
+	if got := inv["san-only"]; !got.Editable() || got.Level != "user" {
+		t.Errorf("san-only = %+v, want an editable user-scope entry", got)
+	}
+
+	// Creating a skill that already exists under ~/.agents/skills/ is a
+	// duplicate: san must not shadow the shared copy.
+	if _, err := mgr.Create("duplicate-name", "desc", "Body.", "user", ""); err == nil {
+		t.Fatal("creating a skill that exists in ~/.agents/skills should be rejected")
+	}
+	if _, err := mgr.Edit("agents-only", "New body.", ""); err == nil {
+		t.Fatal("editing an agents-user skill should be rejected")
+	}
+	if _, err := mgr.Delete("agents-only", ""); err == nil {
+		t.Fatal("deleting an agents-user skill should be rejected")
+	}
+	if body, err := mgr.Read("agents-only"); err != nil || !strings.Contains(body, "Body.") {
+		t.Fatalf("Read(agents-only) = %q, %v; want the agents copy", body, err)
+	}
+}
