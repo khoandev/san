@@ -150,6 +150,12 @@ func buildAgentWithOutbox(p BuildParams, outboxBuf int) (core.Agent, *Permission
 		cwd := p.CWD
 		cwdFunc = func() string { return cwd }
 	}
+	// The two pieces of wire identity a vendor may need: which conversation
+	// this is, and where it is being answered. Both are no-ops for every
+	// provider that does not put them on the wire, and both are read per turn,
+	// so a directory change lands on the next inference.
+	client.SetSessionID(p.SessionID)
+	client.SetWorkingDir(cwdFunc)
 
 	schemas := p.Schemas()
 	var adaptOpts []tool.AdaptOption
@@ -207,6 +213,7 @@ func buildAgentWithOutbox(p BuildParams, outboxBuf int) (core.Agent, *Permission
 		Client:          client.TurnClient,
 		PrepareMessages: client.RequestMessages,
 		CallOptions:     client.CallOptions,
+		ShapeInference:  client.ShapeInference,
 		ContextBudget:   client.ContextBudget,
 		System:          sys,
 		Tools:           tools,

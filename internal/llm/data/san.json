@@ -38,5 +38,75 @@
     "default_input": ["text", "image"],
     "default_limit": {"context": 131072, "output": 16384}
   },
+  "opencode": {
+    "default_effort": "medium",
+    "default_input": ["text"],
+    "models": {
+      "big-pickle": {
+        "name": "Big Pickle",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [{"type": "effort", "values": ["high", "max"]}],
+        "always_reasons": true,
+        "limit": {"context": 200000, "output": 32000}
+      },
+      "beam-free": {
+        "name": "Beam Free",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}],
+        "limit": {"context": 1048576, "output": 131072}
+      },
+      "flint-40b-free": {
+        "name": "Flint 40B Free",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [{"type": "effort", "values": ["low", "medium", "high", "xhigh", "max"]}],
+        "limit": {"context": 262144, "output": 65536}
+      },
+      "mimo-v2.6-flash-free": {
+        "name": "MiMo-V2.6-Flash Free",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [{"type": "toggle"}],
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "limit": {"context": 200000, "output": 32000}
+      },
+      "nemotron-3.5-super-vl-free": {
+        "name": "Nemotron 3.5 Super VL Free",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [{"type": "effort", "values": ["none", "low", "medium", "high", "xhigh"]}],
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "limit": {"context": 1048576, "output": 131072}
+      },
+      "nemotron-3.5-lightning-free": {
+        "name": "Nemotron 3.5 Lightning Free",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [{"type": "toggle"}],
+        "limit": {"context": 262144, "output": 262144}
+      },
+      "deepseek-v4.1-flash-free": {
+        "name": "DeepSeek V4.1 Flash Free",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {"type": "toggle"},
+          {"type": "effort", "values": ["low", "high", "max"]}
+        ],
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "limit": {"context": 200000, "output": 32000}
+      },
+      "glm-5.3-flash-free": {
+        "name": "GLM-5.3-Flash Free",
+        "tool_call": true,
+        "reasoning": true,
+        "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}],
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "limit": {"context": 200000, "output": 32000}
+      }
+    }
+  },
   "custom": {"default_input": ["text", "image"]}
 }

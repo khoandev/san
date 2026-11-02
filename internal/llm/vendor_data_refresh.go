@@ -58,6 +58,9 @@ var modelsDevSources = map[string]modelsDevSource{
 	"mimo":             {provider: "xiaomi"},
 	"volcengine":       {provider: "volcengine"},
 	"agnesai":          {provider: "agnes"},
+	// Zen's free lineup is hand-kept in san.json; models.dev lists the vendor's
+	// paid models too, and the provider filters to the free ones at both ends.
+	"opencode": {provider: "opencode"},
 }
 
 // modelDataCachePath is where the daily copy lives.

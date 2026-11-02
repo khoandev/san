@@ -808,5 +808,13 @@ func (m *model) ReconfigureAgentTool() {
 func (m *model) buildLLMClient() *llm.Client {
 	c := llm.NewClient(m.env.LLMProvider, m.env.GetModelID(), kit.GetMaxOutput(m.services.LLM.Store(), m.env.CurrentModel, setting.DefaultMaxTokens))
 	c.SetThinkingEffort(m.env.EffectiveThinkingEffort())
+	// Which conversation this client answers for, and where. The session is the
+	// writer's, so the identity a vendor sees survives a resume; it is absent
+	// before the first session is opened, and the vendor then falls back to
+	// this installation.
+	if m.agentSession != nil {
+		c.SetSessionID(m.agentSession.ID())
+	}
+	c.SetWorkingDir(func() string { return m.env.CWD })
 	return c
 }

@@ -148,6 +148,10 @@ type Config struct {
 	// asked for fresh each inference, so a change mid-session lands on the next
 	// call. Nil leaves the model's defaults.
 	CallOptions func() []ai.Option
+	// ShapeInference settles the wire shape of one inference — the system
+	// prompt and the tool roster — for the vendor that reads them before it
+	// reads the credential. Nil sends both as the loop built them.
+	ShapeInference func(system string, tools []ToolSchema) (string, []ToolSchema)
 	// ContextBudget is the prompt size at which auto-compaction fires: the
 	// window less the reply's room. Nil or zero turns it off. Not read off the
 	// client: the window is the model's unless a setting overrides it, and the
@@ -237,6 +241,7 @@ func NewAgent(cfg Config) Agent {
 		client:          cfg.Client,
 		prepareMessages: cfg.PrepareMessages,
 		callOptions:     cfg.CallOptions,
+		shapeInference:  cfg.ShapeInference,
 		contextBudget:   cfg.ContextBudget,
 		inbox:           make(chan Inbound, cfg.InboxBuf),
 		wake:            make(chan struct{}, 1),

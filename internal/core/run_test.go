@@ -774,3 +774,59 @@ func TestAFailedShorteningStillClosesTheSpan(t *testing.T) {
 		t.Error("the span opened and was never closed")
 	}
 }
+
+// A vendor whose free tier is gated on the request's own shape gets it settled
+// before the call: the loop applies the shaper after rendering the prompt and
+// after collecting the roster, so what the client sends is what the gate reads.
+func TestShapeInferenceSettlesTheTurnBeforeTheCall(t *testing.T) {
+	model := aitest.Always(aitest.Replies(ai.Response{
+		Content:    ai.TextContent("ok"),
+		StopReason: ai.StopEndTurn,
+	}))
+
+	var (
+		shaped  int
+		seenSys string
+	)
+	ag := NewAgent(Config{
+		ID:     "test",
+		Client: testClient(model),
+		System: NewSystem(),
+		Tools:  NewTools(),
+		ShapeInference: func(system string, tools []ai.Schema) (string, []ai.Schema) {
+			shaped++
+			seenSys = system
+			return system + "<env>gate</env>", append(tools, ai.Schema{Name: "gate"})
+		},
+	})
+	go func() {
+		for range ag.Outbox() {
+		}
+	}()
+
+	ag.Append(UserMessage("hi", nil))
+	if _, err := ag.ThinkAct(context.Background()); err != nil {
+		t.Fatalf("ThinkAct: %v", err)
+	}
+
+	if shaped != 1 {
+		t.Fatalf("the shaper ran %d times, want once per inference", shaped)
+	}
+	if seenSys != "" {
+		t.Errorf("the shaper was handed %q, want the rendered prompt it replaces", seenSys)
+	}
+	req := model.Last()
+	if req == nil {
+		t.Fatal("no request reached the client")
+	}
+	if !strings.Contains(req.System, "<env>gate</env>") {
+		t.Errorf("system on the wire = %q, want the shaped prompt", req.System)
+	}
+	found := false
+	for _, schema := range req.Tools {
+		found = found || schema.Name == "gate"
+	}
+	if !found {
+		t.Errorf("tools on the wire = %+v, want the shaped roster", req.Tools)
+	}
+}

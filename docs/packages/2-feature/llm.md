@@ -8,10 +8,11 @@ layer: feature
 Provider registry, model store, and active-connection handle for every LLM
 backend (Anthropic, OpenAI, GitHub Copilot, Google, Moonshot, Alibaba, MiniMax,
 Z.ai/GLM, DeepSeek, Ollama, SenseNova, Volcengine Ark, Xiaomi MiMo, Agnes-AI,
-plus a user-defined OpenAI-compatible endpoint). Reaching them is one adapter,
-the `vendor_*` files, over
+OpenCode Zen, plus a user-defined OpenAI-compatible endpoint). Reaching them is
+one adapter, the `vendor_*` files, over
 [`genai-io/sdk-go`](https://github.com/genai-io/sdk-go); adding a vendor is a
-row in `vendor_table.go`, not a package.
+row in `vendor_table.go`, not a package — unless the vendor gates on the
+request's shape, which is what `opencode.go` exists for.
 
 ## Purpose
 
@@ -82,6 +83,7 @@ modelcache.go  the cached listings, and the context window resolved from them
 cost.go        Money, the multi-currency total, and per-provider/auth pricing
 logging.go     CompletionOptions, as the log package reads it
 vendor*.go     every vendor, over genai-io/sdk-go
+opencode.go    the one vendor that gates on the request's shape: session token, headers
 data/          the model data built into the binary (see Model data)
 ```
 
@@ -117,6 +119,31 @@ Worth knowing beyond the names:
   SDK's drivers; what stays here is the seam — `Provider` on one side,
   `ai.Client` on the other — the table saying which San provider is which
   catalog vendor, and the model data. `vendor.go` names the file each subject lives in.
+- **One vendor gates on the shape of the request, not on the key.** OpenCode
+  Zen's free tier reads the `User-Agent`, an `x-opencode-client` header, a
+  `ses_`-prefixed session token and the working directory before it weighs the
+  credential, and answers a request that lacks them with the free tier's quota
+  error — which is why it looked like a spent allowance. `opencode.go` supplies
+  all of it: the token is derived from the conversation, so every turn of one
+  chat lands in the same cache, and the installation's own key covers traffic
+  outside a conversation. Its head is clocked rather than hashed because Zen
+  decodes it as a client timestamp, which is also why the rest of the token is
+  a digest of the conversation rather than a counter. Everything on the wire is
+  `x-opencode-*`, `User-Agent` and `Bearer public` when no key is set; the
+  vendor's paid models are filtered out of both the listing and `Client`, so
+  the picker cannot reach one.
+- **The gate names tools in lowercase; San's are capitalised.** `Bash`, `Edit`
+  and `Read` therefore never satisfy the check on their own, and the padded
+  `bash`/`edit`/`glob`/`grep`/`read` schemas ride along on every free-model
+  call — harmless in practice, since the pads carry no description or
+  parameters and a model asked to call one gets an SDK "unknown tool" result
+  rather than a failed turn. They must not be added to San's registry: they are
+  wire shape, not work.
+- **`ShapeInference` is the last thing the loop settles.** A `Client.ShapeInference`
+  is applied by `core` after the system prompt is rendered and the roster
+  collected, and before the per-turn `ai.Client` is built — so a shaper may
+  rewrite the prompt into what the client will send. `nil` means no shaper.
+  Only Zen needs one: it refuses a free-model turn with no `<env>` block.
 
 ## Lifecycle
 
@@ -209,7 +236,8 @@ internal/llm/errors_test.go   — what the agent loop is told about a failure.
 internal/llm/provider_test.go — the optional-extension defaults.
 internal/llm/store_test.go    — provider config persistence.
 internal/llm/cost_test.go     — pricing dispatch and the multi-currency total.
-internal/llm/vendor_test.go   — the vendor seam, against stub endpoints.
+internal/llm/vendor_test.go   — the vendor seam, against stub endpoints,
+                                including the free-tier gate headers and body.
 internal/llm/vendor_models_test.go — Codex catalog requests and live capabilities.
 internal/llm/vendor_credentials_test.go — fresh credential reads and environment bootstrap.
 internal/llm/vendor_signin_test.go — cross-process token rotation through the SDK transport.

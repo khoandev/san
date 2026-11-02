@@ -38,6 +38,12 @@ type Client struct {
 
 	mu             sync.RWMutex
 	thinkingEffort string
+	// sessionID names the conversation this client answers for, and cwd is
+	// where it is being answered. Both are for the vendors whose wire identity
+	// depends on them — one gateway gates its free tier on each — and are
+	// otherwise unused.
+	sessionID string
+	cwd       func() string
 
 	limits modelLimits
 }
@@ -124,15 +130,63 @@ func NewClient(p Provider, model string, maxTokens int) *Client {
 // TurnClient hands over the SDK client that answers one turn. Streaming is the
 // SDK's job; what this package owns is reaching the endpoint — credentials,
 // headers, which model — and choosing one. The messages are a parameter
-// because the headers can depend on them: see TurnHeaders.
+// because the headers can depend on them: see TurnHeaders. So is the session,
+// for the vendor whose gate reads the session token: see SessionHeaders.
 func (l *Client) TurnClient(msgs []core.Message) (*ai.Client, error) {
-	l.mu.RLock()
-	p, model := l.provider, l.model
-	l.mu.RUnlock()
+	p, model, sessionID := l.identity()
 	if p == nil {
 		return nil, errors.New("llm: no provider")
 	}
-	return p.Client(model, TurnHeaders(p, msgs))
+	return p.Client(model, mergeHeaders(TurnHeaders(p, msgs), SessionHeaders(p, model, sessionID)))
+}
+
+// identity is the provider, model and session this client currently answers
+// for, read under the lock like every other mutable field.
+func (l *Client) identity() (Provider, string, string) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.provider, l.model, l.sessionID
+}
+
+// SetSessionID names the conversation this client answers for. The value is
+// opaque to San: a vendor that puts it on the wire formats it itself.
+func (l *Client) SetSessionID(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sessionID = id
+}
+
+// SetWorkingDir says where this client's turns are answered, for the one
+// vendor that states the directory in the system prompt. Nil asks nothing.
+func (l *Client) SetWorkingDir(cwd func() string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cwd = cwd
+}
+
+// workingDir is the current directory, or empty when nothing supplies one — at
+// which point the provider asks the process itself.
+func (l *Client) workingDir() string {
+	l.mu.RLock()
+	cwd := l.cwd
+	l.mu.RUnlock()
+	if cwd == nil {
+		return ""
+	}
+	return cwd()
+}
+
+// ShapeInference settles the wire shape of one inference for a provider that
+// reads it — the system prompt and the tool roster — and returns them
+// unchanged for every provider that does not.
+//
+// It is a method rather than a call the loop makes because the provider, the
+// model and the session are the client's: a loop that shaped requests itself
+// would have to know which vendor asks.
+func (l *Client) ShapeInference(system string, tools []ToolSchema) (string, []ToolSchema) {
+	p, model, sessionID := l.identity()
+	ShapeRequest(p, model, sessionID, l.workingDir(), &system, &tools)
+	return system, tools
 }
 
 // CallOptions are the settings this client carries into every inference: the
@@ -263,12 +317,15 @@ func ContextBudget(contextWindow, maxOutput int) int {
 
 // completionOpts builds CompletionOptions from the Client's current configuration.
 func (l *Client) completionOpts(msgs []core.Message, tools []ToolSchema, sysPrompt string) CompletionOptions {
+	_, model, sessionID := l.identity()
 	return CompletionOptions{
-		Model:          l.model,
+		Model:          model,
 		Messages:       msgs,
 		MaxTokens:      l.effectiveMaxTokens(),
 		Tools:          tools,
 		SystemPrompt:   sysPrompt,
 		ThinkingEffort: l.ThinkingEffort(),
+		SessionID:      sessionID,
+		WorkingDir:     l.workingDir(),
 	}
 }

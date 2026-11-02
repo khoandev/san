@@ -60,6 +60,21 @@ See `docs/operations/development.md` for build / test / lint / format
 and the sandbox-friendly `GOCACHE` workaround. Update that file when
 commands change. Do not duplicate them here.
 
+## Manual Test Build
+
+To test the binary by hand, install it into `~/.config/bin/san` (already on
+`PATH`). Build first, then move the fresh binary into place; `mv -f` replaces
+the directory entry so macOS sees a new inode instead of a rewritten, stale
+code signature:
+
+```bash
+make build && mv -f bin/san ~/.config/bin/san
+san --version
+```
+
+Do not `cp` over an existing binary in place on macOS — it reuses the inode and
+AMFI may kill the process with "code signature invalid".
+
 ## Documentation Rules
 
 - Add or update docs in the same change as architecture or workflow changes.

@@ -277,13 +277,18 @@ func TestEmbeddedDataNamesRealVendors(t *testing.T) {
 			if vendorID == string(CustomProvider) {
 				continue
 			}
-			if _, ok := catalog.Find(vendorID); !ok {
-				t.Errorf("%s names %q, which the catalog does not know", name, vendorID)
+			if _, ok := findVendor(vendorID); !ok {
+				t.Errorf("%s names %q, which no vendor row serves", name, vendorID)
 			}
 		}
 	}
 	snapshot := embeddedLineups("data/models.dev.json")
 	for vendorID := range modelsDevSources {
+		if vendorID == opencodeVendorID {
+			// Zen's free lineup is hand-kept in san.json: the snapshot lists
+			// the vendor's paid models, which San does not offer.
+			continue
+		}
 		if len(snapshot[vendorID].Models) == 0 {
 			t.Errorf("the snapshot has no models for %s", vendorID)
 		}

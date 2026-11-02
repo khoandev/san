@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -399,9 +400,9 @@ func TestEveryRegisteredVendorResolves(t *testing.T) {
 		if e.vendorID == "" {
 			continue // the user-defined endpoint has no catalog row
 		}
-		vendor, ok := catalog.Find(e.vendorID)
-		if !ok {
-			t.Errorf("%s: no catalog vendor %q", providerName(e.meta), e.vendorID)
+		vendor, err := e.resolveVendor()
+		if err != nil {
+			t.Errorf("%s: %v", providerName(e.meta), err)
 			continue
 		}
 		if _, registered := driverFor(vendor.API); !registered {
@@ -538,9 +539,9 @@ func TestEveryModelInTheDataStatesItsWindow(t *testing.T) {
 		if e.vendorID == "" {
 			continue // the user-defined endpoint ships no models
 		}
-		vendor, ok := catalog.Find(e.vendorID)
-		if !ok {
-			t.Errorf("%s: no catalog vendor %q", providerName(e.meta), e.vendorID)
+		vendor, err := e.resolveVendor()
+		if err != nil {
+			t.Errorf("%s: %v", providerName(e.meta), err)
 			continue
 		}
 		for _, m := range newVendorModels(vendor).list() {
@@ -669,5 +670,133 @@ func TestCopilotResponsesOnlyModelOpensOnResponses(t *testing.T) {
 	}
 	if len(p.ThinkingEfforts("gpt-6-luna")) == 0 {
 		t.Error("gpt-6-luna offers no reasoning efforts; the ladder was built for Chat")
+	}
+}
+
+// The free tier is gated on what the request looks like, not on the key: the
+// User-Agent, the client header, the session token, the tool roster and the
+// working directory all have to be there before Zen evaluates the credential.
+// Asserting each one on the wire is the only way to know a turn is answered.
+func TestOpenCodeFreeWire(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		headers http.Header
+		body    map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The listing is fetched when a client is built; it carries no turn.
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"object":"list","data":[{"id":"big-pickle"},{"id":"claude-opus-5"}]}`)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		headers = r.Header.Clone()
+		body = map[string]any{}
+		_ = json.Unmarshal(raw, &body)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"id\":\"1\",\"model\":\"big-pickle\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+
+	vendor, ok := findVendor(opencodeVendorID)
+	if !ok {
+		t.Fatal("no vendor row serves OpenCode Zen")
+	}
+	cfg := endpoint.Config{BaseURL: server.URL}
+	if err := configureOpenCodeZen(vendor, &cfg); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	p := newVendorProvider("opencode-zen:api_key", vendor, cfg)
+
+	client := NewClient(p, "big-pickle", 0)
+	client.SetSessionID("conv-1")
+	client.SetWorkingDir(func() string { return "/tmp/project" })
+
+	system, tools := client.ShapeInference("base prompt", []ToolSchema{
+		{Name: "Bash", Description: "Execute shell commands"},
+		{Name: "Read", Description: "Read a file"},
+		{Name: "Write", Description: "Write a file"},
+	})
+	if !strings.Contains(system, "<env>\n  Working directory: /tmp/project\n</env>") {
+		t.Fatalf("the shaped prompt states no working directory: %q", system)
+	}
+	sdk, err := client.TurnClient([]core.Message{core.UserMessage("hi", nil)})
+	if err != nil {
+		t.Fatalf("TurnClient: %v", err)
+	}
+	opts := append([]ai.Option{ai.WithSystem(system)}, ai.WithTools(tools...))
+	for range sdk.Stream(context.Background(), []core.Message{core.UserMessage("hi", nil)}, opts...) {
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := headers.Get("User-Agent"); !strings.HasPrefix(got, opencodeUserAgent) {
+		t.Errorf("User-Agent = %q, want it to lead with %q", got, opencodeUserAgent)
+	}
+	if got := headers.Get("x-opencode-client"); got != "cli" {
+		t.Errorf("x-opencode-client = %q, want cli", got)
+	}
+	if got := headers.Get("x-opencode-session"); !opencodeSessionPattern.MatchString(got) {
+		t.Errorf("x-opencode-session = %q, want the canonical ses_ shape", got)
+	}
+	if got := headers.Get("Authorization"); got != "Bearer "+opencodePublicKey {
+		t.Errorf("Authorization = %q, want the free tier's own spelling", got)
+	}
+
+	sent, _ := body["messages"].([]any)
+	if len(sent) == 0 {
+		t.Fatalf("no messages reached the wire: %v", body)
+	}
+	first, _ := sent[0].(map[string]any)
+	if content, _ := first["content"].(string); !strings.Contains(content, "<env>\n  Working directory: /tmp/project\n</env>") {
+		t.Errorf("system prompt on the wire = %q", content)
+	}
+	names := make(map[string]bool)
+	toolList, _ := body["tools"].([]any)
+	for _, entry := range toolList {
+		function, _ := entry.(map[string]any)["function"].(map[string]any)
+		if name, _ := function["name"].(string); name != "" {
+			names[name] = true
+		}
+	}
+	for _, name := range opencodeGateTools {
+		if !names[name] {
+			t.Errorf("tool %q missing from the wire roster: %v", name, names)
+		}
+	}
+	// Padding must not cost the model its real tools: the pads have no
+	// description or parameters, so those are what it actually calls.
+	for _, name := range []string{"Bash", "Read", "Write"} {
+		if !names[name] {
+			t.Errorf("real tool %q was dropped from the roster: %v", name, names)
+		}
+	}
+
+	// A billed model is refused rather than sent: San exposes the free tier.
+	if _, err := p.Client("claude-opus-5", nil); err == nil || !strings.Contains(err.Error(), "free models") {
+		t.Errorf("a paid model opened with err = %v, want a free-models refusal", err)
+	}
+}
+
+// The listing is filtered too: a stored connection or a routed model cannot
+// reach a billed model through the picker.
+func TestOpenCodeListsOnlyFreeModels(t *testing.T) {
+	vendor, ok := findVendor(opencodeVendorID)
+	if !ok {
+		t.Fatal("no vendor row serves OpenCode Zen")
+	}
+	p := newVendorProvider("opencode-zen:api_key", vendor, endpoint.Config{APIKey: "public"})
+	for _, m := range p.endpoint.Models() {
+		if !opencodeFreeModel(m.ID) {
+			t.Errorf("the seed carries the billed model %q", m.ID)
+		}
+	}
+	if len(p.endpoint.Models()) == 0 {
+		t.Fatal("the seed carries no free models at all")
 	}
 }

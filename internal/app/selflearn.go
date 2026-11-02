@@ -163,14 +163,19 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 			forkOnEvent = rec.RecordEvent
 			forkSessionID = rec.ID()
 		}
+		// The fork is its own conversation, so it carries its own session id —
+		// a vendor that gates on the session token sees one per review.
+		client.SetSessionID(forkSessionID)
+		client.SetWorkingDir(func() string { return m.env.CWD })
 		fc := selflearn.ForkConfig{
-			Client:      client.TurnClient,
-			CallOptions: client.CallOptions,
-			System:      sys,
-			CWD:         m.env.CWD,
-			Skills:      skillMgr,
-			Strategy:    cfg.Strategy,
-			OnEvent:     forkOnEvent,
+			Client:         client.TurnClient,
+			CallOptions:    client.CallOptions,
+			ShapeInference: client.ShapeInference,
+			System:         sys,
+			CWD:            m.env.CWD,
+			Skills:         skillMgr,
+			Strategy:       cfg.Strategy,
+			OnEvent:        forkOnEvent,
 		}
 		llmSummary, runErr := selflearn.RunReview(reviewCtx, fc, snapshot)
 		// Re-check live AFTER the RunReview return. This is the macro

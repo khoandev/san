@@ -28,9 +28,12 @@ const forkDeadline = 5 * time.Minute
 type ForkConfig struct {
 	Client      func(msgs []core.Message) (*ai.Client, error)
 	CallOptions func() []ai.Option
-	System      core.System // parent's system — read for its prompt only
-	CWD         string
-	Skills      *SkillManager
+	// ShapeInference settles the wire shape of one inference for the vendor
+	// that reads it; nil sends the prompt and roster unchanged.
+	ShapeInference func(system string, tools []ai.Schema) (string, []ai.Schema)
+	System         core.System // parent's system — read for its prompt only
+	CWD            string
+	Skills         *SkillManager
 	// Strategy is the user's optional learning-strategy override; non-empty
 	// replaces the built-in guidance.
 	Strategy string
@@ -69,14 +72,15 @@ func RunReview(ctx context.Context, fc ForkConfig, snapshot []core.Message) (str
 	tools := core.NewTools(newSkillManageTool(fc.Skills))
 
 	ag := core.NewAgent(core.Config{
-		Client:      fc.Client,
-		CallOptions: fc.CallOptions,
-		System:      sys,
-		Tools:       tools,
-		Gate:        tool.Permission(allowOnly(tools)),
-		MaxSteps:    forkMaxSteps,
-		OutboxBuf:   -1, // no outbox: this fork is headless, driven via ThinkAct
-		OnEvent:     fc.OnEvent,
+		Client:         fc.Client,
+		CallOptions:    fc.CallOptions,
+		ShapeInference: fc.ShapeInference,
+		System:         sys,
+		Tools:          tools,
+		Gate:           tool.Permission(allowOnly(tools)),
+		MaxSteps:       forkMaxSteps,
+		OutboxBuf:      -1, // no outbox: this fork is headless, driven via ThinkAct
+		OnEvent:        fc.OnEvent,
 	})
 
 	// Trim trailing user-role messages (user-typed turns and tool results, both

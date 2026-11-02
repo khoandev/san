@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"strings"
 	"time"
 
@@ -195,6 +196,16 @@ func buildHookCompleter(p llm.Provider) hook.LLMCompleter {
 	}
 	return func(ctx context.Context, systemPrompt, userMessage, model string) (string, error) {
 		c := llm.NewClient(p, model, 0)
+		// A hook runs outside any conversation, so it has no session id to
+		// carry — but the working directory is still where this answer belongs,
+		// and one vendor states it in the prompt.
+		c.SetWorkingDir(func() string {
+			dir, err := os.Getwd()
+			if err != nil {
+				return ""
+			}
+			return dir
+		})
 		resp, err := c.Complete(ctx, systemPrompt, []core.Message{core.UserMessage(userMessage, nil)}, nil, 4096)
 		if err != nil {
 			return "", err

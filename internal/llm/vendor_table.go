@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/genai-io/sdk-go/pkg/ai"
 	"github.com/genai-io/sdk-go/pkg/ai/catalog"
@@ -26,6 +27,15 @@ import (
 // way of reaching an endpoint its own vendor row. The table below is that
 // mapping, and it is all there is to adding a vendor: no package, no client, no
 // conversion code.
+
+const (
+	// opencodeVendorID is the vendor key for OpenCode's gateway. The SDK's
+	// catalog has no row for it, so San supplies the row itself; the ID is
+	// still the one the model data is keyed by.
+	opencodeVendorID = "opencode"
+	// opencodeBaseURL is the Zen gateway, which is OpenAI Chat Completions.
+	opencodeBaseURL = "https://opencode.ai/zen/v1"
+)
 
 // entry is one San provider/auth-method pair served by one catalog vendor.
 type vendorEntry struct {
@@ -55,6 +65,7 @@ var vendorDisplays = map[ProviderID]ProviderDisplay{
 	Volcengine:     {Name: "Volcengine Ark", Order: 120},
 	AgnesAI:        {Name: "Agnes-AI", Order: 130},
 	CustomProvider: {Name: "Custom", Order: 140},
+	OpenCodeZen:    {Name: "OpenCode Zen (Free)", Order: 15},
 }
 
 var vendorEntries = []vendorEntry{
@@ -147,6 +158,15 @@ var vendorEntries = []vendorEntry{
 		vendorID: "agnesai",
 	},
 	{
+		// Zen's free tier is served by a host the SDK's catalog has no row for,
+		// so the row is built here — see openCodeZenVendor. Its lineups are
+		// free models only, which newVendorProvider enforces on both the seed
+		// and the live listing.
+		meta:      Meta{Provider: OpenCodeZen, AuthMethod: AuthAPIKey, EnvVars: []string{"OPENCODE_API_KEY"}, DisplayName: "Free models"},
+		vendorID:  opencodeVendorID,
+		configure: configureOpenCodeZen,
+	},
+	{
 		meta:      Meta{Provider: CustomProvider, AuthMethod: AuthAPIKey, EnvVars: []string{CustomAPIKeyEnvVar}, DisplayName: "Direct API"},
 		configure: configureCustom,
 	},
@@ -210,11 +230,23 @@ func (e vendorEntry) resolveVendor() (catalog.Vendor, error) {
 	if e.vendorID == "" {
 		return customVendor()
 	}
-	vendor, ok := catalog.Find(e.vendorID)
+	vendor, ok := findVendor(e.vendorID)
 	if !ok {
 		return catalog.Vendor{}, fmt.Errorf("llm: no catalog vendor %q", e.vendorID)
 	}
 	return vendor, nil
+}
+
+// findVendor returns the row a vendor ID names: the SDK catalog's, or the one
+// San supplies for a host the catalog has no entry for.
+func findVendor(id string) (catalog.Vendor, bool) {
+	if vendor, ok := catalog.Find(id); ok {
+		return vendor, true
+	}
+	if id == opencodeVendorID {
+		return openCodeZenVendor(), true
+	}
+	return catalog.Vendor{}, false
 }
 
 // providerName is San's provider identity for a registration, "vendor:auth".
@@ -284,12 +316,52 @@ func customVendor() (catalog.Vendor, error) {
 // host came from the store and the key from the secret store.
 func configureCustom(catalog.Vendor, *endpoint.Config) error { return nil }
 
+// openCodeZenVendor builds the row for OpenCode's Zen gateway, which the SDK's
+// catalog does not carry.
+//
+// It speaks OpenAI Chat Completions, reasons through reasoning_effort, and
+// echoes reasoning_content on every assistant message — Zen refuses a thinking
+// request whose history omits it. The two fixed headers are the fallback
+// identity: a call that reaches the endpoint outside any conversation (a model
+// listing, a usage poll) still has to look like the OpenCode client it claims
+// to be.
+func openCodeZenVendor() catalog.Vendor {
+	return catalog.Vendor{
+		ID:          opencodeVendorID,
+		DisplayName: "OpenCode Zen",
+		API:         ai.APIOpenAIChat,
+		BaseURL:     opencodeBaseURL,
+		BaseURLEnv:  "OPENCODE_ZEN_BASE_URL",
+		KeyEnv:      []string{"OPENCODE_API_KEY"},
+		Compat: ai.OpenAIChatCompat{
+			Thinking:         ai.ThinkingEffort,
+			ReasoningContent: true,
+		},
+		Headers: map[string]string{
+			"User-Agent":         opencodeUserAgent,
+			"x-opencode-session": opencodeSessionToken(opencodeInstallIDOrMint()),
+		},
+	}
+}
+
+// configureOpenCodeZen fills in the credential the free tier expects.
+//
+// Zen reads a key only for billed models, and its own spelling for "no
+// account" is the literal "public". Without it the request goes out with no
+// Authorization header at all and is refused before the tier gate runs.
+func configureOpenCodeZen(_ catalog.Vendor, cfg *endpoint.Config) error {
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		cfg.APIKey = opencodePublicKey
+	}
+	return nil
+}
+
 // costEstimator prices a turn from the model's rate card in San's data. A
 // model with no card reports unknown, which San renders as "--" rather than as
 // free.
 func costEstimator(vendorID string) CostEstimator {
 	return func(modelID string, usage Usage) (Money, bool) {
-		vendor, ok := catalog.Find(vendorID)
+		vendor, ok := findVendor(vendorID)
 		if !ok {
 			return Money{}, false
 		}

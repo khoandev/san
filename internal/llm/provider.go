@@ -4,6 +4,7 @@ import (
 	"github.com/genai-io/sdk-go/pkg/ai"
 
 	"context"
+	"maps"
 
 	"github.com/genai-io/san/internal/core"
 )
@@ -17,20 +18,21 @@ import (
 type ProviderID string
 
 const (
-	AgnesAI    ProviderID = "agnesai"
-	Anthropic  ProviderID = "anthropic"
-	OpenAI     ProviderID = "openai"
-	Copilot    ProviderID = "copilot"
-	Google     ProviderID = "google"
-	Moonshot   ProviderID = "moonshot"
-	Alibaba    ProviderID = "alibaba"
-	MinMax     ProviderID = "minmax"
-	BigModel   ProviderID = "bigmodel"
-	DeepSeek   ProviderID = "deepseek"
-	SenseNova  ProviderID = "sensenova"
-	Ollama     ProviderID = "ollama"
-	Mimo       ProviderID = "mimo"
-	Volcengine ProviderID = "volcengine"
+	AgnesAI     ProviderID = "agnesai"
+	Anthropic   ProviderID = "anthropic"
+	OpenAI      ProviderID = "openai"
+	Copilot     ProviderID = "copilot"
+	Google      ProviderID = "google"
+	Moonshot    ProviderID = "moonshot"
+	Alibaba     ProviderID = "alibaba"
+	MinMax      ProviderID = "minmax"
+	BigModel    ProviderID = "bigmodel"
+	DeepSeek    ProviderID = "deepseek"
+	SenseNova   ProviderID = "sensenova"
+	Ollama      ProviderID = "ollama"
+	Mimo        ProviderID = "mimo"
+	Volcengine  ProviderID = "volcengine"
+	OpenCodeZen ProviderID = "opencode-zen"
 )
 
 // AuthMethod is how a provider is reached. The same models can be served
@@ -97,6 +99,14 @@ type CompletionOptions struct {
 	Tools          []ToolSchema
 	SystemPrompt   string
 	ThinkingEffort string
+	// SessionID names the conversation this turn belongs to, for the vendors
+	// whose headers carry it — one gateway gates its free tier on the shape of
+	// the session id it is given. Empty means no conversation, and the
+	// provider falls back to this install's own identity.
+	SessionID string
+	// WorkingDir is where the turn is being answered, for the one vendor that
+	// requires it in the system prompt. Empty means ask the process.
+	WorkingDir string
 }
 
 // CompletionResponse aliases ai.Response so the streaming layer and the
@@ -166,7 +176,12 @@ type ModelInfo struct {
 // Complete sends one non-streaming call and returns the whole answer. The
 // collection it used to do by hand is ai.Client.Complete.
 func Complete(ctx context.Context, provider Provider, opts CompletionOptions) (CompletionResponse, error) {
-	client, err := provider.Client(opts.Model, TurnHeaders(provider, opts.Messages))
+	// The turn is settled before the client is built: one vendor decides from
+	// the body's own shape whether it serves a request at all, and prefers to
+	// say so in the response than in a header.
+	ShapeRequest(provider, opts.Model, opts.SessionID, opts.WorkingDir, &opts.SystemPrompt, &opts.Tools)
+	headers := mergeHeaders(TurnHeaders(provider, opts.Messages), SessionHeaders(provider, opts.Model, opts.SessionID))
+	client, err := provider.Client(opts.Model, headers)
 	if err != nil {
 		return CompletionResponse{}, err
 	}
@@ -240,4 +255,50 @@ func TurnHeaders(p Provider, msgs []core.Message) map[string]string {
 		return nil
 	}
 	return th.TurnHeaders(msgs)
+}
+
+// SessionHeaderProvider is implemented by an endpoint whose headers depend on
+// the conversation a call answers for. Nil for every other provider.
+type SessionHeaderProvider interface {
+	SessionHeaders(modelID, sessionID string) map[string]string
+}
+
+// SessionHeaders returns the headers this conversation needs beyond the
+// endpoint's fixed ones and the turn's own.
+func SessionHeaders(p Provider, modelID, sessionID string) map[string]string {
+	sh, ok := p.(SessionHeaderProvider)
+	if !ok {
+		return nil
+	}
+	return sh.SessionHeaders(modelID, sessionID)
+}
+
+// mergeHeaders layers over on top of base, later winning on a name both set.
+// Nil stays nil, so the common case allocates nothing.
+func mergeHeaders(base, over map[string]string) map[string]string {
+	if len(over) == 0 {
+		return base
+	}
+	out := make(map[string]string, len(base)+len(over))
+	maps.Copy(out, base)
+	maps.Copy(out, over)
+	return out
+}
+
+// RequestShaper is implemented by an endpoint that reads the turn's own shape
+// — the system prompt and the tool roster — before it reads the credential.
+// One gateway's free tier is gated that way. Nil for every other provider.
+//
+// A shaper rewrites the values in place and must be idempotent: the agent loop
+// asks once per inference, and a retried inference asks again.
+type RequestShaper interface {
+	ShapeRequest(modelID, sessionID, cwd string, system *string, tools *[]ToolSchema)
+}
+
+// ShapeRequest settles the turn's wire shape, for the provider that asks for
+// one. Every other provider is left alone.
+func ShapeRequest(p Provider, modelID, sessionID, cwd string, system *string, tools *[]ToolSchema) {
+	if s, ok := p.(RequestShaper); ok {
+		s.ShapeRequest(modelID, sessionID, cwd, system, tools)
+	}
 }

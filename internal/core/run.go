@@ -35,6 +35,7 @@ type agent struct {
 	client          func(msgs []Message) (*ai.Client, error)
 	prepareMessages func([]Message) []Message
 	callOptions     func() []ai.Option
+	shapeInference  func(system string, tools []ToolSchema) (string, []ToolSchema)
 	contextBudget   func() int
 	inbox           chan Inbound
 	outbox          chan Event
@@ -411,6 +412,13 @@ func (a *agent) preInfer(_ context.Context, inf *sdkagent.Inference) error {
 	}
 	if a.callOptions != nil {
 		inf.Options = append(inf.Options, a.callOptions()...)
+	}
+	// The wire shape is settled last, over everything the loop just decided:
+	// one vendor reads the system prompt and the tool roster before it reads
+	// the credential, and a shaper that ran before the prompt was rendered
+	// would be shaping a prompt nobody sends.
+	if a.shapeInference != nil {
+		inf.System, inf.Tools = a.shapeInference(inf.System, inf.Tools)
 	}
 	a.measured.sending(len(inf.Messages))
 	return nil

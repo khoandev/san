@@ -20,6 +20,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -46,6 +47,13 @@ type vendorProvider struct {
 	// turnHeaders are the headers whose value depends on what a turn sends,
 	// for the one endpoint that has any. Nil everywhere else.
 	turnHeaders func([]core.Message) map[string]string
+	// sessionHeaders are the headers whose value depends on which conversation
+	// a call answers for — one gateway gates its free tier on the shape of the
+	// session id. Nil everywhere else.
+	sessionHeaders func(modelID, sessionID string) map[string]string
+	// shapeRequest rewrites a turn's system prompt and tool roster before a
+	// client is built. Nil everywhere else.
+	shapeRequest func(modelID, sessionID, cwd string, system *string, tools *[]core.ToolSchema)
 
 	mu      sync.Mutex
 	listed  bool                  // the endpoint's listing has been fetched
@@ -58,8 +66,9 @@ func newVendorProvider(name string, vendor catalog.Vendor, cfg endpoint.Config) 
 	if cfg.Models == nil {
 		cfg.Models = models.list()
 	}
+	cfg.Models = openCodeOnly(vendor.ID, cfg.Models)
 	cfg.Resolve = models.resolve
-	return &vendorProvider{
+	p := &vendorProvider{
 		name:        name,
 		vendor:      vendor,
 		models:      models,
@@ -67,6 +76,28 @@ func newVendorProvider(name string, vendor catalog.Vendor, cfg endpoint.Config) 
 		turnHeaders: turnHeadersFor(vendor.ID),
 		clients:     make(map[string]*ai.Client),
 	}
+	if vendor.ID == opencodeVendorID {
+		p.sessionHeaders = opencodeSessionHeaders
+		p.shapeRequest = opencodeShapeRequest
+	}
+	return p
+}
+
+// openCodeOnly keeps the models this vendor exposes to San: Zen's free ones,
+// and every model of every other vendor. The filter applies to what the data
+// seeds and, separately, to what the endpoint lists — the listing is not
+// filtered by whatever seeded the picker.
+func openCodeOnly(vendorID string, models []ai.Model) []ai.Model {
+	if vendorID != opencodeVendorID {
+		return models
+	}
+	out := make([]ai.Model, 0, len(models))
+	for _, m := range models {
+		if opencodeFreeModel(m.ID) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Name returns San's provider identity, e.g. "anthropic:api_key".
@@ -85,6 +116,24 @@ func (p *vendorProvider) TurnHeaders(msgs []core.Message) map[string]string {
 	return p.turnHeaders(msgs)
 }
 
+// SessionHeaders returns the headers this conversation needs beyond the
+// fixed ones, for the one vendor whose headers vary with the conversation.
+func (p *vendorProvider) SessionHeaders(modelID, sessionID string) map[string]string {
+	if p.sessionHeaders == nil {
+		return nil
+	}
+	return p.sessionHeaders(modelID, sessionID)
+}
+
+// ShapeRequest rewrites a turn's system prompt and tool roster for the one
+// endpoint that reads them before it reads the credential.
+func (p *vendorProvider) ShapeRequest(modelID, sessionID, cwd string, system *string, tools *[]core.ToolSchema) {
+	if p.shapeRequest == nil {
+		return
+	}
+	p.shapeRequest(modelID, sessionID, cwd, system, tools)
+}
+
 // Client returns the SDK client for one model and header set, building and
 // caching it.
 //
@@ -92,6 +141,13 @@ func (p *vendorProvider) TurnHeaders(msgs []core.Message) map[string]string {
 // is shared — so keying the cache by the headers too costs an entry per
 // distinct header set rather than a new connection pool.
 func (p *vendorProvider) Client(modelID string, headers map[string]string) (*ai.Client, error) {
+	// Zen serves its free tier to any client; everything else on that host is
+	// billed, and San offers no path to it. Refusing here rather than at the
+	// picker means a stored connection or a routed model cannot slip past.
+	if p.vendor.ID == opencodeVendorID && !opencodeFreeModel(modelID) {
+		return nil, fmt.Errorf(
+			"llm: OpenCode Zen currently exposes free models only; choose one ending in -free or big-pickle, not %q", modelID)
+	}
 	key := clientKey(modelID, headers)
 	p.mu.Lock()
 	client, ok := p.clients[key]
@@ -182,6 +238,9 @@ func (p *vendorProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	listed := slices.DeleteFunc(p.endpoint.Models(), func(m ai.Model) bool { return !m.Stage.Available() })
 	out := make([]ModelInfo, 0, len(listed))
 	for _, m := range listed {
+		if p.vendor.ID == opencodeVendorID && !opencodeFreeModel(m.ID) {
+			continue
+		}
 		out = append(out, toModelInfo(p.models.resolve(m)))
 	}
 	return out, nil
@@ -250,4 +309,6 @@ var (
 	_ ThinkingEffortProvider = (*vendorProvider)(nil)
 	_ ImageSupportProvider   = (*vendorProvider)(nil)
 	_ ModelLimitsFetcher     = (*vendorProvider)(nil)
+	_ SessionHeaderProvider  = (*vendorProvider)(nil)
+	_ RequestShaper          = (*vendorProvider)(nil)
 )
