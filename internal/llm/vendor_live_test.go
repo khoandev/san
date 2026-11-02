@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,4 +245,40 @@ func TestLiveSubscription(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLiveOpenCodeFree checks the one vendor whose gate reads the request's
+// shape and the client's handshake: a shaped free-model turn has to be
+// answered, not refused as a spent allowance. It goes through Client, because
+// the shape is applied there and a bare provider call would be refused.
+func TestLiveOpenCodeFree(t *testing.T) {
+	if os.Getenv("SAN_SDK_LIVE") == "" || os.Getenv("OPENCODE_API_KEY") == "" {
+		t.Skip("set SAN_SDK_LIVE=1 and OPENCODE_API_KEY to run one real Zen turn")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	p, err := GetProvider(ctx, OpenCodeZen, AuthAPIKey)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	client := NewClient(p, "deepseek-v4.1-flash-free", 0)
+	client.SetSessionID("conv-live-zen")
+	client.SetWorkingDir(func() string { return t.TempDir() })
+
+	system, tools := client.ShapeInference("Answer with one word.", nil)
+	if len(tools) == 0 {
+		t.Fatal("the shaper added no gate tools")
+	}
+	resp, err := client.Complete(ctx, system, []core.Message{
+		{Role: ai.RoleUser, Content: ai.TextContent("Say hi.")},
+	}, tools, 0)
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if strings.TrimSpace(resp.Text()) == "" {
+		t.Fatal("empty reply")
+	}
+	t.Logf("reply: %q", strings.TrimSpace(resp.Text()))
 }

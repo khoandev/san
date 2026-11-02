@@ -84,6 +84,7 @@ cost.go        Money, the multi-currency total, and per-provider/auth pricing
 logging.go     CompletionOptions, as the log package reads it
 vendor*.go     every vendor, over genai-io/sdk-go
 opencode.go    the one vendor that gates on the request's shape: session token, headers
+opencode_tls.go  the same vendor's transport: the TLS handshake the gate reads
 data/          the model data built into the binary (see Model data)
 ```
 
@@ -119,19 +120,32 @@ Worth knowing beyond the names:
   SDK's drivers; what stays here is the seam — `Provider` on one side,
   `ai.Client` on the other — the table saying which San provider is which
   catalog vendor, and the model data. `vendor.go` names the file each subject lives in.
-- **One vendor gates on the shape of the request, not on the key.** OpenCode
-  Zen's free tier reads the `User-Agent`, an `x-opencode-client` header, a
-  `ses_`-prefixed session token and the working directory before it weighs the
-  credential, and answers a request that lacks them with the free tier's quota
-  error — which is why it looked like a spent allowance. `opencode.go` supplies
-  all of it: the token is derived from the conversation, so every turn of one
-  chat lands in the same cache, and the installation's own key covers traffic
-  outside a conversation. Its head is clocked rather than hashed because Zen
-  decodes it as a client timestamp, which is also why the rest of the token is
-  a digest of the conversation rather than a counter. Everything on the wire is
-  `x-opencode-*`, `User-Agent` and `Bearer public` when no key is set; the
-  vendor's paid models are filtered out of both the listing and `Client`, so
-  the picker cannot reach one.
+- **One vendor gates twice: on the request's shape, then on the handshake.**
+  OpenCode Zen's free tier reads the `User-Agent`, an `x-opencode-client`
+  header, a `ses_`-prefixed session token and the working directory before it
+  weighs the credential, and answers a request that lacks them with the free
+  tier's quota error — which is why it looked like a spent allowance.
+  `opencode.go` supplies all of it: the token is derived from the
+  conversation, so every turn of one chat lands in the same cache, and the
+  installation's own key covers traffic outside a conversation. Its head is
+  clocked rather than hashed because Zen decodes it as a client timestamp,
+  which is also why the rest of the token is a digest of the conversation
+  rather than a counter. Everything on the wire is `x-opencode-*`,
+  `User-Agent` and `Bearer public` when no key is set; the vendor's paid
+  models are filtered out of both the listing and `Client`, so the picker
+  cannot reach one.
+- **The shape is necessary and not sufficient, so Zen gets its own TLS.** A
+  request the gate would accept, byte for byte, sent from curl, OpenSSL, Node
+  or Go still comes back 429 with a nineteen-hour `Retry-After`, while the
+  same bytes from Bun are answered: what the gate reads is the ClientHello.
+  `opencode_tls.go` therefore handshakes with Bun's — no GREASE, no padding,
+  TLS 1.2 and 1.3, `X25519MLKEM768` as the first key share, and ALPN offering
+  only `http/1.1`, which also keeps the connection off Go's HTTP/2 stack. The
+  vendor is built with that client (`configureOpenCodeZen`), the SDK's
+  `x-stainless-*` telemetry headers are stripped on the way out, and proxies
+  are dialed by hand so a CONNECT tunnel is not re-handshaked with
+  `crypto/tls`. Do not route this vendor through the default transport: it
+  answers 429, not an error, and the message blames the allowance.
 - **The gate names tools in lowercase; San's are capitalised.** `Bash`, `Edit`
   and `Read` therefore never satisfy the check on their own, and the padded
   `bash`/`edit`/`glob`/`grep`/`read` schemas ride along on every free-model

@@ -353,6 +353,9 @@ func configureOpenCodeZen(_ catalog.Vendor, cfg *endpoint.Config) error {
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		cfg.APIKey = opencodePublicKey
 	}
+	// The free tier is gated on the client's TLS handshake, not on anything
+	// the request says, so this vendor brings its own client.
+	cfg.HTTPClient = opencodeHTTPClient()
 	return nil
 }
 

@@ -14,6 +14,7 @@ require (
 	github.com/genai-io/sdk-go v0.9.3-0.20261031072659-ee9972e5348f
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/joho/godotenv v1.5.1
+	github.com/refraction-networking/utls v1.8.2
 	github.com/spf13/cobra v1.10.2
 	go.uber.org/zap v1.28.0
 	golang.org/x/image v0.47.0
@@ -25,6 +26,7 @@ require (
 require (
 	github.com/Netflix/go-expect v0.0.0-20180615182759-c93bf25de8e8 // indirect
 	github.com/PuerkitoBio/goquery v1.9.2 // indirect
+	github.com/andybalholm/brotli v1.0.6 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.84.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
@@ -32,6 +34,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/googleapis/gax-go/v2 v2.17.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
+	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/kr/pty v1.1.1 // indirect
 	github.com/mattn/go-runewidth v0.0.30 // indirect
 	github.com/modelcontextprotocol/go-sdk v1.8.0 // indirect
@@ -106,7 +109,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0

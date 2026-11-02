@@ -79,8 +79,8 @@ exposure and CI gates on it. Two sources need attention when it goes red:
 - **A module.** Bump it; Dependabot opens a grouped `gomod` PR weekly and will
   usually get there first.
 - **The Go standard library.** Bump the `go-version` pin in
-  `.github/workflows/ci.yml` and `release.yml` to the current patch release of
-  that line. Dependabot does not track the toolchain pin.
+  `.github/workflows/ci.yml`, `release.yml`, and `build.yml` to the current
+  patch release of that line. Dependabot does not track the toolchain pin.
 
 CI also runs the scan weekly, so an advisory published against a dependency
 already in `go.mod` surfaces without waiting for the next pull request.
