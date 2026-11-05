@@ -432,3 +432,19 @@ func TestSessionRecordCarriesPlan(t *testing.T) {
 		t.Fatalf("record type = %q", record.Type)
 	}
 }
+
+// The notice that follows a plan names the open questions, so they are answered
+// while planning instead of being discovered mid-execution.
+func TestPlanDraftNoticeListsOpenQuestions(t *testing.T) {
+	planned := testPlan("plan-1", "Split auth", "read")
+	planned.OpenQuestions = []string{"keep the legacy cookie?"}
+	notice := planDraftNotice(planned)
+	for _, want := range []string{"Split auth", "keep the legacy cookie?", "Execution Panel"} {
+		if !strings.Contains(notice, want) {
+			t.Fatalf("notice is missing %q:\n%s", want, notice)
+		}
+	}
+	if got := planDraftNotice(testPlan("plan-2", "Settled", "a")); strings.Contains(got, "Open questions") {
+		t.Fatalf("notice invented open questions:\n%s", got)
+	}
+}

@@ -131,7 +131,7 @@ func (m *model) onPlanModeTurn(result core.Result) tea.Cmd {
 		// EndTurn's RecordState (which runs after this) writes the new state;
 		// persisting here would race the turn's own finalization.
 		m.showPlanPanel()
-		m.conv.AddNotice(plan.Summary(produced) + "\n\nReview and run it in the Execution Panel.")
+		m.conv.AddNotice(planDraftNotice(produced))
 		return tea.Batch(m.CommitMessages()...)
 	}
 
@@ -385,6 +385,17 @@ func (m *model) resetPlanState() {
 // are postures the operation-mode indicator cannot express.
 func (m *model) planStatusLabel() string {
 	return string(m.plan.Mode())
+}
+
+// planDraftNotice is what the transcript says when a plan lands: its shape,
+// the questions still open (answered in the prompt, with Plan Mode still on),
+// and where to act on it.
+func planDraftNotice(p plan.Plan) string {
+	notice := plan.Summary(p)
+	if questions := plan.OpenQuestionsBlock(p.OpenQuestions); questions != "" {
+		notice += "\n\n" + questions + "\nAnswer in the prompt, or edit the plan in the panel."
+	}
+	return notice + "\n\nReview and run it in the Execution Panel."
 }
 
 func stepOutcomeNotice(outcome plan.StepResult) string {

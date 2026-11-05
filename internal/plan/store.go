@@ -72,9 +72,6 @@ func (s *Store) Mode() Mode {
 	return s.state.Mode
 }
 
-// InPlanMode reports whether writes must be blocked.
-func (s *Store) InPlanMode() bool { return s.Mode() == ModePlan }
-
 // EnterPlanMode switches to Plan Mode and pauses a plan that was executing.
 func (s *Store) EnterPlanMode() {
 	if s == nil {
@@ -686,37 +683,6 @@ func (s *Store) UpdateDraft(p Plan) error {
 		s.state.DraftID = ""
 	}
 	return nil
-}
-
-// AddDraftNote records a decision or open question discovered while planning
-// and folds it into the draft so "update the plan when new information
-// arrives" survives without a whole new plan block.
-func (s *Store) AddDraftNote(decision, question string) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p := s.activeLocked()
-	if p == nil || p.Terminal() {
-		return
-	}
-	p.AddDecision(decision)
-	if q := strings.TrimSpace(question); q != "" {
-		p.OpenQuestions = append(p.OpenQuestions, q)
-	}
-}
-
-// Log appends a progress entry to the active plan.
-func (s *Store) Log(kind, message string) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p := s.activeLocked(); p != nil {
-		p.AddLog(kind, "", message)
-	}
 }
 
 func (s *Store) activeLocked() *Plan {
