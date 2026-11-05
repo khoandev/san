@@ -352,18 +352,18 @@ func opencodeDialTLS(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		raw.Close()
+		_ = raw.Close()
 		return nil, err
 	}
 	conn := utls.UClient(raw, &utls.Config{ServerName: host}, utls.HelloCustom)
 	if err := conn.ApplyPreset(opencodeClientHello()); err != nil {
-		raw.Close()
+		_ = raw.Close()
 		return nil, err
 	}
 	handshakeCtx, cancel := context.WithTimeout(ctx, opencodeHandshakeTimeout)
 	defer cancel()
 	if err := conn.HandshakeContext(handshakeCtx); err != nil {
-		raw.Close()
+		_ = raw.Close()
 		return nil, err
 	}
 	return conn, nil
@@ -411,7 +411,7 @@ func opencodeConnect(ctx context.Context, proxyURL *url.URL, addr string) (net.C
 	if proxyURL.Scheme == "https" {
 		proxyTLS := tls.Client(conn, &tls.Config{ServerName: proxyURL.Hostname()})
 		if err := proxyTLS.HandshakeContext(ctx); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, err
 		}
 		conn = proxyTLS
@@ -425,18 +425,18 @@ func opencodeConnect(ctx context.Context, proxyURL *url.URL, addr string) (net.C
 	}
 	request.WriteString("\r\n")
 	if _, err := conn.Write([]byte(request.String())); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	reader := bufio.NewReader(conn)
 	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("llm: proxy %s refused the tunnel: %s", proxyURL.Host, response.Status)
 	}
 	if reader.Buffered() > 0 {
