@@ -14,8 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/bubbletea/v2"
-
+	tea "charm.land/bubbletea/v2"
 	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"

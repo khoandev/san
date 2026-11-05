@@ -65,6 +65,7 @@ func (m *model) slashCommandEnv() input.SlashCommandEnv {
 		TrustWorkspace:          m.trustWorkspace,
 		PlanCommand:             m.planCommand,
 		AdvisorCommand:          m.advisorCommand,
+		AdvisorConfig:           m.advisorConfig,
 		SideQuestion:            m.sideQuestion,
 		Recap:                   m.recapNow,
 		OpenHistory:             m.openHistory,

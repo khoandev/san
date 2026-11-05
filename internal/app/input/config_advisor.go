@@ -85,8 +85,8 @@ func (p *advisorPanel) Enter() {
 	}
 }
 
-func (p *advisorPanel) Dirty() bool           { return p.form.Dirty() }
-func (p *advisorPanel) HintLine() string      { return p.form.HintLine() }
+func (p *advisorPanel) Dirty() bool      { return p.form.Dirty() }
+func (p *advisorPanel) HintLine() string { return p.form.HintLine() }
 func (p *advisorPanel) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	cmd, done, _ := p.form.HandleKey(msg)
 	return cmd, done
@@ -219,11 +219,11 @@ var advisorRows = []configRow[setting.AdvisorSettings]{
 
 	{kind: rowSubHeader, label: "Review"},
 	{
-		kind:  rowChoice,
-		label: "Depth",
-		note:  "fast · standard · deep",
-		indent: 2,
-		choices: []string{setting.AdvisorModeFast, setting.AdvisorModeStandard, setting.AdvisorModeDeep},
+		kind:      rowChoice,
+		label:     "Depth",
+		note:      "fast · standard · deep",
+		indent:    2,
+		choices:   []string{setting.AdvisorModeFast, setting.AdvisorModeStandard, setting.AdvisorModeDeep},
 		getChoice: func(s *setting.AdvisorSettings) string { return s.Mode() },
 		setChoice: func(s *setting.AdvisorSettings, v string) { s.Review.Mode = v },
 	},
@@ -254,8 +254,8 @@ var advisorRows = []configRow[setting.AdvisorSettings]{
 		setting.AdvisorSettings.HidesP3,
 		func(s *setting.AdvisorSettings, on bool) { s.Display.HideP3 = advisorFlag(on) }),
 	{
-		kind:  rowChoice,
-		label: "Group findings by",
+		kind:   rowChoice,
+		label:  "Group findings by",
 		indent: 2,
 		choices: []string{
 			setting.AdvisorGroupBySeverity, setting.AdvisorGroupByFile, setting.AdvisorGroupByTask,

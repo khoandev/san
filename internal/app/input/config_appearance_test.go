@@ -173,8 +173,8 @@ func TestAppearancePanelContextBarSavesAndEmits(t *testing.T) {
 
 // TestSettingsSelectorTabSwitchesPanels confirms tab / shift+tab cycle
 // /settings's panels (and wrap). The shell's tab switching was dormant while
-// /settings hosted a single panel; it now hosts Appearance, Permissions and
-// General.
+// /settings hosted a single panel; it now hosts Appearance, Permissions,
+// Advisor and General.
 func TestSettingsSelectorTabSwitchesPanels(t *testing.T) {
 	c := NewSettingsSelector(nil)
 	c.Enter(120, 40)
@@ -186,8 +186,12 @@ func TestSettingsSelectorTabSwitchesPanels(t *testing.T) {
 		t.Fatalf("after tab = %q, want permissions", got)
 	}
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := c.ActivePanel().Title(); got != "advisor" {
+		t.Fatalf("after second tab = %q, want advisor", got)
+	}
+	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := c.ActivePanel().Title(); got != "general" {
-		t.Fatalf("after second tab = %q, want general", got)
+		t.Fatalf("after third tab = %q, want general", got)
 	}
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab}) // wrap
 	if got := c.ActivePanel().Title(); got != "appearance" {

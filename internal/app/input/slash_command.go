@@ -119,6 +119,10 @@ type SlashCommandEnv struct {
 	// starts a review of the working tree. The app owns the review runner, so
 	// the command only reports back.
 	AdvisorCommand func(args string) (string, tea.Cmd)
+	// AdvisorConfig is this session's live advisor config, handed to the
+	// /settings Advisor panel when it opens. The session may have pinned its
+	// own config, and that pin — not the settings file — is what it runs with.
+	AdvisorConfig func() setting.AdvisorSettings
 }
 
 type SlashCommandController struct {
@@ -428,9 +432,14 @@ func (c *SlashCommandController) handleResumeCommand(_ context.Context, _ string
 	return "", cmd, nil
 }
 
-// handleSettingsCommand opens the /settings popup (Appearance, Permissions
-// and General). Self-learning lives in its own /evolve popup.
+// handleSettingsCommand opens the /settings popup (Appearance, Permissions,
+// Advisor and General). Self-learning lives in its own /evolve popup.
 func (c *SlashCommandController) handleSettingsCommand(_ context.Context, _ string) (string, tea.Cmd, error) {
+	// The Advisor panel edits the session's live config rather than the file
+	// it was seeded from, so push it in before Enter() reads it.
+	if c.env.AdvisorConfig != nil {
+		c.env.Input.Settings.SetAdvisorConfig(c.env.AdvisorConfig())
+	}
 	c.env.Input.Settings.Enter(c.env.Width, c.env.Height)
 	return "", nil, nil
 }

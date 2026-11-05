@@ -374,6 +374,11 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case input.AdvisorConfigSavedMsg:
+		// The panel wrote the user/project file (or handed over the session pin);
+		// the app owns the rest — the live config, the transcript record and the
+		// runner that has to pick the new values up.
+		return m, m.handleAdvisorConfigSaved(msg)
 	case input.ThemeSavedMsg:
 		// The panel already applied (kit.InitTheme) and persisted the theme;
 		// refresh the in-memory handle so re-opening /settings reflects it.
