@@ -56,7 +56,7 @@ func newAdvisorTestModel(t *testing.T, answer string) *model {
 			Advisor:      enabledAdvisor(),
 		},
 		services: services{
-			Advisor: AdvisorServices{Store: advisor.NewStore(), Indicator: NewAdvisorIndicator()},
+			Advisor: newAdvisorServices(),
 		},
 	}
 }
@@ -374,7 +374,7 @@ func TestAdvisorStartAndTeardownAreRaceFree(t *testing.T) {
 
 func TestAdvisorCommandReportsDisabled(t *testing.T) {
 	m := &model{services: services{
-		Advisor: AdvisorServices{Store: advisor.NewStore(), Indicator: NewAdvisorIndicator()},
+		Advisor: newAdvisorServices(),
 	}}
 	line, cmd := m.advisorCommand("")
 	if !strings.Contains(line, "off") {

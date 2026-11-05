@@ -61,6 +61,43 @@ type AdvisorServices struct {
 	// teardownAdvisor, so the engine, its cancel and its liveness gate can
 	// never fall out of sync.
 	session *advisorSession
+
+	// gate is the pre-merge review the permission path consults. The slot is a
+	// pointer because a bubbletea model is copied by value on every update, and
+	// the value inside it is atomic because the permission check reads it on
+	// the agent goroutine while wireAdvisor and teardownAdvisor rewrite it on
+	// the UI goroutine. Build AdvisorServices with newAdvisorServices so the
+	// slot exists; a nil slot simply wires no gate.
+	gate *atomic.Pointer[advisor.MergeGate]
+}
+
+// newAdvisorServices builds the advisor's session state. The store and the
+// indicator are always present — the render path reads them without a nil check
+// — and the merge gate slot is allocated here because two goroutines share it.
+func newAdvisorServices() AdvisorServices {
+	return AdvisorServices{
+		Store:     advisor.NewStore(),
+		Indicator: NewAdvisorIndicator(),
+		gate:      new(atomic.Pointer[advisor.MergeGate]),
+	}
+}
+
+// mergeGate returns the live pre-merge gate, or nil when none is wired. Safe
+// from the agent goroutine: it reads an atomic pointer and nothing else.
+func (a *AdvisorServices) mergeGate() *advisor.MergeGate {
+	if a == nil || a.gate == nil {
+		return nil
+	}
+	return a.gate.Load()
+}
+
+// storeMergeGate replaces the gate. Called on the UI goroutine by wireAdvisor
+// and teardownAdvisor, which own the runner the gate reviews with.
+func (a *AdvisorServices) storeMergeGate(gate *advisor.MergeGate) {
+	if a == nil || a.gate == nil {
+		return
+	}
+	a.gate.Store(gate)
 }
 
 // advisorSession bundles the handles that make up one live advisor for the
@@ -151,6 +188,9 @@ func (m *model) wireAdvisor() {
 		parentSessionID: m.sessionID(),
 		cwd:             m.env.CWD,
 	}
+	// The merge gate is built with the runner and dropped with it, so the
+	// permission path can never consult a torn-down session's engine.
+	m.services.Advisor.storeMergeGate(m.newMergeGate(m.services.Advisor.session))
 }
 
 // teardownAdvisor unwires the session's advisor: it cancels the session-scoped
@@ -165,6 +205,7 @@ func (m *model) teardownAdvisor() {
 	s.cancel()
 	s.live.Store(false)
 	m.services.Advisor.session = nil
+	m.services.Advisor.storeMergeGate(nil)
 	// The indicator outlives sessions; drop the "running" phase so a torn-down
 	// review cannot leave the status bar spinning forever.
 	m.services.Advisor.Indicator.Reset()
@@ -523,7 +564,7 @@ func (m *model) reviewPlanStep(step plan.Step, outcome plan.StepResult) tea.Cmd 
 		if !ok {
 			return msg
 		}
-		stored, forkID, ok := m.runClaimedReview(s, req)
+		stored, forkID, ok := m.runClaimedReview(nil, s, req)
 		if !ok {
 			return msg
 		}
@@ -600,7 +641,7 @@ func planStepChecks(outcome plan.StepResult) []string {
 // re-checked after the fork returns because teardown is most likely to land
 // while the review is waiting on the provider.
 func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
-	stored, forkID, ok := m.runClaimedReview(s, req)
+	stored, forkID, ok := m.runClaimedReview(nil, s, req)
 	if !ok {
 		return
 	}
@@ -610,18 +651,20 @@ func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
 // runClaimedReview executes a review whose slot claimAdvisorReview took, records
 // it in the history and the transcript, publishes the started/completed states,
 // and releases the slot. It reports false when no verdict was recorded — a
-// failed review, or one that landed after its session was torn down.
+// failed review, or one that landed after its session was torn down. A nil ctx
+// means the review runs under the session's context alone; a caller that must
+// have the verdict now (a plan step, a merge) passes its own deadline.
 //
 // Every side effect is a mutex or a channel send, so this may run on any
 // goroutine: the plan-step trigger calls it from its own command goroutine
 // because it needs the verdict before the executor continues.
-func (m *model) runClaimedReview(s *advisorSession, req advisor.Request) (advisor.Review, string, bool) {
+func (m *model) runClaimedReview(ctx context.Context, s *advisorSession, req advisor.Request) (advisor.Review, string, bool) {
 	defer s.busy.Store(false)
 
 	m.services.Advisor.Indicator.Begin()
 	m.publishAdvisorStarted()
 
-	review, forkID, err := m.executeAdvisorReview(s, req)
+	review, forkID, err := m.executeAdvisorReview(ctx, s, req)
 	if !s.live.Load() {
 		// The conversation this review belongs to is gone: its verdict is
 		// dropped rather than published or appended to a successor session.
@@ -697,8 +740,12 @@ func taskNeedsReviewLine(review advisor.Review, severity advisor.Severity) strin
 }
 
 // executeAdvisorReview runs the fork for one review, opening the sidechain
-// session that lets the inspector replay it.
-func (m *model) executeAdvisorReview(s *advisorSession, req advisor.Request) (advisor.Review, string, error) {
+// session that lets the inspector replay it. A caller-supplied ctx bounds the
+// run further (a step turn, a merge waiting on the verdict); it never extends
+// the session's own lifetime, which a teardown cancels.
+func (m *model) executeAdvisorReview(ctx context.Context, s *advisorSession, req advisor.Request) (advisor.Review, string, error) {
+	runCtx, cancel := reviewContext(ctx, s.ctx)
+	defer cancel()
 	cwd := s.cwd
 	var onEvent func(core.Event)
 	var forkID string
@@ -745,8 +792,23 @@ func (m *model) executeAdvisorReview(s *advisorSession, req advisor.Request) (ad
 		CWD:         cwd,
 		OnEvent:     onEvent,
 	})
-	review, err := engine.Run(s.ctx, req)
+	review, err := engine.Run(runCtx, req)
 	return review, forkID, err
+}
+
+// reviewContext joins a caller's deadline with the session's teardown: the
+// review stops when either ends, and cancelling the join never cancels the
+// session context itself.
+func reviewContext(caller, session context.Context) (context.Context, context.CancelFunc) {
+	if caller == nil {
+		return context.WithCancel(session)
+	}
+	ctx, cancel := context.WithCancel(caller)
+	stop := context.AfterFunc(session, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // persistAdvisorReview appends the review to the session transcript. The write

@@ -256,6 +256,11 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		agent.ResultPager{Store: owner.Store, SessionID: owner.Session.ID()}.Filter,
 		m.memoryRecall.current.Load,
 	)
+	// The pre-merge review sits in the permission path: a merge-like command is
+	// refused before it runs when the advisor finds a blocking issue. The
+	// resolver is read per call because the advisor is re-wired after this
+	// runtime is built.
+	params.MergeGate = m.mergeGateResolver()
 	return params, nil
 }
 

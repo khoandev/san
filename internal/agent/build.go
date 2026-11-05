@@ -72,6 +72,13 @@ type BuildParams struct {
 	PermissionReview PermReviewFunc
 	CanApproveByHook PermHookApprovalFunc
 
+	// MergeGate resolves the advisor's pre-merge review, consulted before a
+	// merge-like shell command runs: the whole diff against base is reviewed,
+	// and a blocking finding refuses the call. Resolved per call because the
+	// app re-wires its advisor after the runtime is rebuilt; nil leaves the
+	// permission path exactly as it was.
+	MergeGate MergeGateFunc
+
 	// ResultFilter may replace a tool result before the model is told about it — an
 	// output too large for the window, kept elsewhere and referenced. Nil
 	// sends every result through as it came.
@@ -204,12 +211,19 @@ func buildAgentWithOutbox(p BuildParams, outboxBuf int) (core.Agent, *Permission
 	pg.SetReviewer(p.PermissionReview)
 	pg.SetHookAllowCheck(p.CanApproveByHook)
 	disabledTools, hasPermissionRules := p.DisabledTools, p.PermissionRules != nil
-	adaptOpts = append(adaptOpts, tool.WithPermissionCheck(func(ctx context.Context, name string, input map[string]any) (bool, string) {
+	gatedCheck := mergeGatedCheck(p.MergeGate, pg, func(ctx context.Context, name string, input map[string]any) (bool, string) {
+		return pg.Check(ctx, name, input, false, "")
+	})
+	checkPermission := func(ctx context.Context, name string, input map[string]any) (bool, string) {
+		// The disabled-tool guard sits above the merge gate: a tool this build
+		// does not offer is refused without spending a review on a call that
+		// can never run.
 		if disabledTools[name] || !hasPermissionRules {
 			return false, "agent execution is unavailable"
 		}
-		return pg.Check(ctx, name, input, false, "")
-	}))
+		return gatedCheck(ctx, name, input)
+	}
+	adaptOpts = append(adaptOpts, tool.WithPermissionCheck(checkPermission))
 	var ag core.Agent
 	adaptOpts = append(adaptOpts, tool.WithMessagesGetterProvider(func() []core.Message {
 		if ag == nil {
@@ -250,9 +264,9 @@ func buildAgentWithOutbox(p BuildParams, outboxBuf int) (core.Agent, *Permission
 		ContextBudget:   client.ContextBudget,
 		System:          sys,
 		Tools:           tools,
-		Gate: func(ctx context.Context, call sdkagent.PreToolContext) (sdkagent.Decision, error) {
+		Gate: withMergeGate(p.MergeGate, pg, func(ctx context.Context, call sdkagent.PreToolContext) (sdkagent.Decision, error) {
 			return permissionGate(core.WithToolCallID(toolContext(ctx), call.Call.ID), call)
-		},
+		}),
 		ResultFilter: p.ResultFilter,
 		CompactFunc:  compactFunc,
 		OnEvent:      p.OnEvent,

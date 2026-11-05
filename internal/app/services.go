@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/command"
 	"github.com/genai-io/san/internal/cron"
@@ -121,6 +120,6 @@ func newServices() services {
 		Persona:      persona.Default(),
 		Reminder:     reminder.New(),
 		SelfLearn:    SelfLearnServices{Indicator: NewSelfLearnIndicator(), Recent: NewRecentLearnLog()},
-		Advisor:      AdvisorServices{Store: advisor.NewStore(), Indicator: NewAdvisorIndicator()},
+		Advisor:      newAdvisorServices(),
 	}
 }

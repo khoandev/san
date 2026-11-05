@@ -40,7 +40,7 @@ func newStepReviewModel(t *testing.T, answer string) *model {
 	}
 	m.mainNotices = make(chan mainNotice, 8)
 	m.advisorStarts = make(chan struct{}, 8)
-	m.services.Advisor = AdvisorServices{Store: advisor.NewStore(), Indicator: NewAdvisorIndicator()}
+	m.services.Advisor = newAdvisorServices()
 	m.wireAdvisor()
 	t.Cleanup(m.teardownAdvisor)
 	return m

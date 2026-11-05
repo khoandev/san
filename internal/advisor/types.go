@@ -158,12 +158,17 @@ const (
 	TargetSession TargetKind = "session"
 	// TargetFile reviews one file or a path scope.
 	TargetFile TargetKind = "file"
+	// TargetMerge reviews the whole diff a branch integration would publish: a
+	// merge, a PR/MR creation or a push to the base branch. It is the target
+	// the permission path's merge gate reviews, and the panel groups it under
+	// "merge".
+	TargetMerge TargetKind = "merge"
 )
 
 // Valid reports whether k is a known target kind.
 func (k TargetKind) Valid() bool {
 	switch k {
-	case TargetDiff, TargetTask, TargetStep, TargetCommit, TargetSession, TargetFile:
+	case TargetDiff, TargetTask, TargetStep, TargetCommit, TargetSession, TargetFile, TargetMerge:
 		return true
 	}
 	return false
