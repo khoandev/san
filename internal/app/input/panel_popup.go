@@ -4,8 +4,8 @@
 // panel's body + hint. Each sub-panel implements Panel and owns its body.
 //
 // Two popups are built on this shell today:
-//   - /config  → Appearance + Permissions panels (Provider planned).
-//   - /evolve  → the skill self-learning panel.
+//   - /settings → Appearance, Permissions, Advisor and General panels.
+//   - /evolve   → the skill self-learning panel.
 //
 // To add a panel to either, implement Panel and append it in the popup's
 // constructor (NewSettingsSelector / NewEvolveSelector).
@@ -79,11 +79,12 @@ func newPanelPopup(glyph, title, tagline string, panels ...Panel) PanelPopup {
 	return PanelPopup{glyph: glyph, title: title, tagline: tagline, panels: panels}
 }
 
-// NewSettingsSelector builds the /settings popup: Appearance, Permissions and
-// General.
+// NewSettingsSelector builds the /settings popup: Appearance, Permissions,
+// Advisor and General.
 func NewSettingsSelector(settings *setting.Settings) PanelPopup {
-	return newPanelPopup("⚙", "Settings", "appearance, permissions & general",
-		newAppearancePanel(settings), newPermissionsPanel(settings), newGeneralPanel(settings))
+	return newPanelPopup("⚙", "Settings", "appearance, permissions, advisor & general",
+		newAppearancePanel(settings), newPermissionsPanel(settings),
+		newAdvisorPanel(settings), newGeneralPanel(settings))
 }
 
 // SetSettings rebinds the Settings panels while keeping the active tab and popup state.
@@ -91,6 +92,18 @@ func (c *PanelPopup) SetSettings(settings *setting.Settings) {
 	c.panels = NewSettingsSelector(settings).panels
 	if c.active {
 		c.activePanel().Enter()
+	}
+}
+
+// SetAdvisorConfig hands the Advisor panel this session's live config. The app
+// pushes it before opening /settings: the session may have pinned its own
+// advisor config, and that pin — not the settings file — is what it is running
+// with.
+func (c *PanelPopup) SetAdvisorConfig(cfg setting.AdvisorSettings) {
+	for _, p := range c.panels {
+		if ap, ok := p.(*advisorPanel); ok {
+			ap.SetLive(cfg)
+		}
 	}
 }
 

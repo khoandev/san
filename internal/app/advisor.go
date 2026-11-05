@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/genai-io/san/internal/advisor"
+	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/log"
@@ -216,6 +217,30 @@ func (m *model) teardownAdvisor() {
 // resume.
 func (m *model) advisorConfig() setting.AdvisorSettings { return m.env.Advisor }
 
+// advisorBadge is the status line's view of the review layer. It stays quiet
+// unless the advisor is on, its display setting keeps the badge, and there is
+// something to say — a verdict, or a review in flight over the last one. The
+// counts are the findings that can still block something; P2/P3 are notes and
+// belong to the panel, not to a corner of the status bar.
+func (m model) advisorBadge() conv.AdvisorBadge {
+	cfg := m.advisorConfig()
+	if !cfg.Enabled() || !cfg.ShowStatusBar() {
+		return conv.AdvisorBadge{}
+	}
+	snap := m.services.Advisor.Indicator.Snapshot()
+	if snap.Latest == nil {
+		return conv.AdvisorBadge{}
+	}
+	counts := snap.Latest.UnresolvedCounts()
+	return conv.AdvisorBadge{
+		Show:    true,
+		Running: snap.Running,
+		Status:  snap.Latest.Status,
+		P0:      counts.P0,
+		P1:      counts.P1,
+	}
+}
+
 // resolveAdvisorModel picks the review provider and model: the configured
 // "vendor/model" ref when it resolves, the session model otherwise. A nil
 // provider means nothing is connected and no review can run.
@@ -339,6 +364,20 @@ func (i *AdvisorIndicator) Finish(review advisor.Review, err error) {
 
 // Fail records a failure that produced no review at all.
 func (i *AdvisorIndicator) Fail(err error) { i.Finish(advisor.Review{}, err) }
+
+// Adopt records a verdict this process did not produce — a resumed session's
+// latest review — so the status bar and the panel show it before anything new
+// runs. It is not a review starting, so it never touches the running count.
+func (i *AdvisorIndicator) Adopt(review advisor.Review) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	done := review.Clone()
+	i.latest = &done
+	i.err = ""
+}
 
 // Reset drops the running phase, as a teardown does.
 func (i *AdvisorIndicator) Reset() {

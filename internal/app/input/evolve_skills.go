@@ -84,8 +84,12 @@ const (
 	modeStrategy
 )
 
+// selfLearnSettings is the config struct the /evolve form edits; the alias keeps
+// the row builders readable.
+type selfLearnSettings = setting.SelfLearnSettings
+
 type evolvePanel struct {
-	form   selfLearnForm
+	form   configForm[selfLearnSettings]
 	store  LearnedSkillStore
 	recent func() []LearnEvent // nil = no RECENT zone
 
@@ -96,7 +100,7 @@ type evolvePanel struct {
 	// rows is the cached config-row list; rebuilt only when items changes
 	// (its one input), so per-keypress/per-frame rowsFn calls don't rebuild
 	// ~20 closures each time.
-	rows      []configRow
+	rows      []configRow[selfLearnSettings]
 	events    []LearnEvent // RECENT snapshot, loaded at Enter
 	invCursor int
 	actionErr error // last delete/preview failure, surfaced inline; cleared on nav
@@ -114,10 +118,18 @@ func newEvolvePanel(d EvolveDeps) *evolvePanel {
 		strategy: newStrategyEditor(selflearn.DefaultStrategy()),
 		rows:     evolveRows(0),
 	}
-	p.form = selfLearnForm{
+	p.form = configForm[selfLearnSettings]{
 		workspace: d.Workspace,
-		scope:     setting.ScopeUser,
-		rowsFn:    func() []configRow { return p.rows },
+		scopes:    []configScope{scopeUser, scopeProject},
+		rowsFn:    func() []configRow[selfLearnSettings] { return p.rows },
+		seed:      func(data *setting.Data) selfLearnSettings { return data.SelfLearn },
+		validate:  func(s selfLearnSettings) error { return s.Validate() },
+		persist: func(s selfLearnSettings, scope configScope) error {
+			return setting.UpdateSelfLearnAt(s, setting.Scope(scope))
+		},
+		saved: func(s selfLearnSettings, scope configScope) tea.Msg {
+			return ConfigSavedMsg{Scope: setting.Scope(scope), SavedSelfLearn: s}
+		},
 	}
 	return p
 }
@@ -374,24 +386,24 @@ func (p *evolvePanel) handleViewKey(msg tea.KeyMsg) tea.Cmd {
 // and there is no separate enable toggle — skill-evolving is on when at least
 // one action is allowed. learnedCount is shown on the "Learned" entry that
 // drills into the inventory.
-func evolveRows(learnedCount int) []configRow {
-	skillPerm := func(label string, get func(setting.SelfLearnSkills) bool, flip func(*setting.SelfLearnSkills)) configRow {
-		return configRow{
+func evolveRows(learnedCount int) []configRow[selfLearnSettings] {
+	skillPerm := func(label string, get func(setting.SelfLearnSkills) bool, flip func(*setting.SelfLearnSkills)) configRow[selfLearnSettings] {
+		return configRow[selfLearnSettings]{
 			kind:       rowBool,
 			label:      label,
 			indent:     2,
-			boolGetter: func(s *setting.SelfLearnSettings) bool { return get(s.Skills) },
-			toggle:     func(s *setting.SelfLearnSettings) { flip(&s.Skills) },
+			boolGetter: func(s *selfLearnSettings) bool { return get(s.Skills) },
+			toggle:     func(s *selfLearnSettings) { flip(&s.Skills) },
 		}
 	}
-	return []configRow{
+	return []configRow[selfLearnSettings]{
 		{
 			kind:    rowEntry,
 			entryID: "strategy",
 			label:   "Strategy",
 			desc:    "how to guide the learning",
 			indent:  1,
-			summary: func(s *setting.SelfLearnSettings) string { return strategySummary(s.Strategy) },
+			summary: func(s *selfLearnSettings) string { return strategySummary(s.Strategy) },
 		},
 		{kind: rowSpacer},
 		{kind: rowSubHeader, label: "Skills", indent: 1},
@@ -408,7 +420,7 @@ func evolveRows(learnedCount int) []configRow {
 			label:   "Learned",
 			desc:    "skills — browse & prune",
 			indent:  1,
-			summary: func(*setting.SelfLearnSettings) string {
+			summary: func(*selfLearnSettings) string {
 				if learnedCount == 0 {
 					return "none yet"
 				}

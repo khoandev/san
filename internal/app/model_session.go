@@ -240,6 +240,12 @@ func (m *model) restoreHistory(sess *session.History) {
 		m.env.Advisor = overridden
 	}
 	m.services.Advisor.Indicator.Reset()
+	// The badge and the panel read the indicator, so hand the resumed history's
+	// last verdict to it; otherwise a resumed session shows no advisor state at
+	// all until the next review runs.
+	if latest, ok := sess.Advisor.Latest(); ok {
+		m.services.Advisor.Indicator.Adopt(latest)
+	}
 
 	// Session-specific settings never inherit the previous conversation's goal.
 	m.beforeGoal = nil

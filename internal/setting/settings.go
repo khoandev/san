@@ -560,6 +560,28 @@ func (a AdvisorSettings) MergeThreshold() string {
 	return ""
 }
 
+// BlocksMergeOnP0 reports whether a P0 blocks a merge. Default on.
+func (a AdvisorSettings) BlocksMergeOnP0() bool { return defaultOn(a.Blocks.MergeOnP0) }
+
+// BlocksMergeOnP1 reports whether a P1 blocks a merge. Default off.
+func (a AdvisorSettings) BlocksMergeOnP1() bool { return defaultOff(a.Blocks.MergeOnP1) }
+
+// BlocksTaskOnP0 reports whether a P0 stops a finished subagent task from
+// counting as clean. Default on.
+func (a AdvisorSettings) BlocksTaskOnP0() bool { return defaultOn(a.Blocks.TaskCompletionOnP0) }
+
+// BlocksPlanStepOnP0 reports whether a P0 stops a plan step from being recorded
+// as done. Default on.
+func (a AdvisorSettings) BlocksPlanStepOnP0() bool {
+	return defaultOn(a.Blocks.PlanStepCompletionOnP0)
+}
+
+// RequiresConfirmationOnP1 reports whether a P1 is put to the human before
+// continuing. Default on.
+func (a AdvisorSettings) RequiresConfirmationOnP1() bool {
+	return defaultOn(a.Blocks.RequireConfirmationOnP1)
+}
+
 // TaskThreshold is the least severe level that stops a finished subagent task
 // from being treated as clean.
 func (a AdvisorSettings) TaskThreshold() string {
