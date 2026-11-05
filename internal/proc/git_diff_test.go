@@ -165,6 +165,52 @@ func TestReadWorkingDiffUntracked(t *testing.T) {
 	}
 }
 
+// A pathspec is how /advisor file reviews one path: the read must return only
+// that path's change, tracked and untracked alike, and must not let a
+// path-shaped option reach Git.
+func TestReadWorkingDiffScopesToPaths(t *testing.T) {
+	repo := initStatusRepo(t)
+	writeStatusFile(t, repo, "kept.txt", "one\n")
+	writeStatusFile(t, repo, "other.txt", "one\n")
+	statusGit(t, repo, "add", "kept.txt", "other.txt")
+	statusGit(t, repo, "commit", "-m", "initial")
+	writeStatusFile(t, repo, "kept.txt", "one\ntwo\n")
+	writeStatusFile(t, repo, "other.txt", "one\nchanged\n")
+	writeStatusFile(t, repo, "untracked.txt", "new\n")
+
+	got, err := ReadWorkingDiff(diffCtx(t), repo, DiffOptions{Paths: []string{"kept.txt"}})
+	if err != nil {
+		t.Fatalf("read scoped diff: %v", err)
+	}
+	if !strings.Contains(got.Diff, "kept.txt") || strings.Contains(got.Diff, "other.txt") {
+		t.Errorf("scoped diff covers the wrong files:\n%s", got.Diff)
+	}
+	if !slices.Equal(got.Files, []string{"kept.txt"}) {
+		t.Errorf("files = %v, want only the scoped path", got.Files)
+	}
+	if len(got.Untracked) != 0 {
+		t.Errorf("untracked = %v, want none outside the pathspec", got.Untracked)
+	}
+
+	// The whole read is available when no path is given.
+	all, err := ReadWorkingDiff(diffCtx(t), repo, DiffOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.ChangedFiles <= got.ChangedFiles {
+		t.Errorf("unscoped read saw %d files, want more than the scoped %d", all.ChangedFiles, got.ChangedFiles)
+	}
+
+	// A path that matches nothing is an empty diff, not an option.
+	empty, err := ReadWorkingDiff(diffCtx(t), repo, DiffOptions{Paths: []string{"--no-such-file"}})
+	if err != nil {
+		t.Fatalf("path-shaped argument reached Git as an option: %v", err)
+	}
+	if empty.ChangedFiles != 0 || empty.Diff != "" {
+		t.Errorf("unmatched path = %+v, want an empty diff", empty)
+	}
+}
+
 func TestReadWorkingDiffEmptyAndStable(t *testing.T) {
 	repo := initStatusRepo(t)
 	writeStatusFile(t, repo, "tracked.txt", "one\n")

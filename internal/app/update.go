@@ -85,6 +85,7 @@ func (m *model) overlayPanels() []overlayPanel {
 		&m.userInput.Autopilot,
 		&m.userInput.Evolve,
 		&m.userInput.Plan,
+		&m.userInput.Advisor,
 		&m.userInput.Transcript,
 		&m.userInput.Tasks,
 	}
@@ -229,6 +230,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case input.PlanActionMsg:
 		return m, m.handlePlanAction(msg)
+	case input.AdvisorActionMsg:
+		return m, m.handleAdvisorAction(msg)
 	case input.PlanEditSavedMsg:
 		return m, m.applyPlanEdit(msg.Plan)
 	case planAdvanceMsg:
@@ -626,8 +629,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.onRecapReady(msg)
 	case selfLearnStartedMsg:
 		return m, m.onSelfLearnStarted()
-	case advisorStartedMsg:
-		return m, m.onAdvisorStarted()
+	case advisorChangedMsg:
+		return m, m.onAdvisorChanged()
 	case advisorTaskMsg:
 		return m, m.onAdvisorTask(msg.info)
 	case selflearnTickMsg:

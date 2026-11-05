@@ -248,6 +248,64 @@ func TestAdvisorReviewsDoNotDuplicateHistory(t *testing.T) {
 	}
 }
 
+// A review is history, not listing data: a session that ran one must still show
+// up in the picker, and the picker's activity time must follow the review.
+func TestAdvisorReviewsDoNotHideTheSessionFromThePicker(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(t.TempDir(), "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	if err := store.Start(ctx, StartCommand{SessionID: "s", Time: start}); err != nil {
+		t.Fatal(err)
+	}
+	review := advisorReview("review-1", advisor.TriggerBeforeMerge,
+		advisor.Target{Kind: advisor.TargetDiff}, advisor.StatusChangesRequired,
+		advisor.Finding{ID: "f-1", Severity: advisor.SeverityP1, Title: "no retry", Status: advisor.FindingOpen})
+	reviewedAt := start.Add(time.Minute)
+	appendRecord(t, store, Record{SessionID: "s", Time: reviewedAt, Type: AdvisorReviewed, AdvisorReview: &review})
+
+	items, err := store.List(ctx, "p", ListOptions{})
+	if err != nil {
+		t.Fatalf("List(): %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "s" {
+		t.Fatalf("a session with an advisor review is missing from the picker: %+v", items)
+	}
+	if !items[0].UpdatedAt.Equal(reviewedAt) {
+		t.Errorf("updatedAt = %v, want the review's time %v", items[0].UpdatedAt, reviewedAt)
+	}
+
+	// A finding decision moves the session's activity time too, without adding
+	// anything the picker shows.
+	decidedAt := reviewedAt.Add(time.Minute)
+	appendRecord(t, store, Record{SessionID: "s", Time: decidedAt, Type: AdvisorFindingUpdated, AdvisorFinding: &AdvisorFindingRecord{
+		ReviewID: review.ID, FindingID: "f-1", Status: advisor.FindingDeferred, Note: "later", UpdatedAt: decidedAt,
+	}})
+	items, err = store.List(ctx, "p", ListOptions{})
+	if err != nil {
+		t.Fatalf("List() after a decision: %v", err)
+	}
+	if len(items) != 1 || !items[0].UpdatedAt.Equal(decidedAt) {
+		t.Fatalf("picker after a finding decision = %+v, want the decision's time", items)
+	}
+
+	// The listing is cheap, not lossy: loading the session still replays the
+	// review and the decision.
+	loaded, err := store.Load(ctx, "s")
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if len(loaded.State.Advisor.Reviews) != 1 {
+		t.Fatalf("reviews = %d, want 1", len(loaded.State.Advisor.Reviews))
+	}
+	finding, ok := loaded.State.Advisor.Reviews[0].Finding("f-1")
+	if !ok || finding.Status != advisor.FindingDeferred || finding.Note != "later" {
+		t.Fatalf("finding = %+v, want the recorded decision", finding)
+	}
+}
+
 func appendRecord(t *testing.T, store *Store, rec Record) {
 	t.Helper()
 	if err := store.Append(context.Background(), rec); err != nil {

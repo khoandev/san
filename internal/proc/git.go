@@ -75,6 +75,22 @@ type DiffOptions struct {
 	// MaxBytes caps GitDiff.Diff. Zero uses DefaultGitDiffMaxBytes; a negative
 	// value means no cap at all (the caller has its own bound).
 	MaxBytes int
+	// Paths restricts the read to these pathspecs, so a review can look at one
+	// file instead of the whole worktree. Empty means every changed path. A
+	// path that matches nothing is an empty diff, not an error.
+	Paths []string
+}
+
+// pathspecArgs appends a pathspec restriction to a Git invocation. The "--"
+// separator is what keeps a path that begins with "-" a path and not an
+// option.
+func pathspecArgs(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(paths)+1)
+	args = append(args, "--")
+	return append(args, paths...)
 }
 
 // GitDiff is a read-only diff snapshot with the metadata a review needs to
@@ -118,15 +134,15 @@ func ReadWorkingDiff(ctx context.Context, cwd string, opts DiffOptions) (GitDiff
 	if err != nil {
 		return GitDiff{}, err
 	}
-	raw, err := gitRun(ctx, cwd, diffArgs(base, false)...)
+	raw, err := gitRun(ctx, cwd, diffArgs(base, false, opts.Paths)...)
 	if err != nil {
 		return GitDiff{}, err
 	}
-	stat, err := gitRun(ctx, cwd, diffArgs(base, true)...)
+	stat, err := gitRun(ctx, cwd, diffArgs(base, true, opts.Paths)...)
 	if err != nil {
 		return GitDiff{}, err
 	}
-	untracked, err := gitUntracked(ctx, cwd)
+	untracked, err := gitUntracked(ctx, cwd, opts.Paths)
 	if err != nil {
 		return GitDiff{}, err
 	}
@@ -161,7 +177,7 @@ func ReadCommitDiff(ctx context.Context, cwd, sha string, opts DiffOptions) (Git
 // diffArgs builds the read-only diff invocation. External diff drivers and
 // textconv filters are disabled because both run repository-configured
 // programs: a review must not execute code it was asked to inspect.
-func diffArgs(base string, numstat bool) []string {
+func diffArgs(base string, numstat bool, paths []string) []string {
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U3"}
 	if numstat {
 		args = append(args, "--numstat")
@@ -169,7 +185,7 @@ func diffArgs(base string, numstat bool) []string {
 	if base != "" {
 		args = append(args, base)
 	}
-	return args
+	return append(args, pathspecArgs(paths)...)
 }
 
 // showArgs builds the read-only commit-diff invocation, with the same disabled
@@ -225,8 +241,9 @@ func gitCommit(ctx context.Context, cwd, ref string) (string, bool) {
 
 // gitUntracked lists the untracked files in the worktree. It reads the status
 // rather than adding anything to the index, so the listing is side-effect free.
-func gitUntracked(ctx context.Context, cwd string) ([]string, error) {
-	out, err := gitRun(ctx, cwd, "status", "--porcelain=v2", "-z", "--untracked-files=all")
+func gitUntracked(ctx context.Context, cwd string, paths []string) ([]string, error) {
+	args := append([]string{"status", "--porcelain=v2", "-z", "--untracked-files=all"}, pathspecArgs(paths)...)
+	out, err := gitRun(ctx, cwd, args...)
 	if err != nil {
 		return nil, err
 	}

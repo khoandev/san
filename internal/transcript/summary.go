@@ -78,6 +78,12 @@ func preview(s string) string {
 func (s *Store) buildSummary(ctx context.Context, id string, includeSidechain bool) (Summary, error) {
 	var branch string
 	var sidechain bool
+	// advisorTime is when a review last moved the session. A review is not
+	// listing data — it never reaches the picker — but decoding and projecting
+	// a whole verdict here would both cost more than the listing is worth and
+	// fail outright whenever a payload is one the projector refuses, hiding an
+	// otherwise readable session from the picker.
+	var advisorTime time.Time
 	records := func(yield func(Record, error) bool) {
 		first := true
 		var messages []ai.Message
@@ -93,6 +99,12 @@ func (s *Store) buildSummary(ctx context.Context, id string, includeSidechain bo
 				err = fmt.Errorf("unsupported transcript version %q (want %s)", rec.Version, SchemaVersion)
 			}
 			first = false
+			if err == nil && (rec.Type == AdvisorReviewed || rec.Type == AdvisorFindingUpdated) {
+				if rec.Time.After(advisorTime) {
+					advisorTime = rec.Time
+				}
+				continue
+			}
 			if rec.GitBranch != "" {
 				branch = rec.GitBranch
 			}
@@ -108,8 +120,12 @@ func (s *Store) buildSummary(ctx context.Context, id string, includeSidechain bo
 	if err != nil {
 		return Summary{}, err
 	}
+	updatedAt := tx.UpdatedAt
+	if advisorTime.After(updatedAt) {
+		updatedAt = advisorTime
+	}
 	return Summary{
-		ID: id, FullPath: s.transcriptPath(id), CreatedAt: tx.CreatedAt, UpdatedAt: tx.UpdatedAt,
+		ID: id, FullPath: s.transcriptPath(id), CreatedAt: tx.CreatedAt, UpdatedAt: updatedAt,
 		Title:        coalesce(tx.State.Title, firstUserText(tx.Messages)),
 		LastPrompt:   coalesce(tx.State.LastPrompt, lastUserText(tx.Messages)),
 		MessageCount: len(tx.Messages), GitBranch: branch, IsSidechain: sidechain,

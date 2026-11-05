@@ -227,7 +227,7 @@ func (m *model) Init() tea.Cmd {
 		trigger.StartAsyncHookTicker(),
 		awaitMainNotice(m.mainNotices),
 		awaitSelfLearnStart(m.selfLearnStarts),
-		awaitAdvisorStart(m.advisorStarts),
+		awaitAdvisorChange(m.advisorStarts),
 		awaitAdvisorTask(m.advisorTasks),
 		autoUpdate(m.env.Version, m.services.Setting.AutoUpdate()),
 		refreshModelData(),

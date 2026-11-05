@@ -67,6 +67,7 @@ type Model struct {
 	Evolve     PanelPopup        // /evolve: self-learning skills + memory
 	Autopilot  AutopilotSelector // /autopilot: the session copilot
 	Plan       PlanPanel         // Execution Panel: reviews, runs and steers an approved plan
+	Advisor    AdvisorPanel      // /advisor: reads the review history and acts on one finding
 	Transcript TranscriptViewer  // /history and idle Ctrl+O: inspect session messages and tool results
 	Tasks      TaskViewer        // /tasks: inspect background work and review pending approvals
 
@@ -154,6 +155,7 @@ func New(cwd string, width int, matchFunc suggest.Matcher, deps SelectorDeps) Mo
 		Settings:  NewSettingsSelector(deps.Setting),
 		Autopilot: NewAutopilotSelector(),
 		Plan:      NewPlanPanel(),
+		Advisor:   NewAdvisorPanel(),
 		Evolve:    NewEvolveSelector(deps.Evolve),
 	}
 }

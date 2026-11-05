@@ -662,7 +662,7 @@ func (m *model) runClaimedReview(ctx context.Context, s *advisorSession, req adv
 	defer s.busy.Store(false)
 
 	m.services.Advisor.Indicator.Begin()
-	m.publishAdvisorStarted()
+	m.publishAdvisorChanged()
 
 	review, forkID, err := m.executeAdvisorReview(ctx, s, req)
 	if !s.live.Load() {
@@ -701,6 +701,9 @@ func (m *model) runClaimedReview(ctx context.Context, s *advisorSession, req adv
 func (m *model) publishAdvisorVerdict(stored advisor.Review, forkID string) {
 	m.notifyMain(mainNotice{Display: advisorReviewLine(stored, forkID)})
 	m.noteTaskReview(stored)
+	// The panel may be open while the verdict lands; wake the UI loop so it
+	// repaints with the new review instead of waiting for a keypress.
+	m.publishAdvisorChanged()
 }
 
 // noteTaskReview joins a finished task's verdict back to its tracker item. A
@@ -895,32 +898,6 @@ func firstLineOf(s string) string {
 	return ""
 }
 
-// advisorCommand is /advisor: report the advisor's state, or run one review of
-// the working tree now. The browsing panel arrives with the UI step; this is the
-// manual trigger, and it is what makes the layer usable before a trigger fires.
-func (m *model) advisorCommand(args string) (string, tea.Cmd) {
-	cfg := m.advisorConfig()
-	if !cfg.Enabled() {
-		return "Advisor is off. Set advisor.enable in settings to review changes.", nil
-	}
-	// The runner is normally built when the agent runtime starts, so a review
-	// asked for before the first turn would find none. Build it on demand: this
-	// is a human asking for the advisor, and nothing else will run before the
-	// first turn. wireAdvisor is idempotent, and skipping it while a runner
-	// exists keeps a live review from being torn down by a status read.
-	if m.services.Advisor.session == nil {
-		m.wireAdvisor()
-	}
-	switch strings.TrimSpace(args) {
-	case "", "status":
-		return m.advisorStatusLine(), nil
-	case "review":
-		return m.startWorkingTreeReview()
-	default:
-		return "Usage: /advisor [review|status]", nil
-	}
-}
-
 // advisorStatusLine reports the live configuration and the last verdict.
 func (m *model) advisorStatusLine() string {
 	cfg := m.advisorConfig()
@@ -944,58 +921,35 @@ func (m *model) advisorStatusLine() string {
 	return b.String()
 }
 
-// startWorkingTreeReview reads the working diff and reviews it. The read is
-// bounded and synchronous: this is a human-initiated command, and the diff hash
-// it produces is what the cooldown and the history key on.
-func (m *model) startWorkingTreeReview() (string, tea.Cmd) {
-	if m.services.Advisor.session == nil {
-		return "Advisor has no model to review with.", nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), advisorDiffTimeout)
-	defer cancel()
-	diff, err := proc.ReadWorkingDiff(ctx, m.env.CWD, proc.DiffOptions{MaxBytes: m.advisorConfig().ResolvedMaxDiffBytes()})
-	if err != nil {
-		return "Advisor could not read a diff: " + err.Error(), nil
-	}
-	started := m.requestAdvisorReview(advisor.ReviewInput{
-		Trigger:       advisor.TriggerUserRequest,
-		Target:        advisor.Target{Kind: advisor.TargetDiff, Label: "working tree"},
-		Diff:          diff.Diff,
-		DiffHash:      diff.Hash,
-		Files:         diff.Files,
-		DiffTruncated: diff.Truncated,
-	})
-	if !started {
-		return "Advisor did not start a review: one is already running, or this diff was just reviewed.", nil
-	}
-	return "Advisor is reviewing the working tree…", nil
-}
-
-// publishAdvisorStarted signals the main loop that a review began, so the UI can
-// react on its own goroutine. Non-blocking: a full channel drops the signal and
-// the status bar simply picks the state up on its next repaint.
-func (m *model) publishAdvisorStarted() {
+// publishAdvisorChanged signals the main loop that the review layer's state
+// moved — a review started, or a verdict landed — so the UI can react on its
+// own goroutine. Non-blocking: a full channel drops the signal and the status
+// bar simply picks the state up on its next repaint.
+func (m *model) publishAdvisorChanged() {
 	select {
 	case m.advisorStarts <- struct{}{}:
 	default:
 	}
 }
 
-// advisorStartedMsg wakes the Update loop when a review starts.
-type advisorStartedMsg struct{}
+// advisorChangedMsg wakes the Update loop when a review starts or a verdict
+// lands.
+type advisorChangedMsg struct{}
 
-// awaitAdvisorStart yields an advisorStartedMsg each time a review starts.
-func awaitAdvisorStart(ch <-chan struct{}) tea.Cmd {
+// awaitAdvisorChange yields an advisorChangedMsg each time the review layer
+// changes.
+func awaitAdvisorChange(ch <-chan struct{}) tea.Cmd {
 	return func() tea.Msg {
 		<-ch
-		return advisorStartedMsg{}
+		return advisorChangedMsg{}
 	}
 }
 
-// onAdvisorStarted re-arms the listener. The status bar reads the indicator at
-// render time, so no extra ticker is needed yet.
-func (m *model) onAdvisorStarted() tea.Cmd {
-	return awaitAdvisorStart(m.advisorStarts)
+// onAdvisorChanged re-arms the listener and refreshes an open panel. The status
+// bar reads the indicator at render time, so it needs no extra ticker.
+func (m *model) onAdvisorChanged() tea.Cmd {
+	m.refreshAdvisorPanel()
+	return awaitAdvisorChange(m.advisorStarts)
 }
 
 // marshalAdvisor encodes the session's advisor override for the transcript,
