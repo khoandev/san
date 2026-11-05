@@ -226,6 +226,36 @@ func TestTaskReviewSkippedWhenTheTriggerIsOff(t *testing.T) {
 	}
 }
 
+// With the advisor itself off there is no runner at all, so a finished task
+// costs nothing: no review, no notice, no flag.
+func TestTaskReviewSkippedWhenTheAdvisorIsOff(t *testing.T) {
+	m := newTaskReviewModel(t, blockingAdvisorAnswer)
+	off := false
+	m.env.Advisor.Enable = &off
+	m.wireAdvisor()
+	if m.services.Advisor.session != nil {
+		t.Fatal("a disabled advisor kept its runner")
+	}
+	wireTaskHook(t, m)
+
+	info, queued := completeAgentTask(t, m, "t-dark", "Audit the auth path")
+	if !queued {
+		t.Fatal("the completion hook queued no review")
+	}
+	m.onAdvisorTask(info)
+	if got := len(m.services.Advisor.Store.Reviews()); got != 0 {
+		t.Fatalf("history = %d reviews, want none while the advisor is off", got)
+	}
+	select {
+	case n := <-m.mainNotices:
+		t.Fatalf("a disabled advisor published a notice: %+v", n)
+	default:
+	}
+	if _, _, ok := todo.NeedsReview(taskItem(t, m, "t-dark")); ok {
+		t.Error("a disabled advisor flagged the task")
+	}
+}
+
 func TestTaskReviewIgnoresBashWorkers(t *testing.T) {
 	m := newTaskReviewModel(t, blockingAdvisorAnswer)
 	m.requestTaskReview(task.TaskInfo{ID: "b1", Type: task.TaskTypeBash, Status: task.StatusCompleted})
