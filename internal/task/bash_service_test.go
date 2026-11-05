@@ -23,10 +23,15 @@ func TestBashFailureEvidence(t *testing.T) {
 		{"deadline", "exec sleep 5", true, FailureTimeout, 137},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The deadline has to outlast fork and exec of bash: Start refuses
+			// to run a context that already expired, and on a loaded machine
+			// spawning bash takes tens of milliseconds. A context that dies
+			// before the process exists tests the harness, not the task.
+			timeout := 500 * time.Millisecond
 			ctx, cancel := context.WithCancel(context.Background())
 			if tc.deadline {
 				cancel()
-				ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
+				ctx, cancel = context.WithTimeout(context.Background(), timeout)
 			}
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "bash", "-c", tc.command)
@@ -37,7 +42,7 @@ func TestBashFailureEvidence(t *testing.T) {
 			err := cmd.Wait()
 			contextErr := ctx.Err()
 			task.MarkReaped()
-			task.CompleteWithContext(0, err, contextErr, 30*time.Millisecond)
+			task.CompleteWithContext(0, err, contextErr, timeout)
 			info := task.GetStatus()
 			if info.Status != StatusFailed || info.ExitCode != tc.code || info.Failure.Kind != tc.kind {
 				t.Fatalf("unexpected result: %+v", info)

@@ -10,11 +10,23 @@ import (
 	"github.com/genai-io/san/internal/core/system"
 )
 
+// isolateHome keeps the AGENTS.md chain away from the developer's own home: the
+// global level is read from ~/.san regardless of the temp cwd these tests use,
+// and a real one there would inject instructions into a message the test calls
+// empty.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+}
+
 // A headless run reads the project's instructions, because a repo that answers
 // one way interactively and another way through -p is a repo with two
 // behaviours. They ride on the opening message as a memory reminder, the same
 // shape the interactive path uses.
 func TestAHeadlessRunCarriesTheProjectsInstructions(t *testing.T) {
+	isolateHome(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("always answer PINEAPPLE"), 0o600); err != nil {
 		t.Fatal(err)
@@ -34,6 +46,7 @@ func TestAHeadlessRunCarriesTheProjectsInstructions(t *testing.T) {
 
 // A repo with nothing to say adds nothing — no empty scope, no bare wrapper.
 func TestNothingToSayAddsNothing(t *testing.T) {
+	isolateHome(t)
 	msg := core.UserMessage("hello", nil)
 	out := withInstructions(t.TempDir(), system.MemoryStores{}, msg)
 	if out.Text() != "hello" {
@@ -43,6 +56,7 @@ func TestNothingToSayAddsNothing(t *testing.T) {
 
 // A headless run sees the agent's memory index too, as the interactive one does.
 func TestAHeadlessRunCarriesTheMemoryIndex(t *testing.T) {
+	isolateHome(t)
 	mem := t.TempDir()
 	if err := os.WriteFile(filepath.Join(mem, "MEMORY.md"), []byte("- [Go](go.md) — prefers table tests"), 0o600); err != nil {
 		t.Fatal(err)
