@@ -14,7 +14,7 @@ Slash commands are typed directly in the TUI input box. They trigger local UI ac
 | `/history` | Browse session history and expand tool results |
 | `/help` | Show available commands |
 | `/tools` | Enable / disable tools |
-| `/plan` | Enter plan mode |
+| `/plan` | Enter plan mode (read-only). `/plan <prompt>` also starts planning that request |
 | `/skills` | Manage skill states |
 | `/agents` | Manage agents |
 | `/context` | Show what is filling the context window; `/context limit <window> <output>` \| `reset` overrides it |
@@ -54,6 +54,31 @@ Slash commands are typed directly in the TUI input box. They trigger local UI ac
   effort; it does not enable Codex Ultra's multi-agent mode.
 - `/context` prints a stacked bar and a per-category breakdown into the transcript. The status bar's `X/Y` context figure says how full the window is; `/context` says what filled it. The total is the provider's measured size of the last call — its prompt plus its reply, which the next call sends back. The split across categories is estimated and scaled to that total.
 - `/loop` has a dedicated reference page: see [Loop Scheduling Command](./loop.md).
+
+## Plan Mode
+
+`/plan` is the only Plan Mode entry point; everything after that is driven by
+the Execution Panel.
+
+- `/plan` toggles read-only Plan Mode — the tool gate rejects workspace writes
+  while it is on. `/plan <prompt>` enters Plan Mode and starts planning that
+  request in the same turn.
+- The agent answers with a ` ```plan ` block; the block becomes a draft in the
+  session and the Execution Panel opens on it. A ` ```plan-update ` block
+  refines the draft while it is still under review.
+- The panel's buttons are the whole control surface: **Execute new plan**,
+  **Keep existing context**, **Edit plan**, **Pause** / **Resume**, **Skip
+  step**, **Retry step**, **Restart step**, **Cancel**, **Close**. **e** edits
+  the plan text in place, **Ctrl+S** saves it, **Esc** closes.
+- Execute Mode runs one approved step per turn. A step that reports no
+  verification evidence is marked blocked, the plan pauses, and the panel
+  offers the recovery actions instead of advancing.
+- The plan, its decisions, its journal and its progress live in the session
+  transcript (`transcript.StatePatch.Plan`), so reopening or forking the
+  session restores the panel where it left off. No plan file is ever written.
+
+See [`packages/2-feature/plan.md`](../packages/2-feature/plan.md) for the data
+model and store rules.
 
 ## Automated Tests
 

@@ -561,6 +561,12 @@ type SessionPermissions struct {
 	// ShouldAvoidPrompts is set for headless/async subagents that cannot
 	// show interactive dialogs. When true, ask → deny automatically.
 	ShouldAvoidPrompts bool
+
+	// PlanMode is the /plan read-only posture. It sits above the operation
+	// mode: while it is on, every call that is not provably read-only is
+	// rejected, including in bypass mode. Mode cycling and ResetPosture leave
+	// it alone; entering Execute Mode is the only thing that clears it.
+	PlanMode bool
 }
 
 func NewSessionPermissions() *SessionPermissions {
@@ -595,6 +601,7 @@ func (sp *SessionPermissions) Snapshot() *SessionPermissions {
 		AllowedPatterns:    maps.Clone(sp.AllowedPatterns),
 		WorkingDirectories: slices.Clone(sp.WorkingDirectories),
 		ShouldAvoidPrompts: sp.ShouldAvoidPrompts,
+		PlanMode:           sp.PlanMode,
 	}
 }
 
@@ -616,6 +623,20 @@ func (sp *SessionPermissions) SetMode(mode OperationMode) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	sp.Mode = mode
+}
+
+// SetPlanMode turns the /plan read-only posture on or off.
+func (sp *SessionPermissions) SetPlanMode(on bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.PlanMode = on
+}
+
+// PlanModeActive reports the /plan posture.
+func (sp *SessionPermissions) PlanModeActive() bool {
+	sp.mu.RLock()
+	defer sp.mu.RUnlock()
+	return sp.PlanMode
 }
 
 // CurrentMode reads the active mode under the lock — Snapshot for callers that

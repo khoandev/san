@@ -129,7 +129,9 @@ func (m *model) dispatchSubmission(raw string) tea.Cmd {
 	msg = m.conv.Append(msg)
 	m.userInput.Reset()
 	message, _ := msg.ToMessage()
-	return m.SubmitToAgent(message)
+	// Plan Mode rides on the request itself: the read-only rules and the
+	// ```plan protocol must reach the model even behind a persona override.
+	return m.SubmitToAgent(m.applyPlanModeRules(message))
 }
 
 // runSlashCommandIfMatched returns (cmd, true) if `raw` is a slash command

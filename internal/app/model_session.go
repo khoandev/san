@@ -147,6 +147,9 @@ func (m *model) buildSessionRecord() *transcript.Record {
 			Title: new(title), LastPrompt: new(session.ExtractLastUserText(messages)),
 			Mode: new(m.env.SessionMode()), AutoPilot: new(marshalAutoPilot(m.env.AutoPilot)),
 			Group: new(currentMembership()), Tasks: new(m.services.Tracker.Export()),
+			// The plan is session state, like the tasks: no file of its own, and
+			// a resume restores the plan, its progress and its panel from here.
+			Plan: new(m.plan.Snapshot()),
 		}}
 }
 
@@ -217,6 +220,10 @@ func (m *model) restoreHistory(sess *session.History) {
 	if len(sess.Tasks) > 0 {
 		m.services.Tracker.Import(sess.Tasks)
 	}
+
+	// Plan Mode follows the conversation it belonged to: the mode, every plan
+	// the session produced, and the step the executor stopped on.
+	m.restorePlanState(sess.Plan)
 
 	// Session-specific settings never inherit the previous conversation's goal.
 	m.beforeGoal = nil
@@ -310,6 +317,7 @@ func (m *model) forkSession() (string, error) {
 	m.replaceSession(opened)
 	m.releaseGroupOnSwitch()
 	m.services.Agent.SetMessages(forked.Messages)
+	m.restorePlanState(forked.Plan)
 	// Same storage switch as loadSessionByID: clear the tracker so
 	// initTaskStorage adopts the fork's directory, then re-import the tasks
 	// that SetStorageDir's disk load replaced.
@@ -353,6 +361,7 @@ func (m *model) clearSession() error {
 	m.grp = groupState{polling: m.grp.polling}
 	m.env.SessionName = ""
 	m.earlyNotices = nil
+	m.resetPlanState()
 	m.pendingMessages.Discard()
 	m.beforeGoal = nil
 	m.env.AutoPilot = autopilotWithoutSessionFields(m.services.Setting.Snapshot().AutoPilot)

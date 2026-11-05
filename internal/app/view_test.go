@@ -20,6 +20,7 @@ import (
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/hook"
 	"github.com/genai-io/san/internal/llm"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/reminder"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/subagent"
@@ -239,6 +240,7 @@ func fixedComposerModel(width, height int) *model {
 	m := &model{
 		env:       env{Width: width, Height: height, Ready: true},
 		autopilot: new(atomic.Pointer[autopilotRuntime]),
+		plan:      plan.NewStore(),
 		conv:      conv.NewModel(width),
 		userInput: input.New("", width, func(string) []suggest.Suggestion {
 			return []suggest.Suggestion{{Name: "help", Description: "Show commands"}, {Name: "history", Description: "Inspect conversation"}}

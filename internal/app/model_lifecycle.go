@@ -17,6 +17,7 @@ import (
 	"github.com/genai-io/san/internal/app/trigger"
 	"github.com/genai-io/san/internal/broker"
 	"github.com/genai-io/san/internal/hook"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/task"
 	"github.com/genai-io/san/internal/todo"
@@ -97,6 +98,7 @@ func newBaseModel() model {
 		reviewerEscalations: new(atomic.Int64),
 		pendingDecisions:    new(sync.Map),
 		autopilot:           new(atomic.Pointer[autopilotRuntime]),
+		plan:                plan.NewStore(),
 	}
 }
 

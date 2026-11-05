@@ -153,6 +153,14 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 	log.Logger().Sugar().Debugf("OnTurnEnd: starting queueLen=%d", m.userInput.Queue.Len())
 	commitCmds := m.CommitMessages()
 
+	// Plan Mode reads this turn's final text: a ```plan block becomes the draft
+	// the Execution Panel shows, a ```plan-step block settles the running step.
+	// The store change is written by RecordState below; the returned command
+	// only starts the next step, after this turn's finalization.
+	if cmd := m.onPlanTurn(result); cmd != nil {
+		commitCmds = append(commitCmds, cmd)
+	}
+
 	// Cancellation must finish cleanup and persistence before admitting another
 	// turn. turnFinalizedMsg resumes explicitly queued user input after the
 	// receipt settles; it does not drain cron/hook queues or revive autopilot.

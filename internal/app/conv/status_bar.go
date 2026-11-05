@@ -222,6 +222,10 @@ type OperationModeParams struct {
 	ModeHint          bool     // show "(shift+tab to cycle)": briefly, after start or a switch
 	GroupWaiting      int      // member messages waiting for the person's next input
 	GroupApproval     []string // other members whose turn waits on their user's approval
+	// PlanMode is the Plan Mode badge: "plan" while the session is read-only,
+	// "execute" while it runs an approved plan, "" otherwise. The operation
+	// mode cannot express either posture.
+	PlanMode string
 }
 
 // RenderModeStatus renders the combined mode status line.
@@ -230,6 +234,7 @@ func RenderModeStatus(params OperationModeParams) string {
 	if params.ModeHint {
 		mode += hint
 	}
+	mode = withPlanBadge(mode, params.PlanMode)
 	left := withGroupStatus(mode, params)
 	if params.Width <= 0 {
 		return left
@@ -245,6 +250,26 @@ func RenderModeStatus(params OperationModeParams) string {
 
 	gap := max(2, params.Width-lipgloss.Width(left)-lipgloss.Width(right)-1)
 	return left + strings.Repeat(" ", gap) + right
+}
+
+// withPlanBadge puts the Plan Mode badge beside the operation mode — same row,
+// because both answer "how is this session running?".
+func withPlanBadge(mode, planMode string) string {
+	var icon, label string
+	var clr kit.AdaptiveColor
+	switch planMode {
+	case "plan":
+		icon, label, clr = "✎", " plan", kit.CurrentTheme.Focus
+	case "execute":
+		icon, label, clr = "▶", " execute", kit.CurrentTheme.Success
+	default:
+		return mode
+	}
+	badge := lipgloss.NewStyle().Foreground(clr).Render(icon + label)
+	if mode == "" {
+		return "  " + badge // the indent the mode indicator would have
+	}
+	return mode + "  " + badge
 }
 
 // withGroupStatus puts the group after the mode: who this session is sits

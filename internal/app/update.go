@@ -84,6 +84,7 @@ func (m *model) overlayPanels() []overlayPanel {
 		&m.userInput.Settings,
 		&m.userInput.Autopilot,
 		&m.userInput.Evolve,
+		&m.userInput.Plan,
 		&m.userInput.Transcript,
 		&m.userInput.Tasks,
 	}
@@ -105,6 +106,8 @@ type initialPromptMsg string
 // branch of it: an overlay closing, which is what restarts a held scrollback
 // print — whichever of the sixteen panels it was, and however it was
 // dismissed — and, in a group, the loop starting and this member's state.
+// (The Execution Panel is the seventeenth: it opens itself when a plan is
+// ready, a step blocks, or a plan finishes.)
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Cancellation can dismiss a modal before dispatch, so observe it first.
 	_, overlayWasActive := m.activeOverlay()
@@ -224,6 +227,12 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case historyLoadedMsg:
 		m.historyLoaded(msg)
 		return m, nil
+	case input.PlanActionMsg:
+		return m, m.handlePlanAction(msg)
+	case input.PlanEditSavedMsg:
+		return m, m.applyPlanEdit(msg.Plan)
+	case planAdvanceMsg:
+		return m, m.planNextStep()
 	case input.TaskStopMsg:
 		return m, m.stopViewedTask(msg)
 	case input.TaskContinueMsg:

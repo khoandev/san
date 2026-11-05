@@ -34,6 +34,7 @@ import (
 	"github.com/genai-io/san/internal/app/trigger"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/core/system"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool/evolve"
@@ -70,11 +71,15 @@ type model struct {
 	suggestOwed bool
 	// drainedThisStep caps OnStepEnd to one queued message per step
 	// (PostTool fires once per tool). Reset each step in OnInference (PostInfer).
-	drainedThisStep   bool
-	selfLearnStarts   chan struct{}        // fork goroutine → Update loop: a review started (start the spinner)
-	systemInput       trigger.Model        // Source 3: system events (cron/hooks/watcher)
-	conv              conv.Model           // Agent Outbox: conversation + output rendering
-	env               env                  // Shared app state: provider, session, permission, plan, config
+	drainedThisStep bool
+	selfLearnStarts chan struct{} // fork goroutine → Update loop: a review started (start the spinner)
+	systemInput     trigger.Model // Source 3: system events (cron/hooks/watcher)
+	conv            conv.Model    // Agent Outbox: conversation + output rendering
+	env             env           // Shared app state: provider, session, permission, plan, config
+	// plan is this session's Plan Mode state: the mode, every plan it produced,
+	// and the active plan's step progress. It is persisted inside the transcript
+	// (transcript.StatePatch.Plan), never in a file of its own.
+	plan              *plan.Store
 	services          services             // Domain service singletons, injected at construction
 	learnedStores     *learnedStoreContext // live cwd/settings source for /evolve inventories
 	subscriptionUsage subscriptionUsageState

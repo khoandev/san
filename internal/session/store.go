@@ -289,6 +289,7 @@ func (s *Store) readHistory(ctx context.Context, sessionID string, includeCompac
 		ToolDetails: tx.ToolDetails,
 		Messages:    tx.Messages,
 		Tasks:       tx.State.Tasks,
+		Plan:        tx.State.Plan,
 	}
 
 	if sess.Metadata.Title == "" {

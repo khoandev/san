@@ -47,6 +47,7 @@ Agent, persistence, and orchestration:
 | `internal/group` | `feature` | Groups of sessions on one machine: member files, per-member inboxes, online status from pid and process start time. |
 | `internal/cron` | `feature` | Cron definitions, storage, service, loop. |
 | `internal/selflearn` | `feature` | Background self-learning reviewer and restricted skill-update surface. |
+| `internal/plan` | `feature` | Plan Mode: the session-scoped plan store, the `plan` / `plan-step` / `plan-update` wire protocol, and the plan editor's text format. |
 
 Extension surfaces:
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/genai-io/san/internal/core"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/todo"
 	"github.com/genai-io/san/internal/transcript"
 	"github.com/genai-io/sdk-go/pkg/ai"
@@ -21,6 +22,9 @@ type History struct {
 	Tasks       []todo.Item
 	Notices     []transcript.NoticeRecord
 	ToolDetails map[string]transcript.ToolDetailsRecord
+	// Plan is the session's Plan Mode state, restored with the conversation so
+	// an interrupted plan reopens at the step where it stopped.
+	Plan plan.State
 }
 
 // ChatRows projects the conversation for display. It is never a persistence source.

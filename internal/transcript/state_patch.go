@@ -26,6 +26,9 @@ func (p StatePatch) applyTo(state *State) {
 	if p.Tasks != nil {
 		state.Tasks = *p.Tasks
 	}
+	if p.Plan != nil {
+		state.Plan = p.Plan.Clone()
+	}
 }
 
 // changesFrom drops unchanged fields and owns the task payload retained in the cache.
@@ -64,7 +67,20 @@ func (p StatePatch) changesFrom(current State) (*StatePatch, error) {
 			p.Tasks = tasks
 		}
 	}
-	if p.Title == nil && p.LastPrompt == nil && p.Mode == nil && p.AutoPilot == nil && p.Group == nil && p.Tasks == nil {
+	if p.Plan != nil {
+		// Own a detached copy so a later UI mutation cannot rewrite a record
+		// that was already appended to the log.
+		owned := p.Plan.Clone()
+		if owned.Empty() && current.Plan.Empty() {
+			p.Plan = nil
+		} else if reflect.DeepEqual(owned.Plans, current.Plan.Plans) && owned.Mode == current.Plan.Mode &&
+			owned.ActiveID == current.Plan.ActiveID && owned.DraftID == current.Plan.DraftID {
+			p.Plan = nil
+		} else {
+			p.Plan = &owned
+		}
+	}
+	if p.Title == nil && p.LastPrompt == nil && p.Mode == nil && p.AutoPilot == nil && p.Group == nil && p.Tasks == nil && p.Plan == nil {
 		return nil, nil
 	}
 	return &p, nil

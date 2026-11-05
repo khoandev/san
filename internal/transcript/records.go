@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/todo"
 	"github.com/genai-io/san/internal/tool/toolresult"
 	"github.com/genai-io/sdk-go/pkg/ai"
@@ -99,6 +100,7 @@ type StatePatch struct {
 	AutoPilot  *string      `json:"autoPilot,omitempty"`
 	Group      *string      `json:"group,omitempty"`
 	Tasks      *[]todo.Item `json:"tasks,omitempty"`
+	Plan       *plan.State  `json:"plan,omitempty"`
 }
 
 // SessionStart describes a new identity and its initial runtime configuration.

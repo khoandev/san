@@ -111,6 +111,10 @@ type SlashCommandEnv struct {
 	SideQuestion func(question string) tea.Cmd
 	// Recap answers /recap without the main agent seeing it.
 	Recap func() tea.Cmd
+	// PlanCommand runs /plan: it switches the session to read-only Plan Mode,
+	// and with a prompt it also starts planning that request. The app owns the
+	// plan store and the Execution Panel, so the command only reports back.
+	PlanCommand func(prompt string) (string, tea.Cmd)
 }
 
 type SlashCommandController struct {
@@ -157,7 +161,20 @@ func builtinCommandHandlers() map[string]slashCommandHandler {
 		"selflearn-demo": (*SlashCommandController).handleSelflearnDemoCommand,
 		"btw":            (*SlashCommandController).handleBtwCommand,
 		"recap":          (*SlashCommandController).handleRecapCommand,
+		"plan":           (*SlashCommandController).handlePlanCommand,
 	}
+}
+
+// handlePlanCommand is the one Plan Mode entry point: /plan switches the
+// session to read-only planning, and /plan <prompt> also starts planning that
+// request. Everything after the plan is ready is driven from the Execution
+// Panel, not from further commands.
+func (c *SlashCommandController) handlePlanCommand(_ context.Context, args string) (string, tea.Cmd, error) {
+	if c.env.PlanCommand == nil {
+		return "Plan Mode is unavailable.", nil, nil
+	}
+	result, cmd := c.env.PlanCommand(args)
+	return result, cmd, nil
 }
 
 // IsSideCommand reports requests that run outside the main agent, even mid-turn.

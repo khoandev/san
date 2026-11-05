@@ -52,6 +52,7 @@ func builtinCommands() []Info {
 		{Name: "workflow", Description: "List, preview, or run saved workflows (/workflow list|show|run)"},
 		{Name: "search", Description: "Select search engine for web search"},
 		{Name: "settings", Description: "Configure appearance, permissions and other settings"},
+		{Name: "plan", Description: "Plan Mode: plan read-only, then run the approved plan (/plan [prompt])"},
 		{Name: "evolve", Description: "Configure self-learning (skills & memory)"},
 		{Name: "autopilot", Description: "Configure the autopilot copilot (steers, system prompt, mission)"},
 		{Name: "goal", Description: "State a goal and let autopilot drive until it's met (/goal <text>, /goal clear)"},

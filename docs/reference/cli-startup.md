@@ -8,7 +8,7 @@
 |------|----------|
 | `san` | Launch interactive TUI |
 | `san -p "prompt"` | Non-interactive: print response to stdout, no TUI |
-| `san --plan "task"` | Start in plan mode (read-only) |
+| `san --persona NAME` | Activate a persona on startup |
 | `san -c` | Resume the most recent session |
 | `san -r` | Pick a session from a list |
 | `san -r <id>` | Resume a specific session directly |
@@ -22,7 +22,9 @@
 
 - **Interactive mode**: full TUI with input box, streaming output, and status bar.
 - **Print mode (`-p`)**: no TUI; response is written to stdout line by line.
-- **Plan mode**: status bar shows `[PLAN MODE]`; write tools are blocked.
+- **Plan mode**: entered with `/plan` inside the TUI — there is no startup flag
+  for it. The status bar shows a `✎ plan` badge while planning and `▶ execute`
+  while running an approved plan; write tools are blocked while planning.
 - **Session resume (`-r`)**: a scrollable session picker is shown before the TUI starts.
 
 ## Automated Tests
@@ -63,11 +65,14 @@ sleep 5
 tmux capture-pane -t t_cli -p
 # Expected: "2" on stdout; no TUI launched
 
-# Test 3: Plan mode startup
-tmux send-keys -t t_cli 'san --plan "analyze this project"' Enter
+# Test 3: Plan mode via /plan
+tmux send-keys -t t_cli 'san' Enter
+sleep 2
+tmux send-keys -t t_cli '/plan analyze this project' Enter
 sleep 2
 tmux capture-pane -t t_cli -p
-# Expected: [PLAN MODE] visible in status bar
+# Expected: the "plan" badge in the status bar; the Execution Panel opens once
+# the agent returns a ```plan block
 tmux send-keys -t t_cli C-c
 
 # Test 4: Session resume picker

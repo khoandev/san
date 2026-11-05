@@ -485,6 +485,7 @@ func (s *Store) loadLocked(ctx context.Context, id string) (*Transcript, error) 
 		task.Blocks = slices.Clone(task.Blocks)
 		task.BlockedBy = slices.Clone(task.BlockedBy)
 	}
+	c.latestState.Plan = tx.State.Plan.Clone()
 	c.messages = tx.Messages
 	c.warmed = true
 	if s.sessions == nil {

@@ -47,6 +47,7 @@ visible right next to its original. Every page follows [`TEMPLATE.md`](TEMPLATE.
 | [`inspector`](2-feature/inspector.md) | Local web UI for transcript replay; SSE live-tail. |
 | [`llm`](2-feature/llm.md) | Provider registry, model store, and the per-turn `*ai.Client` the agent loop streams through. |
 | [`mcp`](2-feature/mcp.md) | MCP client + transport + `Caller` for external tool servers. |
+| [`plan`](2-feature/plan.md) | Plan Mode's plan document, step machine, and session-scoped store; the `plan` block protocol. |
 | [`plugin`](2-feature/plugin.md) | Plugin loader / installer / marketplace; pushes contributions to other feature packages. |
 | [`reminder`](2-feature/reminder.md) | `<system-reminder>` queue with provider re-emission. |
 | [`search`](2-feature/search.md) | Pluggable web search backends behind a small `Provider` interface. |

@@ -3,6 +3,7 @@ package transcript
 import (
 	"time"
 
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/todo"
 	"github.com/genai-io/sdk-go/pkg/ai"
 )
@@ -36,6 +37,11 @@ type State struct {
 	Group string
 
 	Tasks []todo.Item
+
+	// Plan is the session's Plan Mode state: the current mode, every plan the
+	// session produced (superseded ones included), and the active plan's step
+	// progress. It lives in the transcript — never in a plan file.
+	Plan plan.State
 }
 
 type Summary struct {

@@ -75,6 +75,14 @@ func (s *Data) HasPermissionToUseTool(toolName string, args map[string]any, sess
 		return decide(perm.Reject, "deny rule: "+pattern)
 	}
 
+	// ── Step 1.5: Plan Mode ──
+	// /plan is a read-only posture above every operation mode. It rejects
+	// anything not provably read-only before bypass can permit it, and it
+	// never prompts: a prompt invites the model to retry a write.
+	if session != nil && session.PlanMode && !PlanModeAllows(toolName, args) {
+		return decide(perm.Reject, "plan mode: read-only")
+	}
+
 	// ── Step 2: Circuit breaker ──
 	// The one check no mode may skip: a recursive removal of the filesystem
 	// root or the home directory. A guard against model error, not policy.
@@ -176,6 +184,24 @@ func ModeDefault(toolName string, mode OperationMode) PermissionDecision {
 }
 
 // ModeDefaultForCall is ModeDefault with the parsed tool input available:
+// PlanModeAllows reports whether a call is provably read-only and therefore
+// allowed in Plan Mode. Anything the gate cannot prove is a read — including
+// every MCP tool and every unknown extension tool — is refused.
+func PlanModeAllows(toolName string, args map[string]any) bool {
+	if perm.IsSafeTool(toolName) {
+		return true
+	}
+	if cmd, ok := args["command"].(string); ok && IsReadOnlyShellCommand(toolName, cmd) {
+		return true
+	}
+	if toolName == "Cron" {
+		if action, ok := args["action"].(string); ok && action == "list" {
+			return true
+		}
+	}
+	return false
+}
+
 // a provably read-only Bash invocation (search, listing, git inspection) is
 // treated like a safe tool, so it runs without prompting and stays usable in
 // read-only (explore) mode. Deny/ask rules and confirmation checks run

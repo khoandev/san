@@ -537,6 +537,7 @@ func (m model) renderModeStatus() string {
 	window, budget := kit.GetContextLimits(m.services.LLM.Store(), m.env.CurrentModel)
 	return conv.RenderModeStatus(conv.OperationModeParams{
 		Mode:              m.env.OperationMode,
+		PlanMode:          m.planStatusLabel(),
 		ContextTokens:     m.env.ContextTokens,
 		ContextWindow:     window,
 		ContextBudget:     budget,
