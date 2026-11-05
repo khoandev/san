@@ -93,9 +93,10 @@ them.
 
 Provably read-only Bash invocations short-circuit to allow at the
 mode-default step (`setting.IsReadOnlyBashCommand`): every command in the
-chain must be on the read-only list (`rg`, `grep`, `find`, `ls`, read-only
-`git`, …), named without a path, with no output redirection, substitution, or
-env-var prefix.
+chain must be on the read-only list (`rg`, `grep`, `find`, `ls`, `cat`,
+`head`, text filters such as `sort`/`uniq`/`jq`, `echo`/`printf` banners, and
+read-only `git`, …), named without a path, with no output redirection
+(`/dev/null` excepted), substitution, or env-var prefix.
 This replaces the retired Grep/Glob tools — search runs through Bash
 without approval prompts, in every mode including explore. Deny/ask rules
 and the safety checks still run first and override it. The safety checks
@@ -114,6 +115,18 @@ and explicit `show`, `exists`, or `list` modes, not metadata mutations such as
 `expire`, `delete`, `drop`, or `write`. Use `reflog show` for queries with options.
 These checks live in `bash_ast.go`; `bash_git_options_test.go` and
 `bash_git_mutation_test.go` cover path options and metadata query/write forms.
+
+## Plan Mode
+
+`/plan` sets a session posture above every operation mode
+(`setting.PlanModeAllows`). It refuses anything not provably a read — never
+prompts, because a prompt invites a model that is planning to retry a write —
+and it does not narrow the read side: the read tools, read-only Bash as above,
+`Cron` listing, and mounted MCP tools are all usable while planning. A mounted
+tool arrives with no annotation San can read, so its leading name verb decides:
+`write_file`, `create_issue`, and `delete_*` are refused;
+`codegraph_explore`, `read_file`, and `get_*` run. Deny rules still run before
+Plan Mode, so a denied read stays denied.
 
 ## Subagent Permission Resolution
 
