@@ -135,6 +135,12 @@ live state.
   the conversation; no plan file is written.
 - Entering Plan Mode flips the session permission posture to read-only; leaving
   it restores ordinary permissions and pauses a running plan.
+- The gate (`setting.PlanModeAllows`) refuses only what provably writes: the
+  read tools, read-only shell commands (pipelines and `echo` banners included,
+  expansions and redirections excepted), and mounted MCP tools whose leading
+  name verb is a read all stay usable. A mounted tool San built nothing for is
+  judged by that name alone — `write_file` is refused, `codegraph_explore` is
+  not.
 - A restored plan with a step left `in_progress` sets `AwaitingStepChoice` so
   the panel can ask continue / restart / skip instead of silently resuming.
 
@@ -149,6 +155,8 @@ internal/app/plan_mode_test.go        — /plan, panel wiring, session round-tri
                                         supersede vs keep, blocked step.
 internal/app/input/plan_panel_test.go — which buttons each state offers, the
                                         editor save path.
+internal/setting/plan_mode_test.go    — what the read-only gate refuses and
+                                        what it lets through.
 ```
 
 ## See Also

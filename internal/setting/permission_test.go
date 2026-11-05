@@ -850,8 +850,13 @@ func TestDontAskMode(t *testing.T) {
 		},
 		{
 			"dontAsk: bash auto-denied",
-			"Bash", map[string]any{"command": "echo hello"},
+			"Bash", map[string]any{"command": "touch hello"},
 			perm.Reject,
+		},
+		{
+			"dontAsk: read-only bash still allowed",
+			"Bash", map[string]any{"command": "ls -la"},
+			perm.Permit,
 		},
 		{
 			"dontAsk: safe tools still allowed",

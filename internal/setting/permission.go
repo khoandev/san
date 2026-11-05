@@ -183,10 +183,11 @@ func ModeDefault(toolName string, mode OperationMode) PermissionDecision {
 	}
 }
 
-// ModeDefaultForCall is ModeDefault with the parsed tool input available:
 // PlanModeAllows reports whether a call is provably read-only and therefore
-// allowed in Plan Mode. Anything the gate cannot prove is a read — including
-// every MCP tool and every unknown extension tool — is refused.
+// allowed in Plan Mode. Anything the gate cannot prove is a read is refused —
+// but "cannot prove" must not mean "blocks the work": inspecting the tree
+// (read-only shell), a search or code-graph MCP server, and the dedicated read
+// tools all stay available while planning.
 func PlanModeAllows(toolName string, args map[string]any) bool {
 	if perm.IsSafeTool(toolName) {
 		return true
@@ -199,7 +200,58 @@ func PlanModeAllows(toolName string, args map[string]any) bool {
 			return true
 		}
 	}
-	return false
+	return planModeReadOnlyForeignTool(toolName)
+}
+
+// planModeWriteVerbs are the leading words that make a mounted tool a writer.
+// A mounted server ships no annotation San can read, so the tool name is the
+// signal: write_*, create_*, delete_* are writers, while get_*, list_*,
+// search_*, explore_* and anything unrecognized only read. Only the first word
+// counts, so "list_posts" stays readable.
+var planModeWriteVerbs = map[string]bool{
+	"add": true, "append": true, "apply": true, "archive": true,
+	"chmod": true, "chown": true, "clear": true, "commit": true, "copy": true,
+	"create": true, "delete": true, "deploy": true, "destroy": true, "drop": true,
+	"edit": true, "exec": true, "execute": true, "format": true, "import": true,
+	"init": true, "insert": true, "install": true, "invoke": true, "kill": true,
+	"merge": true, "migrate": true, "mkdir": true, "modify": true, "move": true,
+	"mutate": true, "patch": true, "post": true, "publish": true, "purge": true,
+	"push": true, "put": true, "remove": true, "rename": true, "reset": true,
+	"restart": true, "rmdir": true, "run": true, "save": true, "send": true,
+	"set": true, "spawn": true, "start": true, "stop": true, "store": true,
+	"sync": true, "tag": true, "touch": true, "truncate": true, "uninstall": true,
+	"update": true, "upload": true, "upsert": true, "write": true,
+}
+
+// planModeReadOnlyForeignTool reports whether a tool San did not build is
+// read-only by its name. MCP tools arrive as mcp__<server>__<tool>, so the
+// tool's leading verb is visible in the name and a search, explore, or lookup
+// stays callable in Plan Mode while a write does not.
+func planModeReadOnlyForeignTool(toolName string) bool {
+	name := strings.ToLower(toolName)
+	rest, ok := strings.CutPrefix(name, "mcp__")
+	if !ok || rest == "" {
+		return false
+	}
+	tool := rest
+	if i := strings.LastIndex(rest, "__"); i >= 0 {
+		tool = rest[i+2:]
+	}
+	if tool == "" {
+		return false
+	}
+	verb := tool
+	if i := strings.IndexFunc(tool, func(r rune) bool { return r == '_' || r == '-' || r == '.' }); i >= 0 {
+		verb = tool[:i]
+	}
+	if planModeWriteVerbs[verb] {
+		return false
+	}
+	// A plural keeps the verb's meaning: "deletes" is still a write.
+	if singular, ok := strings.CutSuffix(verb, "s"); ok && planModeWriteVerbs[singular] {
+		return false
+	}
+	return true
 }
 
 // a provably read-only Bash invocation (search, listing, git inspection) is

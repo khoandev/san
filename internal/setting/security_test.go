@@ -88,6 +88,12 @@ func TestIsReadOnlyBashCommand(t *testing.T) {
 		"which rg",
 		"rg foo 2>/dev/null",
 		"stat -f%z go.sum",
+		// A survey command is one chain of inspections, an echo banner
+		// included: this is what planning actually runs.
+		`ls docs/packages/ docs/concepts/ docs/reference/ 2>/dev/null | head -80; echo "---"; ls internal/`,
+		"cat a.txt | sort | uniq -c | sort -rn | head -20",
+		"jq -r '.name' package.json",
+		"date",
 	}
 	for _, cmd := range readOnly {
 		if !IsReadOnlyBashCommand(cmd) {
@@ -100,7 +106,8 @@ func TestIsReadOnlyBashCommand(t *testing.T) {
 		"rm -rf /tmp/x",
 		"go build ./...",
 		"npm install",
-		"echo hi",
+		"echo hi > out.txt",
+		"sort -o sorted.txt input.txt",
 		"sed -i s/a/b/ file.go",
 		"git commit -m msg",
 		"git push origin main",

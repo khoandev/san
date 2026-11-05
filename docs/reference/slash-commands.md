@@ -63,6 +63,11 @@ the Execution Panel.
 - `/plan` toggles read-only Plan Mode — the tool gate rejects workspace writes
   while it is on. `/plan <prompt>` enters Plan Mode and starts planning that
   request in the same turn.
+- Reading stays open while planning: the read tools, read-only shell commands
+  (`ls`, `rg`, `git status`, pipes and `echo` banners included), and mounted MCP
+  tools whose name is a read (`codegraph_explore`, `read_file`, `get_*`) all
+  run. Writes, edit tools, and MCP tools named `write_*` / `create_*` /
+  `delete_*` are rejected with `plan mode: read-only`.
 - The agent answers with a ` ```plan ` block; the block becomes a draft in the
   session and the Execution Panel opens on it. A ` ```plan-update ` block
   refines the draft while it is still under review.

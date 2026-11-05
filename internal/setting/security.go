@@ -206,6 +206,35 @@ var readOnlyBashCommands = map[string]bool{
 	"dirname":  true,
 	"realpath": true,
 	"readlink": true,
+	// Text filters and formatters: they only produce stdout, and stdout is
+	// only a file when a redirect names one, which the redirect guard rejects.
+	"echo":    true,
+	"printf":  true,
+	"sort":    true,
+	"uniq":    true,
+	"cut":     true,
+	"tr":      true,
+	"nl":      true,
+	"tac":     true,
+	"rev":     true,
+	"comm":    true,
+	"join":    true,
+	"paste":   true,
+	"column":  true,
+	"diff":    true,
+	"cmp":     true,
+	"od":      true,
+	"strings": true,
+	"jq":      true,
+	// Digests and identity: inspection only.
+	"shasum":    true,
+	"md5sum":    true,
+	"sha256sum": true,
+	"date":      true,
+	"whoami":    true,
+	"id":        true,
+	"uname":     true,
+	"hostname":  true,
 }
 
 // readOnlyBashUnsafeFlags marks flags that let an otherwise read-only command
@@ -215,6 +244,8 @@ var readOnlyBashUnsafeFlags = map[string][]string{
 	"fd":   {"-x", "--exec", "-X", "--exec-batch"},
 	"rg":   {"--pre", "--hostname-bin"},
 	"tree": {"-o"},
+	"jq":   {"--in-place"},
+	"sort": {"-o", "--output", "--compress-program"},
 }
 
 // IsReadOnlyBashCommand reports whether a bash invocation is provably
@@ -233,7 +264,9 @@ func IsReadOnlyBashCommand(cmd string) bool {
 		return false
 	}
 	file := parseBashAST(cmd)
-	if file == nil {
+	// An expansion runs text no one inspected: "$HOME" and "$((1+2))" are not
+	// literal arguments, so the command is not provably an inspection.
+	if file == nil || expandsAtRunTime(file) {
 		return false
 	}
 	commands := extractCommandsAST(file)

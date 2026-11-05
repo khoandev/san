@@ -26,6 +26,9 @@ func TestPlanModeRejectsWorkspaceWrites(t *testing.T) {
 		{"PowerShell", map[string]any{"command": "Set-Content a.txt x"}},
 		{"Agent", map[string]any{"prompt": "do it"}},
 		{"mcp__filesystem__write_file", map[string]any{"path": "a"}},
+		{"mcp__github__create_issue", map[string]any{"title": "x"}},
+		{"mcp__git__commit", map[string]any{"message": "x"}},
+		{"mcp__codegraph__delete_graph", map[string]any{}},
 	}
 	for _, tc := range cases {
 		got := d.HasPermissionToUseTool(tc.tool, tc.args, session)
@@ -49,6 +52,14 @@ func TestPlanModeAllowsReadsAndQuestions(t *testing.T) {
 		{"Bash", map[string]any{"command": "ls -la"}},
 		{"Bash", map[string]any{"command": "git status"}},
 		{"Bash", map[string]any{"command": "rg plan internal"}},
+		// Inspecting the tree while planning is the job, banners and pipes
+		// included.
+		{"Bash", map[string]any{"command": `ls docs/ 2>/dev/null | head -80; echo "---"; ls internal/`}},
+		// A read-only MCP server is how planning sees a code graph or a
+		// library's docs; only the writers are refused.
+		{"mcp__codegraph__codegraph_explore", map[string]any{"query": "plan store"}},
+		{"mcp__context7__resolve-library-id", map[string]any{"libraryName": "bubbletea"}},
+		{"mcp__filesystem__read_file", map[string]any{"path": "a.go"}},
 	}
 	for _, tc := range cases {
 		if got := d.HasPermissionToUseTool(tc.tool, tc.args, session); got.Behavior == perm.Reject {
@@ -64,6 +75,29 @@ func TestPlanModeOutranksBypassAndAskRules(t *testing.T) {
 	got := d.HasPermissionToUseTool("Write", map[string]any{"file_path": "a"}, session)
 	if got.Behavior != perm.Reject || got.Reason != "plan mode: read-only" {
 		t.Fatalf("bypass escaped plan mode: %+v", got)
+	}
+}
+
+// A mounted tool's name is the only signal Plan Mode has, so the leading verb
+// decides: reads pass, writers are refused, and a file path or a noun later in
+// the name never flips the verdict.
+func TestPlanModeMountedToolVerdicts(t *testing.T) {
+	cases := map[string]bool{
+		"mcp__codegraph__codegraph_explore": true,
+		"mcp__x__list_posts":                true,
+		"mcp__x__get_settings":              true,
+		"mcp__x__search_code":               true,
+		"mcp__x__write_file":                false,
+		"mcp__x__updates":                   false,
+		"mcp__x__drop_table":                false,
+		"mcp__x__exec_command":              false,
+		"Bash":                              false,
+		"Read":                              false,
+	}
+	for tool, want := range cases {
+		if got := planModeReadOnlyForeignTool(tool); got != want {
+			t.Errorf("planModeReadOnlyForeignTool(%q) = %v, want %v", tool, got, want)
+		}
 	}
 }
 
