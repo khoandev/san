@@ -31,6 +31,7 @@ Slash commands are typed directly in the TUI input box. They trigger local UI ac
 | `/loop` | Schedule recurring or one-shot prompts and manage loop jobs |
 | `/workflow` | List saved workflows; `show <name>` previews, `run <name> [key=value …]` starts, and `stop [task-id]` cancels one |
 | `/search` | Select search engine for web search |
+| `/advisor` | Open the review findings panel; `/advisor diff \| commit <sha> \| task <id> \| step <id> \| session \| file <path>` reviews exactly that target |
 
 ## UI Interactions
 
@@ -86,6 +87,37 @@ the Execution Panel.
 
 See [`packages/2-feature/plan.md`](../packages/2-feature/plan.md) for the data
 model and store rules.
+
+## Advisor
+
+The advisor is an independent review layer, not a Plan Mode feature: it reviews
+finished subagent tasks, plan steps and merges whether or not a plan exists.
+
+- `/advisor` opens the findings panel. The header carries the latest verdict,
+  its trigger and target, the highest severity and the P0–P3 counts; the list
+  filters by severity, status and file, and hides P3 when
+  `advisor.display.hideP3` is on.
+- **s**, **t** and **f** cycle the severity, status and file filters; every row
+  can also be reached with Up/Down.
+- **Enter** opens a finding's detail (description, file and line, evidence,
+  impact, suggested fix). On a finding, **x** sends it back to the main agent as
+  a fix request, **d** dismisses it (a P0/P1 needs a typed reason), **e** defers
+  it, **u** creates a to-do item, **r** re-runs the review it came from, and
+  **Esc** closes.
+- `/advisor diff | commit <sha> | task <id> | step <id> | session | file <path>`
+  reviews exactly that target and opens the panel on the result. The review runs
+  in the background; the panel shows it when it lands. A merge review's
+  recommendation reads **safe to merge**, **review required** or **blocked**.
+- The status bar shows `advisor · <verdict> · P0 n · P1 n`, or `reviewing` while
+  a review runs (counts stay off the line until the verdict settles). It hides
+  when the advisor is off, its status-bar knob is off, or nothing has been
+  reviewed yet, and P2/P3 never appear there.
+- A review is recorded append-only in the transcript, so re-running one adds a
+  review instead of replacing the verdict it supersedes, and a resume restores
+  the whole history. Dismissals are recorded as decisions.
+
+See [`packages/2-feature/advisor.md`](../packages/2-feature/advisor.md) for the
+finding model, the block policy and the trigger detection.
 
 ## Automated Tests
 

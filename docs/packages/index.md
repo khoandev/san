@@ -39,6 +39,7 @@ visible right next to its original. Every page follows [`TEMPLATE.md`](TEMPLATE.
 
 | Package | One-liner |
 |---|---|
+| [`advisor`](2-feature/advisor.md) | Independent review layer: P0–P3 findings and the block policy behind task, plan-step and merge gating. |
 | [`agent`](2-feature/agent.md) | Main agent session lifecycle (Start/Stop/Send/Outbox + permission bridge). |
 | [`broker`](2-feature/broker.md) | Routes messages between agents: addresses keyed by agent id, for main↔subagent messages and completions. |
 | [`command`](2-feature/command.md) | Slash command registry (builtin + dynamic + custom + plugin-scoped). |

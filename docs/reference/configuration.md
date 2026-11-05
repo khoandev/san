@@ -41,6 +41,91 @@ Configuration is loaded from multiple files at different scopes. Higher-priority
 }
 ```
 
+### `advisor`
+
+The global advisor — the independent review layer documented in
+[`packages/2-feature/advisor.md`](../packages/2-feature/advisor.md). Every knob
+is optional; the on/off fields are tri-state, so an explicit `false` survives a
+project or session override while an absent field still means "product
+default". An absent object means the advisor is off.
+
+```json
+{
+  "advisor": {
+    "enable": true,
+    "runInBackground": true,
+    "triggers": {
+      "afterSubagentTask": true,
+      "beforeMerge": true,
+      "beforePlanStep": false,
+      "onLargeChanges": false,
+      "sensitivePaths": true
+    },
+    "blocks": {
+      "mergeOnP0": true,
+      "mergeOnP1": false,
+      "taskCompletionOnP0": true,
+      "planStepCompletionOnP0": true,
+      "requireConfirmationOnP1": true,
+      "allowProceedWithRisk": false
+    },
+    "thresholds": {
+      "minChangedFiles": 0,
+      "minChangedLines": 0,
+      "sensitiveFilePatterns": [],
+      "sensitiveDirPatterns": [],
+      "maxDiffBytes": 262144,
+      "cooldownSeconds": 60
+    },
+    "review": { "mode": "standard", "customPrompt": "" },
+    "model": {
+      "model": "", "thinkingEffort": "low",
+      "maxTokens": 8000, "timeoutSeconds": 180, "maxFindings": 20
+    },
+    "display": { "statusBar": true, "hideP3": false, "groupBy": "severity" }
+  }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enable` | off | Runs the advisor at all. Reviews cost model calls, so it is opt-in. |
+| `runInBackground` | on | Keeps non-merge reviews off the agent's goroutine. A merge review is always synchronous. |
+| `triggers.afterSubagentTask` | on | Review a finished background subagent task. |
+| `triggers.beforeMerge` | on | Review the whole diff against base before a merge, PR/MR creation or push to base. |
+| `triggers.beforePlanStep` | off | Review a plan step's diff before the step is recorded as done. |
+| `triggers.onLargeChanges` | off | Review a change crossing `minChangedFiles` / `minChangedLines`. `0` disables that arm. Resolved by `advisor.TriggerForDiff`; Phase 1 wires no automatic caller, so nothing fires from it yet. |
+| `triggers.sensitivePaths` | on | Review a change touching a sensitive pattern, however small. Same caveat as `onLargeChanges`, and it needs at least one pattern to match. |
+| `blocks.mergeOnP0` / `mergeOnP1` | on / off | The lowest level that rejects a merge. |
+| `blocks.taskCompletionOnP0` | on | A P0 stops a finished task from counting as clean. |
+| `blocks.planStepCompletionOnP0` | on | A P0 stops a plan step from being recorded as done and pauses the plan. |
+| `blocks.requireConfirmationOnP1` | on | A P1 is put to the human even where it does not block. |
+| `blocks.allowProceedWithRisk` | off | Whether the human may continue past a block after confirming. Off makes a block final until the finding is fixed. |
+| `thresholds.*Patterns` | empty | Glob-ish patterns matched against changed paths and directories. Empty means the sensitive-path trigger never fires. A project may add to the user list; it cannot remove from it. |
+| `thresholds.maxDiffBytes` | 262144 | Diff text handed to one review; a larger change is truncated and flagged as such. Max 4 MiB. |
+| `thresholds.cooldownSeconds` | 60 | Minimum gap between two reviews of the same target with the same diff hash. Max 3600. |
+| `review.mode` | `standard` | `fast`, `standard` or `deep`. An unknown value is rejected by validation. |
+| `review.customPrompt` | empty | Extra review criteria appended to the built-in rubric. |
+| `model.model` | session model | `vendor/model` reference for the review, resolved like a reviewer model. |
+| `model.thinkingEffort` | empty | Reasoning rung for the review model. |
+| `model.maxTokens` / `timeoutSeconds` / `maxFindings` | 8000 / 180 / 20 | Per-review bounds. Caps: 64000 tokens, 1800 s, 100 findings. |
+| `display.statusBar` | on | Draw the `advisor · <status>` badge. |
+| `display.hideP3` | off | Filter minor findings out of the panel's default list. |
+| `display.groupBy` | `severity` | `severity`, `file` or `task`. |
+
+Set it in `/settings` → Advisor, which edits the user, project or this-session
+level: user and project saves write the block to that `settings.json` (field-level
+merge, so unset fields keep the other level's value), and a session save writes no
+file — it pins the config in the transcript for this conversation. When another
+level still supplies a value the save did not change, the notice says so.
+
+The advisor is off when `enable` is absent or `false`, and it cannot review when
+no model is connected — that is warned at startup and the triggers simply do
+nothing. There is no environment kill switch; turning it off means writing the
+setting. Merge detection is best-effort: a merge spelled in a way
+`IsMergeCommand` does not recognize runs ungated, and the permission rules stay
+the authority for it.
+
 ### `gitBar`
 
 Optional plain-text Git row beneath the normal status line; defaults to `false`.
