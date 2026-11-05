@@ -380,6 +380,52 @@ func TestBlockedStepStopsThePlanAndOffersChoices(t *testing.T) {
 	}
 }
 
+// Esc during a step pauses the plan and asks what to do with the step; an
+// interrupted turn is not evidence that the step failed.
+func TestCancelledStepTurnPausesAndAsks(t *testing.T) {
+	m := newPlanModel(t)
+
+	running := testPlan("plan-run", "Long plan", "edit", "next")
+	running.Status = plan.StatusExecuting
+	running.Steps[0].Verification = []string{"go test ./..."}
+	running.StepIndex = 0
+	m.plan.Restore(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{running}, ActiveID: running.ID})
+	if _, _, err := m.plan.BeginStep(); err != nil {
+		t.Fatal(err)
+	}
+
+	m.onPlanTurn(core.Result{Content: "partial work", StopReason: core.StopCanceled})
+
+	active, _ := m.plan.Active()
+	if active.Steps[0].Status != plan.StepInProgress {
+		t.Fatalf("step = %q, want it still in progress", active.Steps[0].Status)
+	}
+	if active.Steps[0].BlockReason != "" {
+		t.Fatalf("an interrupted step was recorded as blocked: %q", active.Steps[0].BlockReason)
+	}
+	if !active.Paused || !active.AwaitingStepChoice {
+		t.Fatalf("paused=%v awaiting=%v, want the step question", active.Paused, active.AwaitingStepChoice)
+	}
+	if active.Steps[1].Status != plan.StepPending {
+		t.Fatal("the executor advanced past an interrupted step")
+	}
+	if !m.userInput.Plan.IsActive() {
+		t.Fatal("the Execution Panel did not open on the interrupt")
+	}
+	if actions := m.userInput.Plan.Actions(); !containsAll(actions, "Continue step", "Restart step", "Skip step", "Cancel") {
+		t.Fatalf("panel actions = %v, want the continue/restart/skip choice", actions)
+	}
+	noticed := false
+	for _, message := range m.conv.Messages {
+		if strings.Contains(message.Content, "Step interrupted") {
+			noticed = true
+		}
+	}
+	if !noticed {
+		t.Fatal("the interruption was not explained in the transcript")
+	}
+}
+
 func containsAll(have []string, want ...string) bool {
 	for _, w := range want {
 		found := false

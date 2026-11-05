@@ -77,6 +77,7 @@ func (s *Store) RetryStep() error
 func (s *Store) RestartStep() error
 func (s *Store) Pause() error
 func (s *Store) Resume() error
+func (s *Store) Interrupt(reason string) error         // cancelled turn: pause, ask, do not block
 func (s *Store) ResolveStepChoice(action string) error // continue | restart | skip
 func (s *Store) Cancel() error
 func (s *Store) CancelDraft() error
@@ -108,6 +109,10 @@ live state.
   `Verification` criteria against the reported `Evidence`. A step that claims
   `completed` with no evidence is recorded as `blocked` with a reason, and a
   blocked step pauses the plan — the executor never walks past it.
+- **Interrupted is not blocked.** A turn the person cancelled mid-step goes
+  through `Interrupt`: the step stays `in_progress`, the plan pauses and asks
+  continue / restart / skip. Only a turn that ends without a report on its own
+  is a blocked step.
 - **Sequential only.** `BeginStep` starts the first unfinished step and marks
   it `in_progress`; `advanceLocked` moves the cursor only after a completed or
   skipped step. `Paused` and `AwaitingStepChoice` hold the cursor where it is.

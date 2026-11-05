@@ -73,6 +73,8 @@ the Execution Panel.
 - Execute Mode runs one approved step per turn. A step that reports no
   verification evidence is marked blocked, the plan pauses, and the panel
   offers the recovery actions instead of advancing.
+- **Esc** during a step interrupts it rather than failing it: the step stays in
+  progress and the panel asks continue / restart / skip.
 - The plan, its decisions, its journal and its progress live in the session
   transcript (`transcript.StatePatch.Plan`), so reopening or forking the
   session restores the panel where it left off. No plan file is ever written.

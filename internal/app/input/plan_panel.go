@@ -556,11 +556,7 @@ func (p *PlanPanel) buttons() string {
 }
 
 func (p *PlanPanel) hint() string {
-	hint := kit.HintLine(keycap("←→")+" choose", keycap("enter")+" confirm", keycap("e")+" edit", keycap("esc")+" close")
-	if p.editing {
-		return hint
-	}
-	return hint
+	return kit.HintLine(keycap("←→")+" choose", keycap("enter")+" confirm", keycap("e")+" edit", keycap("esc")+" close")
 }
 
 // clip bounds the card body to the terminal so a long plan never pushes the

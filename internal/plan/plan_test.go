@@ -407,6 +407,46 @@ func TestCancelStopsExecution(t *testing.T) {
 	}
 }
 
+// An interrupted turn is not a failed step: it pauses and asks the person,
+// which is what Keep existing context does with a step left mid-flight.
+func TestInterruptAsksForTheStepChoice(t *testing.T) {
+	s := NewStore()
+	s.SubmitDraft(draftPlan(t))
+	if err := s.Approve(); err != nil {
+		t.Fatal(err)
+	}
+	step, _, err := s.BeginStep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Interrupt("interrupted before the step reported"); err != nil {
+		t.Fatal(err)
+	}
+	active, _ := s.Active()
+	if active.Steps[0].Status != StepInProgress || !active.Paused || !active.AwaitingStepChoice {
+		t.Fatalf("after an interrupt: %+v paused=%v awaiting=%v", active.Steps[0], active.Paused, active.AwaitingStepChoice)
+	}
+	if active.Steps[0].BlockReason != "" {
+		t.Fatalf("an interrupted step was recorded as blocked: %q", active.Steps[0].BlockReason)
+	}
+	if len(active.Progress) == 0 || active.Progress[len(active.Progress)-1].StepID != step.ID {
+		t.Fatalf("the interrupt is not in the journal: %+v", active.Progress)
+	}
+	if err := s.ResolveStepChoice("continue"); err != nil {
+		t.Fatal(err)
+	}
+	if active, _ := s.Active(); active.Paused || active.AwaitingStepChoice {
+		t.Fatalf("continue did not release the choice: %+v", active)
+	}
+	// A plan that is no longer executing has nothing to interrupt.
+	if err := s.Cancel(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Interrupt(""); err == nil {
+		t.Fatal("interrupt must refuse a plan that is not executing")
+	}
+}
+
 func TestUpdateDraftOnlyBeforeExecution(t *testing.T) {
 	s := NewStore()
 	p := s.SubmitDraft(draftPlan(t))

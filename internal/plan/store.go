@@ -577,6 +577,37 @@ func (s *Store) Resume() error {
 	return nil
 }
 
+// Interrupt pauses a plan whose running step lost its turn — the user pressed
+// Esc, or the turn was stopped for them. The step stays in progress and the
+// panel asks continue / restart / skip, instead of the step being recorded as
+// a failure it did not have.
+func (s *Store) Interrupt(reason string) error {
+	if s == nil {
+		return ErrNoPlan
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	active := s.activeLocked()
+	if active == nil {
+		return ErrNoPlan
+	}
+	if active.Status != StatusExecuting {
+		return fmt.Errorf("plan is not executing")
+	}
+	step, ok := active.CurrentStep()
+	if !ok || step.Status != StepInProgress {
+		return nil
+	}
+	active.Paused = true
+	active.AwaitingStepChoice = true
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "the turn was interrupted"
+	}
+	active.AddLog("step_interrupt", step.ID, reason)
+	return nil
+}
+
 // ResolveStepChoice applies Continue, Restart, or Skip to a step that was in
 // flight when execution resumed. Continue keeps the step in progress; the
 // caller re-issues its prompt.

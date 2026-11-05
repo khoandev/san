@@ -164,6 +164,20 @@ func (m *model) onExecuteModeTurn(result core.Result) tea.Cmd {
 		return nil // the person typed something; no step was running
 	}
 
+	// A cancelled turn is not a step failure: the person stopped it on
+	// purpose, so the step waits for continue / restart / skip instead of
+	// being recorded as blocked.
+	if result.StopReason == core.StopCanceled {
+		if err := m.plan.Interrupt("interrupted before the step reported"); err == nil {
+			// OnTurnEnd's own finalization writes the state, as it does for a
+			// step report; persisting here would race it.
+			m.syncPlanPermissions()
+			m.showPlanPanel()
+			m.conv.AddNotice("Step interrupted. Choose continue, restart, or skip in the Execution Panel.")
+		}
+		return tea.Batch(m.CommitMessages()...)
+	}
+
 	outcome, found, err := plan.ParseStepBlock(result.Content)
 	switch {
 	case err != nil:
