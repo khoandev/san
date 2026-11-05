@@ -134,6 +134,10 @@ func TrackWorker(svc *Store, info task.TaskInfo) {
 		metaTaskType:     string(info.Type),
 		metaStatusDetail: string(task.StatusRunning),
 		metaError:        "",
+		// A re-run is a fresh claim: the refusal an earlier attempt earned does
+		// not carry over to work that has not been reviewed yet.
+		metaNeedsReview: "",
+		metaReviewID:    "",
 	}
 
 	if existing := svc.FindByMetadata(metaTaskID, info.ID); existing != nil {

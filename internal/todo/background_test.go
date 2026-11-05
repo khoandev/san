@@ -103,6 +103,37 @@ func TestCompleteWorkerUpdatesStatus(t *testing.T) {
 	}
 }
 
+// A blocked review flags a finished item without changing what happened, and a
+// later attempt at the same task starts clean: the flag describes a verdict on
+// one attempt, not a property of the work.
+func TestMarkNeedsReviewFlagsAndReRunClearsIt(t *testing.T) {
+	Initialize()
+	t.Cleanup(func() { Default().Reset() })
+
+	TrackWorker(Default(), task.TaskInfo{ID: "bg-1", Type: task.TaskTypeAgent, Description: "Fix auth"})
+	CompleteWorker(Default(), task.TaskInfo{ID: "bg-1", Type: task.TaskTypeAgent, Status: task.StatusCompleted})
+
+	if !MarkNeedsReview(Default(), "bg-1", "review-1", "P0") {
+		t.Fatal("a known task was not flagged")
+	}
+	items := Default().List()
+	severity, reviewID, ok := NeedsReview(items[0])
+	if !ok || severity != "P0" || reviewID != "review-1" {
+		t.Fatalf("flag = %q by %q (ok %v)", severity, reviewID, ok)
+	}
+	if items[0].Status != StatusCompleted {
+		t.Fatalf("status = %q, want the completion preserved", items[0].Status)
+	}
+	if MarkNeedsReview(Default(), "bg-1", "review-2", "") {
+		t.Fatal("an empty severity flagged the item")
+	}
+
+	TrackWorker(Default(), task.TaskInfo{ID: "bg-1", Type: task.TaskTypeAgent, Description: "Fix auth"})
+	if _, _, ok := NeedsReview(Default().List()[0]); ok {
+		t.Fatal("a re-run kept the previous attempt's refusal")
+	}
+}
+
 func TestCompleteWorkerTracksFailure(t *testing.T) {
 	Initialize()
 	t.Cleanup(func() { Default().Reset() })
