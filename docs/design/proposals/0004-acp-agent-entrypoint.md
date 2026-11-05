@@ -45,8 +45,13 @@ External client ── ACP ──────┘
   TUI admits current, non-duplicate results and consumes handoffs before calling;
   worker handoffs stay run-local. Result filtering, recording and compaction are
   not moved. The ACP adapter must supply equivalent admission and workspace wiring.
-- Remaining input and turn lifecycle: pending. Other hooks, compaction, terminal
-  cleanup and permission policy remain in their current owners.
+- `internal/agent`: shared normal-turn recording, Stop decisions and compaction
+  policy; see [agent lifecycle](../../packages/2-feature/agent.md#lifecycle).
+- `internal/agent.PermissionPolicy`: native rule, memory, hook-waiver and reviewer
+  authorization composition; see [execution policy](../../packages/2-feature/agent.md#internals).
+- Remaining input and turn lifecycle: pending. Runtime assembly (result paging,
+  service/tool construction and interaction wiring), background-source admission,
+  compaction admission/projection and terminal cleanup remain in app.
 - ACP adapter: pending; capability negotiation, projections and extensions,
   without duplicate authorization, persistence or task scheduling.
 

@@ -55,9 +55,46 @@ func Default() *Runtime
   The native message chain survives both deliberate stops and unexpected exits;
   resume can seed it before the first run. `Reset` clears it after shutdown.
 - `build.go` translates `BuildParams` (model, identity, skills, tools,
-  permission mode, cwd, ...) into a `core.Config` for `core.NewAgent`.
+  permission mode, cwd, ...) into a `core.Config` for `core.NewAgent`. Root gates
+  stamp the tool-call ID before hooks, reviewer and human approval run, matching
+  subagent gates (tool execution wrappers alone run too late to identify approval).
+  `FileViews` binds the conversation's observed file versions to tool and
+  permission contexts for read-before-write checks; it is distinct from the
+  compaction `FileCache`. Hosts retain it across runtime restarts.
+  `ToolResponse(callID, response)` hands native tool-specific hook
+  payloads to the host synchronously before ToolEnd. Hosts provide concurrency-safe
+  storage and consume each response during PostTool; ACP owns a map per session
+  because call IDs can collide across sessions. Nil keeps the TUI defaults for
+  both dependencies. These are runtime wiring, not `MainSession` persistence.
+  `BashDirHelp` is only a schema sentence override, with empty preserving TUI help.
+  ACP supplies command-local directory wording; actual directory behavior remains
+  with `CWD`/`CWDFunc` and the host's handling (or ignoring) of directory handoffs.
+- `main_session.go` pairs only the opened `Session` and full-result `Store`.
+  `MainSession.Validate` rejects missing/closed owners and mismatched stores without
+  mutating services. Native session APIs provide recording; `ResultPager` captures
+  the validated store and session ID. `internal/app.buildAgentParams` explicitly
+  binds recording, permission policy, hook/skill audits and live review/recall to
+  `BuildParams`, the sole runtime configuration. Stop extension work before rebinding
+  its session callbacks; the builder does not own extension lifetimes.
+- `result_pager.go` owns the main-agent output policy: text above 100,000 bytes is
+  persisted under the captured session owner, with a UTF-8-safe 10,000-byte preview.
+  Failed persistence explicitly says the full content was not saved. Result metadata
+  and the existing blob handoff format are unchanged; recall is attached after paging.
+  These native components are not an ACP endpoint or a complete headless host:
+  callers still drain events, handle human permissions, manage recall/background work,
+  record application state and stop/close their resources. Successful runtime stop
+  does not prove persistence; inspect the recorder and honor turn finalization.
 - `permission.go` owns the gate: a thread-safe channel pair that turns
   asynchronous permission asks into synchronous TUI approval modals.
+- `permission_policy.go` supplies `PermissionPolicy.Decide`, `Review` and
+  `CanApproveByHook` to native `BuildParams`. TUI and print share settings rules and
+  deny-aware auto-memory maintenance. TUI supplies a live reviewer/config snapshot;
+  the policy enforces safety guards, a 30-second review budget, fail-closed human
+  escalation, exact session grants and best-effort decision audits before return.
+  Cancelled reviews cannot cache late approvals. The session grant owner and audit
+  callback are bound at construction; callers stop that runtime before replacing
+  its session. Human prompts remain in `interaction`, rule precedence in `setting`,
+  and judge inference in `reviewer`; this is not full headless runtime assembly.
 - Runtime owns live native messages; the opened Session owns persistence and its
   writer lease. Stopping Runtime retains history. The Session remains open until
   it is explicitly closed; see [session](session.md).
@@ -87,6 +124,27 @@ func Default() *Runtime
   held harness input; direct pending user input takes precedence. Edits, deletion,
   or session replacement invalidate that deferred intent.
   No guarantee covers audit details, normal-turn hooks, rendering, or fsync.
+- Normal completion: `EndTurn` records state before queued input or AutoPilot.
+  `StopCheck` runs the hook; `StopDecision.Finish` records before finishing or
+  continuing. Failed recording stops that boundary; unchanged state is not rewritten.
+  TUI owns cleanup and stale-result checks. Cancellation/failure paths and receipt
+  guarantees are unchanged; recording errors do not create a global input hold.
+- Compaction: `CompactRequest.Run` owns manual PreCompact context and summarization
+  on the caller's context and selected client. `RecordManualCompaction` records an
+  inactive conversation's native summary/boundary before the caller replaces its
+  chain; live replacement still belongs to the SDK loop. `PostCompact` schedules
+  the hook, refreshes memory, resets reminders and restores recent files only for
+  manual compaction. TUI retains provider adaptation, admission, projection and
+  queue release. Accepted manual compaction invalidates pending Stop decisions,
+  even if summarization later fails; overlapping manual requests are rejected.
+  The app's `pendingCompaction` owns a cancellable request context and captures
+  the opened recording owner, session ID and runtime outbox. Results carry that
+  exact context identity and are checked before any UI, history or queue effect.
+  Runtime stop/reset/start, session replacement and user cancellation retire the
+  request; Escape/empty Ctrl+C keep their existing overlay/draft precedence and
+  hold queued input until explicit continuation. Automatic compaction remains
+  runtime-owned. Cancellation reaches PreCompact and the summary HTTP request;
+  it does not guarantee remote vendor cancellation or billing rollback.
 - Headless execution: `RunOnce` builds the same prompt, tools, and permission
   gate, then calls `ThinkAct` directly with outbox delivery disabled. Text and
   recording still use synchronous observers, so long streams cannot fill an
@@ -98,6 +156,22 @@ func Default() *Runtime
 ## Tests
 
 ```
+internal/app/main_session_test.go — TUI composition, native permission/hook/skill audits,
+                                   allow/deny paging and host callback preservation.
+internal/agent/main_session_test.go — production main-session/runtime tool turns, allow/deny, hook audits,
+                              transcript-before-terminal ordering, live recall and cancelled review.
+internal/agent/result_pager_test.go — threshold, UTF-8 preview, metadata and persistence failure.
+internal/agent/permission_policy_test.go — rule/reviewer/hook composition, exact grants,
+                                          audit ordering and cancelled verdicts.
+internal/agent/permission_memory_test.go — memory containment and deny precedence.
+internal/agent/compaction_test.go — hook/summary context, failures, replay and reminder reset.
+internal/app/compact_stop_test.go — delayed Stop decisions across manual compaction.
+internal/app/compact_lifetime_test.go — HTTP/hook cancellation, stale request fencing,
+                                        writer replacement and input precedence.
+internal/agent/completion_test.go — recording/successor order and Stop-hook policy.
+internal/app/completion_test.go — native state-record counts, successor ordering,
+                                  changed post-hook state and recording failures.
+internal/app/stop_hook_fence_test.go — delayed outcomes and exact lifetime fencing.
 internal/agent/runtime_test.go — lifecycle serialization, message identity,
                                  and unexpected runner exits.
 internal/agent/runtime_interrupt_test.go — inactive cancellation receipt.

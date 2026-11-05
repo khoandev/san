@@ -108,6 +108,7 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 		result.Finalization.Acknowledge(errors.New("opened session replaced before turn finalization"))
 		return m.ListenForAgentEvents()
 	}
+	m.pendingStopHook = nil
 	finalizationErr := core.ErrTurnCompleted
 	defer func() { result.Finalization.Acknowledge(finalizationErr) }()
 	// A dismissed start/resume offer comes back once the turn is over.
@@ -152,12 +153,9 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 	log.Logger().Sugar().Debugf("OnTurnEnd: starting queueLen=%d", m.userInput.Queue.Len())
 	commitCmds := m.CommitMessages()
 
-	// User-initiated cancel surfaces here as a Result with StopCanceled now
-	// that ThinkAct returns a phantom Result on context.Canceled. It precedes
-	// the queue drain because draining submits a fresh turn — the input queue,
-	// a cron prompt, an async hook or a parked agent notice — which is how Esc
-	// stopped one inference and left the loop running. Each queue has its own
-	// later drain, so holding them here loses nothing.
+	// Cancellation must finish cleanup and persistence before admitting another
+	// turn. turnFinalizedMsg resumes explicitly queued user input after the
+	// receipt settles; it does not drain cron/hook queues or revive autopilot.
 	//
 	// Stop / idle-notification hooks would otherwise fire on every Esc —
 	// confusing for the user and for hooks that template result.Content (which
@@ -174,26 +172,26 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 		return tea.Batch(commitCmds...)
 	}
 
-	if cmd, found := m.drainTurnQueues(); found {
-		log.Logger().Sugar().Debugf("OnTurnEnd: drained queued message, skipping hooks")
-		if cmd != nil {
-			commitCmds = append(commitCmds, cmd)
-		}
-		commitCmds = append(commitCmds, m.ListenForAgentEvents())
-		return tea.Batch(commitCmds...)
-	}
-
-	// Autopilot TurnEnd steer (#5): let the copilot decide whether to keep the
-	// session going toward the mission. When it wants to, the idle hooks are
-	// deferred until handleAutopilotDecision (which fires them if it stops).
-	if cmd := m.autopilotContinueCmd(result); cmd != nil {
-		log.Logger().Sugar().Debugf("OnTurnEnd: autopilot deciding whether to continue")
-		commitCmds = append(commitCmds, cmd, m.ListenForAgentEvents())
-		return tea.Batch(commitCmds...)
-	}
-
-	log.Logger().Sugar().Debugf("OnTurnEnd: firing idle hooks async")
-	commitCmds = append(commitCmds, m.fireIdleHooksCmd(result), m.ListenForAgentEvents())
+	// Normal completion never broadens the cancellation-only receipt contract.
+	_ = agent.EndTurn(agent.TurnCallbacks{
+		RecordState: m.appendTurnState,
+		NextInput: func() bool {
+			cmd, found := m.drainTurnQueues()
+			if cmd != nil {
+				commitCmds = append(commitCmds, cmd)
+			}
+			return found
+		},
+		AutoPilot: func() bool {
+			if cmd := m.autopilotContinueCmd(result); cmd != nil {
+				commitCmds = append(commitCmds, cmd)
+				return true
+			}
+			return false
+		},
+		Idle: func() { commitCmds = append(commitCmds, m.fireIdleHooksCmd(result)) },
+	})
+	commitCmds = append(commitCmds, m.ListenForAgentEvents())
 	return tea.Batch(commitCmds...)
 }
 

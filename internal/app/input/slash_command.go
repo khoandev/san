@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	xansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/command"
@@ -91,7 +92,8 @@ type SlashCommandEnv struct {
 	ClearSession            func() error
 	ClearScrollback         func(tea.Cmd) tea.Cmd
 	FireSessionEnd          func(reason string)
-	BuildCompactRequest     func(focus, trigger string) conv.CompactRequest
+	BuildCompactRequest     func(focus, trigger string) agent.CompactRequest
+	BeginCompact            func()
 	SpinnerTickCmd          func() tea.Cmd
 	OpenHistory             func() tea.Cmd
 	OpenTasks               func() tea.Cmd
@@ -158,11 +160,10 @@ func builtinCommandHandlers() map[string]slashCommandHandler {
 	}
 }
 
-// IsSideCommand reports whether input is /btw or /recap, side requests that
-// run even mid-turn.
+// IsSideCommand reports requests that run outside the main agent, even mid-turn.
 func IsSideCommand(input string) bool {
 	name, _, ok := command.ParseCommand(input)
-	return ok && (name == "btw" || name == "recap")
+	return ok && (name == "btw" || name == "recap" || name == "group")
 }
 
 func (c *SlashCommandController) handleBtwCommand(_ context.Context, args string) (string, tea.Cmd, error) {
@@ -761,12 +762,18 @@ func (c *SlashCommandController) handleCompactCommand(_ context.Context, args st
 	if c.env.Conversation.Stream.Active {
 		return "Cannot compact while streaming.", nil, nil
 	}
+	if c.env.Conversation.Compact.Active {
+		return "Compaction is already in progress.", nil, nil
+	}
 	request := c.env.BuildCompactRequest(strings.TrimSpace(args), "manual")
 	if len(request.Messages) == 0 {
 		return "No active LLM session. Send a message first to initialize the client.", nil, nil
 	}
 	if len(request.Messages) < core.MinMessagesToCompact {
 		return "Not enough conversation history to compact.", nil, nil
+	}
+	if c.env.BeginCompact != nil {
+		c.env.BeginCompact()
 	}
 	c.env.Conversation.Compact.Active = true
 	c.env.Conversation.Compact.SummaryFocus = request.SummaryFocus

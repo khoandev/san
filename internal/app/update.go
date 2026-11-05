@@ -288,9 +288,12 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case memberMsg:
 		return m, m.handleMemberMsg(msg)
-	case groupJoinMsg:
-		m.conv.AddNotice(m.finishJoin(msg))
-		return m, tea.Batch(m.CommitMessages()...)
+	case groupControlMsg:
+		if text := m.handleGroupControl(msg); text != "" {
+			m.conv.AddNotice(text)
+			return m, tea.Batch(m.CommitMessages()...)
+		}
+		return m, nil
 	case input.MissionRefinedMsg:
 		// The /autopilot Mission editor's refined text arrived; hand it to the
 		// panel to replace the draft (or surface an error under the editor).
@@ -552,6 +555,12 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if head, ok := m.userInput.Queue.At(0); ok && reflect.DeepEqual(head, *continuation) {
 				cmds = append(cmds, m.sendNextQueuedInput(true))
 			}
+		} else if (msg.err == nil || msg.err == core.ErrTurnCompleted) && msg.outbox == m.services.Agent.Outbox() {
+			// Queued user input already carries explicit intent to continue. Wait
+			// for cancellation cleanup and persistence before admitting one item
+			// through the normal user-submit path. Do not drain cron/hook queues
+			// or clear the background hold when there is no user input to send.
+			cmds = append(cmds, m.sendNextQueuedInput(true))
 		}
 		return m, tea.Batch(cmds...)
 	case agentSendFailedMsg:

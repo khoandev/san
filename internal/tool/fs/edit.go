@@ -60,7 +60,7 @@ func (t *EditTool) Icon() string { return IconEdit }
 func (t *EditTool) RequiresPermission() bool { return true }
 
 func (t *EditTool) PreparePermission(ctx context.Context, params map[string]any, cwd string) (*perm.PermissionRequest, error) {
-	plan, err := planEdit(params, cwd)
+	plan, err := planEdit(params, cwd, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (t *EditTool) PreparePermission(ctx context.Context, params map[string]any,
 
 func (t *EditTool) ExecuteApproved(ctx context.Context, params map[string]any, cwd string) toolresult.ToolResult {
 	start := time.Now()
-	plan, err := planEdit(params, cwd)
+	plan, err := planEdit(params, cwd, ctx)
 	if err != nil {
 		return toolresult.NewErrorResult(t.Name(), err.Error())
 	}
@@ -83,7 +83,7 @@ func (t *EditTool) ExecuteApproved(ctx context.Context, params map[string]any, c
 	if err := atomicfile.WriteFile(plan.filePath, []byte(plan.newContent), 0o644); err != nil {
 		return toolresult.NewErrorResult(t.Name(), "failed to write file: "+err.Error())
 	}
-	RecordFileWritten(plan.filePath)
+	RecordFileWritten(plan.filePath, ctx)
 
 	changes := perm.GenerateDiff(plan.filePath, plan.oldContent, plan.newContent)
 	storedDiff, truncatedDiffLines := perm.CapUnifiedDiff(changes.UnifiedDiff, maxStoredDiffLines)
@@ -137,7 +137,7 @@ func editSummary(plan editPlan) string {
 // planEdit parses the payload, resolves its file, and computes the resulting
 // content without writing. The permission preview and the approved execution
 // both go through here, so what the user approves is what lands.
-func planEdit(params map[string]any, cwd string) (editPlan, error) {
+func planEdit(params map[string]any, cwd string, ctx context.Context) (editPlan, error) {
 	payload := perm.PayloadText(params)
 	if payload == "" {
 		return editPlan{}, &tool.ToolError{Message: `[E_BAD_SHAPE] Edit takes one "payload": start it with "*** SM:EDIT relative/path", then give each operation a "*** SM:FIND" anchor and a "*** SM:PUT" or "*** SM:AFTER" body (or "⟪old│new⟫" selections inside the anchor)`}
@@ -153,7 +153,7 @@ func planEdit(params map[string]any, cwd string) (editPlan, error) {
 
 	// A patch quotes text the model read; editing a file it has not seen — or
 	// whose view changed under it — would anchor against lines it cannot know.
-	view, err := requireObservedView(filePath)
+	view, err := requireObservedView(filePath, ctx)
 	if err != nil {
 		return editPlan{}, &tool.ToolError{Message: err.Error()}
 	}

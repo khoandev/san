@@ -182,7 +182,7 @@ TestDontAskMode                             — DontAsk mode
 TestDenyRuleBlocksBypass                    — deny rules block bypass
 TestSafeToolAllowlist                       — safe tool whitelist
 TestPassthroughBehavior                     — passthrough behavior
-TestResolveHookAllow                        — hook allow resolution
+TestCanApproveByHook                        — hook approval eligibility
 TestOperationModeNext                       — operation mode cycling
 
 # Suggestions

@@ -17,6 +17,7 @@ import (
 	"github.com/genai-io/san/internal/hook"
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/plugin"
+	"github.com/genai-io/san/internal/session"
 )
 
 func (m *model) fireStopFailureHook(lastAssistantContent string, err error) {
@@ -43,37 +44,26 @@ func (m *model) executeStartupHooks(ctx context.Context) hook.HookOutcome {
 	})
 }
 
+// pendingStopHook identifies the pending decision and its session/runtime.
+type pendingStopHook struct {
+	session *session.Session
+	outbox  <-chan core.Event
+}
+
 type stopHookResultMsg struct {
+	pending *pendingStopHook
 	Blocked bool
 	Reason  string
 	Result  core.Result
 }
 
 func (m *model) fireIdleHooksCmd(result core.Result) tea.Cmd {
-	hookEngine := m.services.Hook
-
-	lastContent := core.LastAssistantChatContent(m.conv.Messages)
-	hasStopHooks := hookEngine.HasHooks(hook.Stop)
-	stopHookActive := hookEngine.StopHookActive()
-
+	pending := &pendingStopHook{session: m.services.Session, outbox: m.AgentOutbox()}
+	m.pendingStopHook = pending
+	check := agent.NewStopCheck(m.services.Hook, core.LastAssistantChatContent(m.conv.Messages))
 	return func() tea.Msg {
-		var blocked bool
-		var reason string
-		if hasStopHooks {
-			outcome := hookEngine.Execute(context.Background(), hook.Stop, hook.HookInput{
-				LastAssistantMessage: lastContent,
-				StopHookActive:       stopHookActive,
-			})
-			if outcome.ShouldBlock {
-				blocked = true
-				reason = outcome.BlockReason
-			}
-		}
-		hookEngine.ExecuteAsync(hook.Notification, hook.HookInput{
-			Message:          "Claude is waiting for your input",
-			NotificationType: "idle_prompt",
-		})
-		return stopHookResultMsg{Blocked: blocked, Reason: reason, Result: result}
+		decision := check.Run(context.Background())
+		return stopHookResultMsg{pending: pending, Blocked: decision.Blocked, Reason: decision.Reason, Result: result}
 	}
 }
 

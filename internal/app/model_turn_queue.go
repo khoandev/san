@@ -8,11 +8,13 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/app/trigger"
 	"github.com/genai-io/san/internal/core"
@@ -20,15 +22,24 @@ import (
 )
 
 func (m *model) handleStopHookResult(msg stopHookResultMsg) tea.Cmd {
-	if msg.Blocked {
-		log.Logger().Sugar().Debugf("handleStopHookResult: hooks BLOCKED reason=%q", msg.Reason)
-		blockMsg := "Stop hook blocked: " + msg.Reason
-		providerMsg, _ := m.conv.Append(core.ChatMessage{Role: core.ChatUser, Content: blockMsg}).ToMessage()
+	if msg.pending == nil || msg.pending != m.pendingStopHook {
+		return nil
+	}
+	m.pendingStopHook = nil
+	if msg.pending.session != m.services.Session || msg.pending.outbox != m.AgentOutbox() ||
+		m.conv.Stream.Active || m.pendingMessages.Held() || m.pendingMessages.Len() > 0 || m.userInput.Queue.Len() > 0 {
+		return nil
+	}
+	decision := agent.StopDecision{Blocked: msg.Blocked, Reason: msg.Reason}
+	continuation, err := decision.Finish(m.appendTurnState)
+	if err != nil {
+		return nil // appendTurnState surfaces the recording failure.
+	}
+	if continuation != "" {
+		providerMsg, _ := m.conv.Append(core.ChatMessage{Role: core.ChatUser, Content: continuation}).ToMessage()
 		return m.sendToAgent(pendingMessage{Message: providerMsg})
 	}
-	log.Logger().Sugar().Debugf("handleStopHookResult: hooks done, persisting")
 	var cmds []tea.Cmd
-	_ = m.appendTurnState() // appendTurnState logs and surfaces failures; no cancellation waiter here.
 	if cmd := m.startPromptSuggestion(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -61,6 +72,19 @@ func (m *model) handleStopHookResult(msg stopHookResultMsg) tea.Cmd {
 func (m *model) releaseQueuedMessage() (tea.Cmd, bool) {
 	if !m.pendingMessages.CanDeliver(false) || m.conv.Compact.Active || m.userInput.Queue.SelectIdx == 0 {
 		return nil, false
+	}
+	if head, ok := m.userInput.Queue.At(0); ok {
+		fields := strings.Fields(head.Content)
+		if len(fields) > 0 && fields[0] == "/group" {
+			// A queued control request stays local, just like a direct side command.
+			m.userInput.Queue.Dequeue()
+			text, cmd, _ := m.executeCommand(context.Background(), head.Content)
+			if text != "" {
+				m.conv.AddNotice(text)
+			}
+			next, _ := m.releaseQueuedMessage()
+			return tea.Batch(append(m.CommitMessages(), cmd, next)...), true
+		}
 	}
 	item, ok := m.userInput.Queue.Dequeue()
 	if !ok {
