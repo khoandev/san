@@ -16,8 +16,8 @@ func TestSlashCommandSurfaceHasOnePlanEntryPoint(t *testing.T) {
 		"skills", "agents", "context", "compact", "init", "memory", "mcp",
 		"plugin", "reload-plugins", "think", "loop", "workflow", "search",
 		"identity", "persona", "settings", "config", "autopilot", "goal",
-		"name", "group", "trust", "evolve", "selflearn-demo", "btw", "recap",
-		"plan",
+		"name", "group", "trust", "advisor", "evolve", "selflearn-demo", "btw",
+		"recap", "plan",
 	}
 	handlers := builtinCommandHandlers()
 	got := make([]string, 0, len(handlers))

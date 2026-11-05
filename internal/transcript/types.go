@@ -3,6 +3,7 @@ package transcript
 import (
 	"time"
 
+	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/todo"
 	"github.com/genai-io/sdk-go/pkg/ai"
@@ -42,6 +43,17 @@ type State struct {
 	// session produced (superseded ones included), and the active plan's step
 	// progress. It lives in the transcript — never in a plan file.
 	Plan plan.State
+
+	// Advisor is the session's advisor history: every review the advisor ran,
+	// oldest first, with each finding's lifecycle state folded in. It is built
+	// from the log's advisor records, never from a state patch, so a review is
+	// recorded once and a resume replays it in the order it happened.
+	Advisor advisor.State
+	// AdvisorSettings is the session's advisor settings override as a JSON
+	// blob (empty when unset). Stored opaque here for the same reason as
+	// AutoPilot: the transcript package stays free of an internal/setting
+	// dependency; the app marshals and unmarshals it.
+	AdvisorSettings string
 }
 
 type Summary struct {

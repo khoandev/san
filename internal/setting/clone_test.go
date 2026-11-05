@@ -38,7 +38,13 @@ func TestCloneCopiesEveryField(t *testing.T) {
 		Persona:                 "ml-researcher",
 		SelfLearn:               SelfLearnSettings{Skills: SelfLearnSkills{DenyCreate: true}, Strategy: "custom"},
 		AutoPilot:               AutoPilotSettings{Model: "openai/gpt"},
-		LastOperationMode:       "auto",
+		Advisor: AdvisorSettings{
+			Enable:     &yes,
+			Triggers:   AdvisorTriggers{BeforeMerge: &no},
+			Thresholds: AdvisorThresholds{SensitiveFilePatterns: []string{"**/.env"}},
+			Model:      AdvisorModel{Model: "openai/gpt-mini"},
+		},
+		LastOperationMode: "auto",
 	}
 	v := reflect.ValueOf(*src)
 	for i := range v.NumField() {
@@ -54,8 +60,11 @@ func TestCloneCopiesEveryField(t *testing.T) {
 	*dst.BashPreviewLines = 9
 	dst.Permissions.Allow[0] = "changed"
 	dst.Env["K"] = "changed"
+	dst.Advisor.Thresholds.SensitiveFilePatterns[0] = "changed"
 	dst.Hooks["PreToolUse"][0].Hooks[0].Command = "changed"
-	if *src.BashPreviewLines != 3 || src.Permissions.Allow[0] != "Read" || src.Env["K"] != "v" || src.Hooks["PreToolUse"][0].Hooks[0].Command != "true" {
+	if *src.BashPreviewLines != 3 || src.Permissions.Allow[0] != "Read" || src.Env["K"] != "v" ||
+		src.Hooks["PreToolUse"][0].Hooks[0].Command != "true" ||
+		src.Advisor.Thresholds.SensitiveFilePatterns[0] != "**/.env" {
 		t.Fatal("Clone shares storage with its source")
 	}
 }

@@ -131,6 +131,10 @@ type Data struct {
 	// steers, how it drives (model + system prompt), and the mission it steers
 	// toward (JSON key "autoPilot").
 	AutoPilot AutoPilotSettings `json:"autoPilot,omitzero"`
+	// Advisor configures the global advisor review layer: its triggers, block
+	// policy, resource bounds and UI presence (JSON key "advisor"). Off unless
+	// enabled.
+	Advisor AdvisorSettings `json:"advisor,omitzero"`
 	// LastOperationMode is the user-wide mode restored when starting a new session.
 	LastOperationMode string `json:"lastOperationMode,omitempty"`
 }
@@ -323,6 +327,451 @@ func (a AutoPilotSettings) Equal(b AutoPilotSettings) bool {
 		a.Steers.Question == b.Steers.Question &&
 		a.Steers.TurnEnd == b.Steers.TurnEnd
 }
+
+// Advisor review modes: how much depth a review buys. Fast keeps to the
+// blocking levels, standard adds architecture and regression checks, deep adds
+// a full pre-merge analysis.
+const (
+	AdvisorModeFast     = "fast"
+	AdvisorModeStandard = "standard"
+	AdvisorModeDeep     = "deep"
+)
+
+// AdvisorDefaultMode is what an unset or unrecognized mode resolves to: the
+// balance most reviews want.
+const AdvisorDefaultMode = AdvisorModeStandard
+
+// Advisor finding grouping in the panel.
+const (
+	AdvisorGroupBySeverity = "severity"
+	AdvisorGroupByFile     = "file"
+	AdvisorGroupByTask     = "task"
+)
+
+// AdvisorDefaultGrouping is what an unset grouping resolves to.
+const AdvisorDefaultGrouping = AdvisorGroupBySeverity
+
+// Advisor resource defaults and hard limits. The limits exist so a hand-edited
+// settings file cannot ask for a review that never finishes: every one of these
+// is a bound on a background model call.
+const (
+	AdvisorDefaultMaxTokens        = 8000
+	AdvisorMaxTokensLimit          = 64000
+	AdvisorDefaultTimeoutSeconds   = 180
+	AdvisorMaxTimeoutSeconds       = 1800
+	AdvisorDefaultMaxFindings      = 20
+	AdvisorMaxFindingsLimit        = 100
+	AdvisorDefaultMaxDiffBytes     = 256 * 1024
+	AdvisorMaxDiffBytesLimit       = 4 * 1024 * 1024
+	AdvisorDefaultCooldownSeconds  = 60
+	AdvisorMaxCooldownSecondsLimit = 3600
+)
+
+// AdvisorSettings configures the global advisor: the independent review layer
+// that inspects what the agent and its subagents produced, classifies every
+// finding P0–P3, and applies the block policy to plan steps, subagent tasks and
+// merges.
+//
+// Every knob is optional, and the on/off knobs are tri-state pointers so an
+// explicit false round-trips through settings.json while an absent field still
+// reads as the product default. The resolvers below are the read path: nothing
+// outside this type interprets a nil pointer.
+type AdvisorSettings struct {
+	// Enable turns the advisor on. Opt-in: nil/absent means off, because a
+	// review costs model calls. Read via Enabled().
+	Enable *bool `json:"enable,omitempty"`
+	// RunInBackground keeps reviews off the agent's goroutine. Opt-out: nil
+	// means on. A merge review is synchronous regardless — its verdict is
+	// needed before the merge runs — so this governs the other triggers.
+	RunInBackground *bool             `json:"runInBackground,omitempty"`
+	Triggers        AdvisorTriggers   `json:"triggers,omitzero"`
+	Blocks          AdvisorBlocks     `json:"blocks,omitzero"`
+	Thresholds      AdvisorThresholds `json:"thresholds,omitzero"`
+	Review          AdvisorReview     `json:"review,omitzero"`
+	Model           AdvisorModel      `json:"model,omitzero"`
+	Display         AdvisorDisplay    `json:"display,omitzero"`
+}
+
+// AdvisorTriggers selects the points a review runs at without being asked.
+// Every field is tri-state: nil keeps the documented default, and an explicit
+// false is a real choice that survives a reload and a layered merge.
+type AdvisorTriggers struct {
+	// AfterSubagentTask reviews a finished background subagent task. Default
+	// on: the task reported success, and that claim is what a review checks.
+	AfterSubagentTask *bool `json:"afterSubagentTask,omitempty"`
+	// BeforeMerge reviews the whole diff against the base branch before a
+	// merge, PR/MR creation, or push to the target branch. Default on: this is
+	// the trigger with the highest cost of being wrong.
+	BeforeMerge *bool `json:"beforeMerge,omitempty"`
+	// BeforePlanStep reviews a plan step's diff before the step is recorded as
+	// done. Default off: it adds a review per step, which is a deliberate
+	// opt-in rather than a cost every plan pays.
+	BeforePlanStep *bool `json:"beforePlanStep,omitempty"`
+	// OnLargeChanges reviews a change that crosses the size or sensitive-path
+	// thresholds below. Default off.
+	OnLargeChanges *bool `json:"onLargeChanges,omitempty"`
+	// SensitivePaths reviews a change that touches a sensitive path even when
+	// it is small. Default on; it is the cheap half of the large-change
+	// trigger.
+	SensitivePaths *bool `json:"sensitivePaths,omitempty"`
+}
+
+// AdvisorBlocks is the block policy: which severity stops which action. The
+// knobs are stated positively ("block merge on P0") because that is how the
+// Settings panel reads, and the resolvers turn them into the single threshold
+// each action actually has.
+type AdvisorBlocks struct {
+	// MergeOnP0 blocks a merge when a P0 was found. Default on.
+	MergeOnP0 *bool `json:"mergeOnP0,omitempty"`
+	// MergeOnP1 blocks a merge when a P1 was found. Default off: P1 asks the
+	// human, and blocking every critical finding would make merges scarce.
+	MergeOnP1 *bool `json:"mergeOnP1,omitempty"`
+	// TaskCompletionOnP0 refuses to treat a finished subagent task as clean
+	// when a P0 was found. Default on.
+	TaskCompletionOnP0 *bool `json:"taskCompletionOnP0,omitempty"`
+	// PlanStepCompletionOnP0 refuses to record a plan step as done when a P0
+	// was found. Default on.
+	PlanStepCompletionOnP0 *bool `json:"planStepCompletionOnP0,omitempty"`
+	// RequireConfirmationOnP1 puts a P1 to the human before continuing, even
+	// where it does not block. Default on.
+	RequireConfirmationOnP1 *bool `json:"requireConfirmationOnP1,omitempty"`
+	// AllowProceedWithRisk lets the human continue past a block after
+	// confirming. Default off: a block is final until the finding is fixed,
+	// which is what makes "blocked" mean something. Read via
+	// AllowProceedWithRisk().
+	AllowProceedWithRisk *bool `json:"allowProceedWithRisk,omitempty"`
+}
+
+// AdvisorThresholds bounds when a review runs on its own and how much it is
+// given. The size knobs are inert until the large-change trigger is on; the
+// diff and cooldown bounds apply to every review.
+type AdvisorThresholds struct {
+	// MinChangedFiles is the changed-file count that counts as a large change.
+	// 0 disables the file-count arm.
+	MinChangedFiles int `json:"minChangedFiles,omitempty"`
+	// MinChangedLines is the changed-line count that counts as a large change.
+	// 0 disables the line-count arm.
+	MinChangedLines int `json:"minChangedLines,omitempty"`
+	// SensitiveFilePatterns are glob-ish patterns matched against changed file
+	// paths. A project may add to the global list; it cannot remove from it.
+	SensitiveFilePatterns []string `json:"sensitiveFilePatterns,omitempty"`
+	// SensitiveDirPatterns are patterns matched against changed directories.
+	SensitiveDirPatterns []string `json:"sensitiveDirPatterns,omitempty"`
+	// MaxDiffBytes caps how much diff text one review is given. A larger
+	// change is truncated and the review is told so. 0 uses the default.
+	MaxDiffBytes int `json:"maxDiffBytes,omitempty"`
+	// CooldownSeconds is the minimum gap between two reviews of the same
+	// target with the same diff hash. 0 uses the default.
+	CooldownSeconds int `json:"cooldownSeconds,omitempty"`
+}
+
+// AdvisorReview is the review's depth and its optional extra criteria.
+type AdvisorReview struct {
+	// Mode is AdvisorModeFast, AdvisorModeStandard or AdvisorModeDeep; empty
+	// or unrecognized resolves to AdvisorDefaultMode. Read via Mode().
+	Mode string `json:"mode,omitempty"`
+	// CustomPrompt appends the user's own review criteria to the built-in
+	// rubric. Empty means the rubric alone.
+	CustomPrompt string `json:"customPrompt,omitempty"`
+}
+
+// AdvisorModel is the advisor's own model and resource budget, deliberately
+// separate from the agent's: a cheap model is the right choice for routine
+// reviews, a strong one for the pre-merge pass.
+type AdvisorModel struct {
+	// Model overrides the review model. Empty inherits the session model, the
+	// same way a subagent with no model set does.
+	Model string `json:"model,omitempty"`
+	// ThinkingEffort sets the review model's reasoning rung (e.g. "low").
+	ThinkingEffort string `json:"thinkingEffort,omitempty"`
+	// MaxTokens caps one review's output. 0 uses the default; read via
+	// ResolvedMaxTokens().
+	MaxTokens int `json:"maxTokens,omitempty"`
+	// TimeoutSeconds bounds one review end to end. 0 uses the default; read
+	// via ResolvedTimeout().
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// MaxFindings caps how many findings one review may report, so a runaway
+	// reviewer cannot flood the panel. 0 uses the default; read via
+	// ResolvedMaxFindings().
+	MaxFindings int `json:"maxFindings,omitempty"`
+}
+
+// AdvisorDisplay controls the advisor's presence in the UI.
+type AdvisorDisplay struct {
+	// StatusBar shows the advisor badge in the status bar. Opt-out: nil means
+	// shown. Read via ShowStatusBar().
+	StatusBar *bool `json:"statusBar,omitempty"`
+	// HideP3 keeps minor findings out of the default panel list. Default off:
+	// hiding a level is a filter the user turns on. Read via HidesP3().
+	HideP3 *bool `json:"hideP3,omitempty"`
+	// GroupBy is AdvisorGroupBySeverity, AdvisorGroupByFile or
+	// AdvisorGroupByTask; empty or unrecognized resolves to the default. Read
+	// via Grouping().
+	GroupBy string `json:"groupBy,omitempty"`
+}
+
+// Enabled reports whether the advisor runs at all. Unset means off: a review
+// spends model calls on every trigger, so it is opt-in.
+func (a AdvisorSettings) Enabled() bool { return a.Enable != nil && *a.Enable }
+
+// RunsInBackground reports whether non-merge reviews run off the agent's
+// goroutine. Unset defaults to on.
+func (a AdvisorSettings) RunsInBackground() bool {
+	return a.RunInBackground == nil || *a.RunInBackground
+}
+
+// AfterSubagentTask reports whether a finished subagent task is reviewed.
+// Default on.
+func (a AdvisorSettings) AfterSubagentTask() bool { return defaultOn(a.Triggers.AfterSubagentTask) }
+
+// BeforeMerge reports whether a merge is reviewed first. Default on.
+func (a AdvisorSettings) BeforeMerge() bool { return defaultOn(a.Triggers.BeforeMerge) }
+
+// BeforePlanStep reports whether a plan step is reviewed before it is recorded
+// as done. Default off.
+func (a AdvisorSettings) BeforePlanStep() bool { return defaultOff(a.Triggers.BeforePlanStep) }
+
+// OnLargeChanges reports whether a change crossing the size thresholds is
+// reviewed on its own. Default off.
+func (a AdvisorSettings) OnLargeChanges() bool { return defaultOff(a.Triggers.OnLargeChanges) }
+
+// SensitivePaths reports whether a change touching a sensitive path is reviewed
+// on its own. Default on.
+func (a AdvisorSettings) SensitivePaths() bool { return defaultOn(a.Triggers.SensitivePaths) }
+
+// AnyAutoTrigger reports whether at least one trigger can fire without being
+// asked. A session with every trigger off still answers /advisor; it just never
+// reviews on its own.
+func (a AdvisorSettings) AnyAutoTrigger() bool {
+	return a.AfterSubagentTask() || a.BeforeMerge() || a.BeforePlanStep() || a.OnLargeChanges() || a.SensitivePaths()
+}
+
+// MergeThreshold is the least severe level that blocks a merge — "P0", "P1",
+// or "" for advisory only. The string is the severity level the caller parses;
+// this package names no severity type, so the setting layer stays free of the
+// advisor package's types.
+func (a AdvisorSettings) MergeThreshold() string {
+	if defaultOff(a.Blocks.MergeOnP1) {
+		return "P1"
+	}
+	if defaultOn(a.Blocks.MergeOnP0) {
+		return "P0"
+	}
+	return ""
+}
+
+// TaskThreshold is the least severe level that stops a finished subagent task
+// from being treated as clean.
+func (a AdvisorSettings) TaskThreshold() string {
+	if defaultOn(a.Blocks.TaskCompletionOnP0) {
+		return "P0"
+	}
+	return ""
+}
+
+// PlanStepThreshold is the least severe level that stops a plan step from being
+// recorded as done.
+func (a AdvisorSettings) PlanStepThreshold() string {
+	if defaultOn(a.Blocks.PlanStepCompletionOnP0) {
+		return "P0"
+	}
+	return ""
+}
+
+// ConfirmThreshold is the least severe level that must be confirmed by the
+// human even where it does not block.
+func (a AdvisorSettings) ConfirmThreshold() string {
+	if defaultOn(a.Blocks.RequireConfirmationOnP1) {
+		return "P1"
+	}
+	return ""
+}
+
+// AllowProceedWithRisk reports whether the human may continue past a block
+// after confirming. Unset means no.
+func (a AdvisorSettings) AllowProceedWithRisk() bool {
+	return defaultOff(a.Blocks.AllowProceedWithRisk)
+}
+
+// Mode resolves the review depth, mapping an unset or unrecognized value to the
+// default so callers never need their own fallback.
+func (a AdvisorSettings) Mode() string {
+	switch a.Review.Mode {
+	case AdvisorModeFast, AdvisorModeStandard, AdvisorModeDeep:
+		return a.Review.Mode
+	default:
+		return AdvisorDefaultMode
+	}
+}
+
+// ResolvedMaxTokens is the review output cap, clamped to the supported range.
+func (a AdvisorSettings) ResolvedMaxTokens() int {
+	if a.Model.MaxTokens <= 0 {
+		return AdvisorDefaultMaxTokens
+	}
+	return min(a.Model.MaxTokens, AdvisorMaxTokensLimit)
+}
+
+// ResolvedTimeout bounds one review end to end.
+func (a AdvisorSettings) ResolvedTimeout() time.Duration {
+	seconds := a.Model.TimeoutSeconds
+	if seconds <= 0 {
+		seconds = AdvisorDefaultTimeoutSeconds
+	}
+	return time.Duration(min(seconds, AdvisorMaxTimeoutSeconds)) * time.Second
+}
+
+// ResolvedMaxFindings caps one review's finding count, clamped so a hand-edited
+// file cannot flood the panel.
+func (a AdvisorSettings) ResolvedMaxFindings() int {
+	if a.Model.MaxFindings <= 0 {
+		return AdvisorDefaultMaxFindings
+	}
+	return min(a.Model.MaxFindings, AdvisorMaxFindingsLimit)
+}
+
+// ResolvedMaxDiffBytes caps the diff text handed to one review.
+func (a AdvisorSettings) ResolvedMaxDiffBytes() int {
+	if a.Thresholds.MaxDiffBytes <= 0 {
+		return AdvisorDefaultMaxDiffBytes
+	}
+	return min(a.Thresholds.MaxDiffBytes, AdvisorMaxDiffBytesLimit)
+}
+
+// ResolvedCooldown is the minimum gap between two reviews of the same target
+// with the same diff hash.
+func (a AdvisorSettings) ResolvedCooldown() time.Duration {
+	seconds := a.Thresholds.CooldownSeconds
+	if seconds <= 0 {
+		seconds = AdvisorDefaultCooldownSeconds
+	}
+	return time.Duration(min(seconds, AdvisorMaxCooldownSecondsLimit)) * time.Second
+}
+
+// ShowStatusBar reports whether the advisor badge is drawn. Unset means shown.
+func (a AdvisorSettings) ShowStatusBar() bool { return defaultOn(a.Display.StatusBar) }
+
+// HidesP3 reports whether minor findings are filtered out of the default list.
+// Unset means shown.
+func (a AdvisorSettings) HidesP3() bool { return defaultOff(a.Display.HideP3) }
+
+// Grouping resolves how the panel groups findings.
+func (a AdvisorSettings) Grouping() string {
+	switch a.Display.GroupBy {
+	case AdvisorGroupBySeverity, AdvisorGroupByFile, AdvisorGroupByTask:
+		return a.Display.GroupBy
+	default:
+		return AdvisorDefaultGrouping
+	}
+}
+
+// Validate rejects configurations that cannot mean what they say: an unknown
+// mode or grouping, or a negative bound. Unset values are always acceptable.
+func (a AdvisorSettings) Validate() error {
+	switch a.Review.Mode {
+	case "", AdvisorModeFast, AdvisorModeStandard, AdvisorModeDeep:
+	default:
+		return fmt.Errorf("unknown advisor review mode %q (want fast, standard or deep)", a.Review.Mode)
+	}
+	switch a.Display.GroupBy {
+	case "", AdvisorGroupBySeverity, AdvisorGroupByFile, AdvisorGroupByTask:
+	default:
+		return fmt.Errorf("unknown advisor grouping %q (want severity, file or task)", a.Display.GroupBy)
+	}
+	negative := map[string]int{
+		"thresholds.minChangedFiles": a.Thresholds.MinChangedFiles,
+		"thresholds.minChangedLines": a.Thresholds.MinChangedLines,
+		"thresholds.maxDiffBytes":    a.Thresholds.MaxDiffBytes,
+		"thresholds.cooldownSeconds": a.Thresholds.CooldownSeconds,
+		"model.maxTokens":            a.Model.MaxTokens,
+		"model.timeoutSeconds":       a.Model.TimeoutSeconds,
+		"model.maxFindings":          a.Model.MaxFindings,
+	}
+	for name, value := range negative {
+		if value < 0 {
+			return fmt.Errorf("advisor %s must not be negative", name)
+		}
+	}
+	return nil
+}
+
+// IsZero reports whether nothing was configured — used to keep the block out of
+// settings.json and persisted session state when the advisor was never touched.
+func (a AdvisorSettings) IsZero() bool {
+	return a.Enable == nil && a.RunInBackground == nil &&
+		a.Triggers == (AdvisorTriggers{}) &&
+		a.Blocks == (AdvisorBlocks{}) &&
+		a.Thresholds.MinChangedFiles == 0 && a.Thresholds.MinChangedLines == 0 &&
+		len(a.Thresholds.SensitiveFilePatterns) == 0 && len(a.Thresholds.SensitiveDirPatterns) == 0 &&
+		a.Thresholds.MaxDiffBytes == 0 && a.Thresholds.CooldownSeconds == 0 &&
+		a.Review == (AdvisorReview{}) &&
+		a.Model == (AdvisorModel{}) &&
+		a.Display == (AdvisorDisplay{})
+}
+
+// Clone returns a deep copy, duplicating every tri-state pointer and pattern
+// list so callers can mutate the copy without touching the original.
+func (a AdvisorSettings) Clone() AdvisorSettings {
+	a.Enable = clonePtr(a.Enable)
+	a.RunInBackground = clonePtr(a.RunInBackground)
+	a.Triggers.AfterSubagentTask = clonePtr(a.Triggers.AfterSubagentTask)
+	a.Triggers.BeforeMerge = clonePtr(a.Triggers.BeforeMerge)
+	a.Triggers.BeforePlanStep = clonePtr(a.Triggers.BeforePlanStep)
+	a.Triggers.OnLargeChanges = clonePtr(a.Triggers.OnLargeChanges)
+	a.Triggers.SensitivePaths = clonePtr(a.Triggers.SensitivePaths)
+	a.Blocks.MergeOnP0 = clonePtr(a.Blocks.MergeOnP0)
+	a.Blocks.MergeOnP1 = clonePtr(a.Blocks.MergeOnP1)
+	a.Blocks.TaskCompletionOnP0 = clonePtr(a.Blocks.TaskCompletionOnP0)
+	a.Blocks.PlanStepCompletionOnP0 = clonePtr(a.Blocks.PlanStepCompletionOnP0)
+	a.Blocks.RequireConfirmationOnP1 = clonePtr(a.Blocks.RequireConfirmationOnP1)
+	a.Blocks.AllowProceedWithRisk = clonePtr(a.Blocks.AllowProceedWithRisk)
+	a.Thresholds.SensitiveFilePatterns = slices.Clone(a.Thresholds.SensitiveFilePatterns)
+	a.Thresholds.SensitiveDirPatterns = slices.Clone(a.Thresholds.SensitiveDirPatterns)
+	a.Display.StatusBar = clonePtr(a.Display.StatusBar)
+	a.Display.HideP3 = clonePtr(a.Display.HideP3)
+	return a
+}
+
+// Equal compares two configs by value, normalizing every tri-state knob and
+// bounded number through its resolver so nil and an explicit default compare
+// equal. It is the Settings panel's unsaved-edits check, so it compares what
+// the advisor would actually do rather than how the JSON was written.
+func (a AdvisorSettings) Equal(b AdvisorSettings) bool {
+	return a.Enabled() == b.Enabled() &&
+		a.RunsInBackground() == b.RunsInBackground() &&
+		a.AfterSubagentTask() == b.AfterSubagentTask() &&
+		a.BeforeMerge() == b.BeforeMerge() &&
+		a.BeforePlanStep() == b.BeforePlanStep() &&
+		a.OnLargeChanges() == b.OnLargeChanges() &&
+		a.SensitivePaths() == b.SensitivePaths() &&
+		a.MergeThreshold() == b.MergeThreshold() &&
+		a.TaskThreshold() == b.TaskThreshold() &&
+		a.PlanStepThreshold() == b.PlanStepThreshold() &&
+		a.ConfirmThreshold() == b.ConfirmThreshold() &&
+		a.AllowProceedWithRisk() == b.AllowProceedWithRisk() &&
+		a.Thresholds.MinChangedFiles == b.Thresholds.MinChangedFiles &&
+		a.Thresholds.MinChangedLines == b.Thresholds.MinChangedLines &&
+		slices.Equal(a.Thresholds.SensitiveFilePatterns, b.Thresholds.SensitiveFilePatterns) &&
+		slices.Equal(a.Thresholds.SensitiveDirPatterns, b.Thresholds.SensitiveDirPatterns) &&
+		a.ResolvedMaxDiffBytes() == b.ResolvedMaxDiffBytes() &&
+		a.ResolvedCooldown() == b.ResolvedCooldown() &&
+		a.Mode() == b.Mode() &&
+		a.Review.CustomPrompt == b.Review.CustomPrompt &&
+		a.Model.Model == b.Model.Model &&
+		a.Model.ThinkingEffort == b.Model.ThinkingEffort &&
+		a.ResolvedMaxTokens() == b.ResolvedMaxTokens() &&
+		a.ResolvedTimeout() == b.ResolvedTimeout() &&
+		a.ResolvedMaxFindings() == b.ResolvedMaxFindings() &&
+		a.ShowStatusBar() == b.ShowStatusBar() &&
+		a.HidesP3() == b.HidesP3() &&
+		a.Grouping() == b.Grouping()
+}
+
+// defaultOn resolves a tri-state "on unless explicitly turned off" knob.
+func defaultOn(p *bool) bool { return p == nil || *p }
+
+// defaultOff resolves a tri-state "off unless explicitly turned on" knob.
+func defaultOff(p *bool) bool { return p != nil && *p }
 
 // SelfLearnSettings configures skill self-learning, triggered by the model
 // through the Evolve tool. Memory is separate: see Data.AutoMemory.
@@ -878,6 +1327,7 @@ func (s *Data) Clone() *Data {
 	dst.Permissions.Deny = slices.Clone(s.Permissions.Deny)
 	dst.Permissions.Ask = slices.Clone(s.Permissions.Ask)
 	dst.AutoPilot = s.AutoPilot.Clone()
+	dst.Advisor = s.Advisor.Clone()
 	dst.AllowBypass = clonePtr(s.AllowBypass)
 	dst.AutoUpdate = clonePtr(s.AutoUpdate)
 	dst.AutoMemory = clonePtr(s.AutoMemory)

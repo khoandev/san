@@ -207,6 +207,19 @@ func (s *Store) Append(ctx context.Context, rec Record) error {
 		if rec.Compaction == nil || rec.Compaction.MessageID == "" {
 			return fmt.Errorf("compaction boundary is required")
 		}
+	case AdvisorReviewed:
+		if rec.AdvisorReview == nil {
+			return fmt.Errorf("advisor review payload is required")
+		}
+		// Validate at the boundary: a review that cannot be projected would
+		// make the whole session unreadable on resume.
+		if err := rec.AdvisorReview.Validate(); err != nil {
+			return fmt.Errorf("advisor review: %w", err)
+		}
+	case AdvisorFindingUpdated:
+		if rec.AdvisorFinding == nil || rec.AdvisorFinding.ReviewID == "" || rec.AdvisorFinding.FindingID == "" {
+			return fmt.Errorf("advisor finding review id, finding id and payload are required")
+		}
 	default:
 		return fmt.Errorf("unknown transcript event %q", rec.Type)
 	}
@@ -486,6 +499,7 @@ func (s *Store) loadLocked(ctx context.Context, id string) (*Transcript, error) 
 		task.BlockedBy = slices.Clone(task.BlockedBy)
 	}
 	c.latestState.Plan = tx.State.Plan.Clone()
+	c.latestState.Advisor = tx.State.Advisor.Clone()
 	c.messages = tx.Messages
 	c.warmed = true
 	if s.sessions == nil {

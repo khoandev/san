@@ -150,6 +150,9 @@ func (m *model) buildSessionRecord() *transcript.Record {
 			// The plan is session state, like the tasks: no file of its own, and
 			// a resume restores the plan, its progress and its panel from here.
 			Plan: new(m.plan.Snapshot()),
+			// The advisor override travels with the session, so a session that
+			// turned the review layer off stays off when it is resumed.
+			AdvisorSettings: new(marshalAdvisor(m.env.Advisor)),
 		}}
 }
 
@@ -224,6 +227,19 @@ func (m *model) restoreHistory(sess *session.History) {
 	// Plan Mode follows the conversation it belonged to: the mode, every plan
 	// the session produced, and the step the executor stopped on.
 	m.restorePlanState(sess.Plan)
+
+	// The advisor's verdicts and its settings override belong to the
+	// conversation too: restore both so a resumed session shows the reviews it
+	// already ran and keeps the review layer it had.
+	m.services.Advisor.Store.Restore(sess.Advisor)
+	m.env.Advisor = setting.AdvisorSettings{}
+	if m.services.Setting != nil {
+		m.env.Advisor = m.services.Setting.Advisor()
+	}
+	if overridden := parseAdvisor(sess.AdvisorSettings); !overridden.IsZero() {
+		m.env.Advisor = overridden
+	}
+	m.services.Advisor.Indicator.Reset()
 
 	// Session-specific settings never inherit the previous conversation's goal.
 	m.beforeGoal = nil

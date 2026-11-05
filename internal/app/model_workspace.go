@@ -25,6 +25,9 @@ func (m *model) changeCwd(newCwd string) {
 	m.refreshMemoryContext(newCwd, "cwd_changed")
 	m.ReloadProjectContext(newCwd)
 	m.ReconfigureAgentTool()
+	// The advisor's read tools and its sidechain header name the working tree,
+	// so they follow the switch instead of pointing at the old one.
+	m.wireAdvisor()
 	m.services.Hook.SetCwd(newCwd)
 	m.services.Hook.ExecuteAsync(hook.CwdChanged, hook.HookInput{OldCwd: oldCwd, NewCwd: newCwd})
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/todo"
 	"github.com/genai-io/san/internal/tool/toolresult"
@@ -34,6 +35,13 @@ const (
 	SkillStateChanged    = "skill.state.changed"
 	NoticeAdded          = "notice.added"
 	ToolCompleted        = "tool.completed"
+	// AdvisorReviewed records one advisor review. Each review is its own
+	// record, so history grows by one line per review rather than by a copy of
+	// the whole history, and an earlier review is never rewritten.
+	AdvisorReviewed = "advisor.reviewed"
+	// AdvisorFindingUpdated records one finding's lifecycle move (addressed,
+	// dismissed, deferred). It joins its review by id.
+	AdvisorFindingUpdated = "advisor.finding.updated"
 )
 
 // Audit-record enum values. Centralized so producers and consumers (viewer,
@@ -89,6 +97,12 @@ type Record struct {
 	Skill       *SkillRecord         `json:"skill,omitempty"`
 	ToolDetails *ToolDetailsRecord   `json:"toolDetails,omitempty"`
 	Notice      *NoticeRecord        `json:"notice,omitempty"`
+
+	// AdvisorReview is the payload for advisor.reviewed: exactly one review,
+	// complete with its findings and the diff hash it judged.
+	AdvisorReview *advisor.Review `json:"advisorReview,omitempty"`
+	// AdvisorFinding is the payload for advisor.finding.updated.
+	AdvisorFinding *AdvisorFindingRecord `json:"advisorFinding,omitempty"`
 }
 
 // StatePatch updates selected fields; nil leaves a field unchanged.
@@ -101,6 +115,10 @@ type StatePatch struct {
 	Group      *string      `json:"group,omitempty"`
 	Tasks      *[]todo.Item `json:"tasks,omitempty"`
 	Plan       *plan.State  `json:"plan,omitempty"`
+	// AdvisorSettings is the session's advisor settings override as a JSON
+	// blob (empty clears it). Reviews never travel here: they are their own
+	// append-only records, so a patch stays small and a resume folds the log.
+	AdvisorSettings *string `json:"advisorSettings,omitempty"`
 }
 
 // SessionStart describes a new identity and its initial runtime configuration.
@@ -192,6 +210,18 @@ type HookRecord struct {
 	Outcome   string `json:"outcome"`           // "ran" | "blocked" | "error" | "async"
 	Reason    string `json:"reason,omitempty"`  // hook-supplied block/deny message
 	LatencyMs int64  `json:"latencyMs,omitempty"`
+}
+
+// AdvisorFindingRecord carries the payload for advisor.finding.updated: one
+// finding's move between open, addressed, dismissed and deferred, with the
+// reason a dismissal or deferral must give. Recording the move on its own keeps
+// the review it belongs to immutable.
+type AdvisorFindingRecord struct {
+	ReviewID  string                `json:"reviewId"`
+	FindingID string                `json:"findingId"`
+	Status    advisor.FindingStatus `json:"status"`
+	Note      string                `json:"note,omitempty"`
+	UpdatedAt time.Time             `json:"updatedAt,omitempty"`
 }
 
 // NoticeRecord is a line shown to the person and never to the model — a

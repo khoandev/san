@@ -344,6 +344,19 @@ func UpdateAutoPilotAt(cfg AutoPilotSettings, scope Scope) error {
 	return updateSettingsFile(scope, func(d *Data) { d.AutoPilot = cfg })
 }
 
+// UpdateAdvisorAt persists the advisor config at the requested settings level,
+// rewriting only the advisor block. It replaces the block rather than merging
+// into it so a knob turned back to its default (an explicit false becoming
+// absent, a raised bound coming back down) actually persists at this level;
+// cross-level layering still applies on Load. Validate runs first, so a bad
+// mode or grouping is reported before anything touches disk.
+func UpdateAdvisorAt(cfg AdvisorSettings, scope Scope) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return updateSettingsFile(scope, func(d *Data) { d.Advisor = cfg })
+}
+
 // UpdateLastOperationMode persists the user-wide mode restored when a new
 // session starts.
 func UpdateLastOperationMode(mode OperationMode) error {

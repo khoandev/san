@@ -73,6 +73,7 @@ type model struct {
 	// (PostTool fires once per tool). Reset each step in OnInference (PostInfer).
 	drainedThisStep bool
 	selfLearnStarts chan struct{} // fork goroutine → Update loop: a review started (start the spinner)
+	advisorStarts   chan struct{} // review goroutine → Update loop: an advisor review started
 	systemInput     trigger.Model // Source 3: system events (cron/hooks/watcher)
 	conv            conv.Model    // Agent Outbox: conversation + output rendering
 	env             env           // Shared app state: provider, session, permission, plan, config
@@ -180,6 +181,12 @@ type model struct {
 	// the next turn.
 	agentDisabledToolsSignature string
 
+	// agentAdvisorSignature is the advisorSignature() the live review runner was
+	// built from; ensureAgentRuntime rebuilds when it no longer matches, so an
+	// /advisor save, a settings-file edit or a model switch takes effect on the
+	// next turn.
+	agentAdvisorSignature string
+
 	// turnOpenedBy is the message that started the running turn; messages
 	// that enter mid-turn belong to it.
 	turnOpenedBy string
@@ -215,6 +222,7 @@ func (m *model) Init() tea.Cmd {
 		trigger.StartAsyncHookTicker(),
 		awaitMainNotice(m.mainNotices),
 		awaitSelfLearnStart(m.selfLearnStarts),
+		awaitAdvisorStart(m.advisorStarts),
 		autoUpdate(m.env.Version, m.services.Setting.AutoUpdate()),
 		refreshModelData(),
 		m.syncGitBar(),

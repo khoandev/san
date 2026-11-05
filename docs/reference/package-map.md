@@ -47,6 +47,7 @@ Agent, persistence, and orchestration:
 | `internal/group` | `feature` | Groups of sessions on one machine: member files, per-member inboxes, online status from pid and process start time. |
 | `internal/cron` | `feature` | Cron definitions, storage, service, loop. |
 | `internal/selflearn` | `feature` | Background self-learning reviewer and restricted skill-update surface. |
+| `internal/advisor` | `feature` | Global advisor review layer: the P0–P3 finding model, the block policy, merge/size/sensitive-path trigger detection with a per-target cooldown, the read-only review engine, and the session-scoped review store that plan steps, subagent tasks and merges are gated by. |
 | `internal/plan` | `feature` | Plan Mode: the session-scoped plan store, the `plan` / `plan-step` / `plan-update` wire protocol, and the plan editor's text format. |
 
 Extension surfaces:
@@ -80,7 +81,7 @@ Configuration and supporting capabilities:
 | `internal/secret` | `infrastructure` | Secret storage helpers. |
 | `internal/filecache` | `infrastructure` | File restore/cache helpers. |
 | `internal/markdown` | `infrastructure` | Markdown frontmatter parsing. |
-| `internal/proc` | `infrastructure` | Cross-platform process-group / signal helpers (Unix/Windows variants) and the OS URL launcher. |
+| `internal/proc` | `infrastructure` | Cross-platform process-group / signal helpers (Unix/Windows variants), read-only git status and diff snapshots, and the OS URL launcher. |
 | `internal/confdir` | `infrastructure` | Shared `.san` configuration directory naming, and scanning config folders through symlinks. |
 | `internal/atomicfile` | `infrastructure` | Temp-file-then-rename file replacement, so a reader never sees a half-written file. |
 | `internal/autoupdate` | `infrastructure` | Replaces the running binary with a newer GitHub release by download-beside-and-rename; shared by `san update` and the TUI's background check. |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/command"
 	"github.com/genai-io/san/internal/cron"
@@ -52,6 +53,12 @@ type services struct {
 	// construction and outlives any session's wire/teardown so the render
 	// path can always Snapshot() without a nil check.
 	SelfLearn SelfLearnServices
+
+	// Advisor groups the global advisor's state: the session's append-only
+	// review history, the live run (nil when the advisor is off, so a disabled
+	// advisor costs no goroutine and no model call), and the status snapshot
+	// the status bar reads.
+	Advisor AdvisorServices
 }
 
 // SelfLearnServices holds the L1 self-learning state.
@@ -114,5 +121,6 @@ func newServices() services {
 		Persona:      persona.Default(),
 		Reminder:     reminder.New(),
 		SelfLearn:    SelfLearnServices{Indicator: NewSelfLearnIndicator(), Recent: NewRecentLearnLog()},
+		Advisor:      AdvisorServices{Store: advisor.NewStore(), Indicator: NewAdvisorIndicator()},
 	}
 }

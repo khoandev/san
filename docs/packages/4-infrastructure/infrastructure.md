@@ -166,6 +166,21 @@ The caller bounds the context; cancellation kills Git and its children, with a
 missing Git and cancellation. Consumers should hide read failures, not treat
 failed reads as clean or display raw remote URLs.
 
+`ReadWorkingDiff(ctx, cwd, opts)` and `ReadCommitDiff(ctx, cwd, sha, opts)` read a
+diff without writing to the repository: nothing is staged, committed or checked
+out, external diff drivers and textconv filters are disabled (both run
+repository-configured programs), and untracked files are listed from the status
+rather than added to the index. The base resolves through `advisor.baseBranch`,
+`origin/HEAD`, `main`, `master`, then `HEAD`; an explicit base that does not
+resolve is an error, and every ref is resolved to a commit before it reaches the
+command line, so an option-shaped ref cannot be executed. The result carries the
+changed files, added/removed line totals, untracked paths, a size cap
+(`MaxBytes`, with truncation flagged) and a SHA-256 over the full diff text plus
+the sorted file list, which is what lets a review be reused instead of re-run.
+`internal/proc/git_diff_test.go` covers uncommitted and branch diffs, untracked
+files, an empty worktree, truncation, binary files, unborn repositories, unknown
+commits and a missing Git binary.
+
 ## `internal/autoupdate`
 
 Replaces the running `san` binary with a newer GitHub release. The running

@@ -81,6 +81,13 @@ func (s *Store) ListContext(ctx context.Context) ([]Summary, error) {
 	return s.transcriptStore.List(ctx, s.projectID, transcript.ListOptions{})
 }
 
+// ListAllContext lists every session in the project, sidechain sessions
+// included. The picker hides sidechains, but an advisor review runs in one so
+// the inspector can replay it, and that fork must stay discoverable.
+func (s *Store) ListAllContext(ctx context.Context) ([]Summary, error) {
+	return s.transcriptStore.List(ctx, s.projectID, transcript.ListOptions{IncludeSidechain: true})
+}
+
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -290,6 +297,10 @@ func (s *Store) readHistory(ctx context.Context, sessionID string, includeCompac
 		Messages:    tx.Messages,
 		Tasks:       tx.State.Tasks,
 		Plan:        tx.State.Plan,
+		// A resume replays the advisor's verdicts and the settings the session
+		// carried, so neither is re-derived from the current settings file.
+		Advisor:         tx.State.Advisor.Clone(),
+		AdvisorSettings: tx.State.AdvisorSettings,
 	}
 
 	if sess.Metadata.Title == "" {

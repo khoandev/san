@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/todo"
@@ -25,6 +26,13 @@ type History struct {
 	// Plan is the session's Plan Mode state, restored with the conversation so
 	// an interrupted plan reopens at the step where it stopped.
 	Plan plan.State
+	// Advisor is the session's advisor history, folded from the log's advisor
+	// records. It is what the /advisor panel reads after a resume.
+	Advisor advisor.State
+	// AdvisorSettings is the session's advisor settings override as a JSON
+	// blob (empty when unset), kept opaque here for the same reason as
+	// AutoPilot: the app marshals and unmarshals it.
+	AdvisorSettings string
 }
 
 // ChatRows projects the conversation for display. It is never a persistence source.

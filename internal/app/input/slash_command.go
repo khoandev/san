@@ -115,6 +115,10 @@ type SlashCommandEnv struct {
 	// and with a prompt it also starts planning that request. The app owns the
 	// plan store and the Execution Panel, so the command only reports back.
 	PlanCommand func(prompt string) (string, tea.Cmd)
+	// AdvisorCommand runs /advisor: it reports the review layer's state, or
+	// starts a review of the working tree. The app owns the review runner, so
+	// the command only reports back.
+	AdvisorCommand func(args string) (string, tea.Cmd)
 }
 
 type SlashCommandController struct {
@@ -157,6 +161,7 @@ func builtinCommandHandlers() map[string]slashCommandHandler {
 		"name":           (*SlashCommandController).handleNameCommand,
 		"group":          (*SlashCommandController).handleGroupCommand,
 		"trust":          (*SlashCommandController).handleTrustCommand,
+		"advisor":        (*SlashCommandController).handleAdvisorCommand,
 		"evolve":         (*SlashCommandController).handleEvolveCommand,
 		"selflearn-demo": (*SlashCommandController).handleSelflearnDemoCommand,
 		"btw":            (*SlashCommandController).handleBtwCommand,
@@ -174,6 +179,17 @@ func (c *SlashCommandController) handlePlanCommand(_ context.Context, args strin
 		return "Plan Mode is unavailable.", nil, nil
 	}
 	result, cmd := c.env.PlanCommand(args)
+	return result, cmd, nil
+}
+
+// handleAdvisorCommand reports the global advisor's state, or asks it to review
+// the working tree now. The callback owns the wording; the browsing panel
+// arrives with the advisor UI step.
+func (c *SlashCommandController) handleAdvisorCommand(_ context.Context, args string) (string, tea.Cmd, error) {
+	if c.env.AdvisorCommand == nil {
+		return "The advisor is unavailable.", nil, nil
+	}
+	result, cmd := c.env.AdvisorCommand(args)
 	return result, cmd, nil
 }
 

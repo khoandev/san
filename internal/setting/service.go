@@ -220,6 +220,20 @@ func (s *Settings) Hooks() map[string][]Hook {
 	return s.data.Hooks
 }
 
+// Advisor returns just the advisor configuration, cloned under the read lock.
+// It clones because the type carries tri-state pointers and pattern slices, so
+// a caller could otherwise reach into live settings. Used by the review runner
+// and the /advisor panel, which would pay for a whole Snapshot() to read this
+// one block.
+func (s *Settings) Advisor() AdvisorSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data == nil {
+		return AdvisorSettings{}
+	}
+	return s.data.Advisor.Clone()
+}
+
 func (s *Settings) CheckPermission(toolName string, args map[string]any, session *SessionPermissions) perm.Decision {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -29,6 +29,9 @@ func TestSavePathsRefuseToClobberMalformedSettings(t *testing.T) {
 		"UpdateSelfLearnAt": func(t *testing.T, home string) error {
 			return UpdateSelfLearnAt(SelfLearnSettings{}, ScopeUser)
 		},
+		"UpdateAdvisorAt": func(t *testing.T, home string) error {
+			return UpdateAdvisorAt(AdvisorSettings{Enable: boolPtr(true)}, ScopeUser)
+		},
 		"SavePersonaAt": func(t *testing.T, home string) error {
 			return SavePersonaAt("", "reviewer", ScopeUser)
 		},

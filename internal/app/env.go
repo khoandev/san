@@ -81,6 +81,14 @@ type env struct {
 	// resumed configs take effect.
 	AutoPilot setting.AutoPilotSettings
 
+	// Advisor is the live advisor config for this session: seeded from
+	// settings at startup, overridden per session, persisted with the session
+	// and restored on resume. Keeping it here (rather than reading settings on
+	// every trigger) lets one session turn the review layer off without
+	// changing the file the next session inherits, and lets the drift check
+	// compare what the runner was built from against what is live.
+	Advisor setting.AdvisorSettings
+
 	// SessionName holds the custom session name set via /name. When non-empty
 	// it overrides the auto-generated title on save. Restored from persisted
 	// session metadata on resume.

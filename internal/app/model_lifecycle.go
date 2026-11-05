@@ -90,6 +90,7 @@ func newBaseModel() model {
 		conv:                conv.NewModel(defaultWidth),
 		mainNotices:         make(chan mainNotice, 64),
 		selfLearnStarts:     make(chan struct{}, 8),
+		advisorStarts:       make(chan struct{}, 8),
 		systemInput:         trigger.New(),
 		env:                 environment,
 		services:            svc,
@@ -114,6 +115,7 @@ func applyStartupSettings(environment *env, settings *setting.Data, cwd string, 
 	environment.BashPreviewLines = settings.BashPreviewLineCount()
 	environment.AgentPreviewLines = settings.AgentPreviewLineCount()
 	environment.AutoPilot = settings.AutoPilot.Clone()
+	environment.Advisor = settings.Advisor.Clone()
 }
 
 func (m *model) applyRunOptions(opts setting.RunOptions) error {

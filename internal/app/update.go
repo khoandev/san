@@ -624,6 +624,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.onRecapReady(msg)
 	case selfLearnStartedMsg:
 		return m, m.onSelfLearnStarted()
+	case advisorStartedMsg:
+		return m, m.onAdvisorStarted()
 	case selflearnTickMsg:
 		return m, m.handleSelflearnTick()
 	}

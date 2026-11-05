@@ -23,8 +23,15 @@ The package exposes a concrete `*Store`, plus `Record`, `Transcript`, and
 payloads stay native.
 State patches are reduced to actual changes under the append mutex; unchanged
 fields produce no redundant record. `StatePatch` uses typed pointers for title,
-prompt, mode, autopilot, group, and tasks; nil means unchanged, an explicit empty
-value clears. Task metadata is copied into its durable JSON form before caching.
+prompt, mode, autopilot, group, tasks, plan, and the advisor's session settings
+blob; nil means unchanged, an explicit empty value clears. Task metadata is
+copied into its durable JSON form before caching.
+
+Advisor history is recorded as its own records, never inside a state patch:
+`advisor.reviewed` carries exactly one review and `advisor.finding.updated`
+carries one finding's move. The projection folds them into `State.Advisor`, so a
+resume replays the verdicts in the order they happened and a re-run appends
+instead of overwriting the review it supersedes.
 
 ```go
 func NewStore(baseDir, projectID string) (*Store, error)
@@ -52,6 +59,11 @@ func Project(records []Record) (*Transcript, error)
   reset as an empty `conversation.replaced`. A record's ID is its position in
   the log.
 - `state_patch.go` applies typed partial updates and removes unchanged fields.
+- Advisor records are folded by `projector.go` through `advisor.State.Append`
+  and `advisor.State.UpdateFinding`, which are append-only and idempotent: a
+  replayed review adds nothing, and a finding move returns a copied state so an
+  earlier snapshot never changes under its reader. A move naming a review the log
+  does not hold is dropped rather than failing the session.
 - `projector.go` is linear. Resume starts over at each reset; history keeps
   every message once, in the order it first appeared. Session ancestry uses
   `parentSessionId`.
@@ -83,6 +95,9 @@ attachment identifiers must be single path components.
 - `recovery_test.go` covers writer leases, cache refresh across stores, summary
   independence, and schema validation.
 - `projector_test.go` covers resume and history across a reset.
+- `advisor_test.go` covers advisor projection, idempotent replay, history
+  surviving compaction, the store round-trip, and the one-record-per-review
+  shape.
 - `fork_safety_test.go` covers occupied destinations and cross-store writer leases.
 - Session and app tests cover hydrated resume, error retry, and inactive
   compaction through the actual writer/runtime boundaries.

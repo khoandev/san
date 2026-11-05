@@ -3,13 +3,12 @@
 package app
 
 import (
-	"github.com/genai-io/sdk-go/pkg/ai"
-
 	"context"
 	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -17,6 +16,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"go.uber.org/zap"
+
+	"github.com/genai-io/sdk-go/pkg/ai"
 
 	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/app/conv"
@@ -419,7 +420,8 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 		// are covered uniformly.
 		if m.selfLearnCapabilities() == m.agentEvolveCaps &&
 			m.disabledToolsSignature() == m.agentDisabledToolsSignature &&
-			m.autoMemory() == m.agentAutoMemory {
+			m.autoMemory() == m.agentAutoMemory &&
+			m.advisorSignature() == m.agentAdvisorSignature {
 			return nil, nil
 		}
 		if err := m.StopAgentRuntime(); err != nil {
@@ -461,6 +463,11 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 	// the live Agent + System for its fork. Builds nothing if every skill action is
 	// denied (§3.1 zero-overhead guarantee).
 	m.wireSelfLearn(params)
+	// Wire the global advisor from the same live provider/model the agent was
+	// built with. Builds nothing when the advisor is off, so a disabled review
+	// layer costs no goroutine and no model call.
+	m.wireAdvisor()
+	m.agentAdvisorSignature = m.advisorSignature()
 
 	cmds := []tea.Cmd{
 		conv.DrainAgentOutbox(m.services.Agent.Outbox()),
@@ -591,6 +598,7 @@ func (m *model) wireReminderProviders() {
 const agentStopTimeout = 2 * time.Second
 
 func (m *model) StopAgentRuntime() error {
+	log.Logger().Sugar().Debugf("StopAgentRuntime called\n%s", debug.Stack())
 	m.cancelManualCompaction()
 	m.pendingStopHook = nil
 	ctx, cancel := context.WithTimeout(context.Background(), agentStopTimeout)
@@ -600,6 +608,7 @@ func (m *model) StopAgentRuntime() error {
 		return fmt.Errorf("stop agent runtime: %w", err)
 	}
 	m.teardownSelfLearn()
+	m.teardownAdvisor()
 	return nil
 }
 
@@ -625,6 +634,15 @@ func (m *model) ResetAgentRuntime() error {
 	// so an in-flight fork unblocks immediately instead of holding tokens /
 	// HTTP for up to forkDeadline.
 	m.teardownSelfLearn()
+	// The advisor belongs to the conversation that is going away: cancel its
+	// context and drop its review history, so nothing from the old session is
+	// published or persisted into the new one.
+	m.teardownAdvisor()
+	m.services.Advisor.Store.Reset()
+	m.env.Advisor = setting.AdvisorSettings{}
+	if m.services.Setting != nil {
+		m.env.Advisor = m.services.Setting.Advisor()
+	}
 	return nil
 }
 

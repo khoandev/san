@@ -38,6 +38,7 @@ func mergeSettings(base, overlay *Data) *Data {
 	result.Persona = coalesce(overlay.Persona, base.Persona)
 	result.SelfLearn = mergeSelfLearn(base.SelfLearn, overlay.SelfLearn)
 	result.AutoPilot = mergeAutoPilot(base.AutoPilot, overlay.AutoPilot)
+	result.Advisor = mergeAdvisor(base.Advisor, overlay.Advisor)
 	result.LastOperationMode = coalesce(overlay.LastOperationMode, base.LastOperationMode)
 
 	return result
@@ -83,6 +84,60 @@ func ApplyPersonaOverlay(base, overlay *Data) *Data {
 	ov := overlay.Clone()
 	ov.Persona = ""
 	return mergeSettings(base, ov)
+}
+
+// mergeAdvisor does a field-level merge of the advisor config. Every on/off knob
+// is tri-state and coalesces — the overlay's explicit value wins, else the
+// base's, else nil keeps the documented default — so a project or a session can
+// turn a default-on trigger off and have it stick. Bounds coalesce (a non-zero
+// overlay wins) and the sensitive-path patterns are a deduplicated union,
+// matching permissions: a project can widen what counts as sensitive but never
+// narrow the global list. Without this the whole advisor block is dropped on
+// every Load and every save.
+func mergeAdvisor(base, overlay AdvisorSettings) AdvisorSettings {
+	return AdvisorSettings{
+		Enable:          coalescePtr(overlay.Enable, base.Enable),
+		RunInBackground: coalescePtr(overlay.RunInBackground, base.RunInBackground),
+		Triggers: AdvisorTriggers{
+			AfterSubagentTask: coalescePtr(overlay.Triggers.AfterSubagentTask, base.Triggers.AfterSubagentTask),
+			BeforeMerge:       coalescePtr(overlay.Triggers.BeforeMerge, base.Triggers.BeforeMerge),
+			BeforePlanStep:    coalescePtr(overlay.Triggers.BeforePlanStep, base.Triggers.BeforePlanStep),
+			OnLargeChanges:    coalescePtr(overlay.Triggers.OnLargeChanges, base.Triggers.OnLargeChanges),
+			SensitivePaths:    coalescePtr(overlay.Triggers.SensitivePaths, base.Triggers.SensitivePaths),
+		},
+		Blocks: AdvisorBlocks{
+			MergeOnP0:               coalescePtr(overlay.Blocks.MergeOnP0, base.Blocks.MergeOnP0),
+			MergeOnP1:               coalescePtr(overlay.Blocks.MergeOnP1, base.Blocks.MergeOnP1),
+			TaskCompletionOnP0:      coalescePtr(overlay.Blocks.TaskCompletionOnP0, base.Blocks.TaskCompletionOnP0),
+			PlanStepCompletionOnP0:  coalescePtr(overlay.Blocks.PlanStepCompletionOnP0, base.Blocks.PlanStepCompletionOnP0),
+			RequireConfirmationOnP1: coalescePtr(overlay.Blocks.RequireConfirmationOnP1, base.Blocks.RequireConfirmationOnP1),
+			AllowProceedWithRisk:    coalescePtr(overlay.Blocks.AllowProceedWithRisk, base.Blocks.AllowProceedWithRisk),
+		},
+		Thresholds: AdvisorThresholds{
+			MinChangedFiles:       coalesceInt(overlay.Thresholds.MinChangedFiles, base.Thresholds.MinChangedFiles),
+			MinChangedLines:       coalesceInt(overlay.Thresholds.MinChangedLines, base.Thresholds.MinChangedLines),
+			SensitiveFilePatterns: mergeStringSlices(base.Thresholds.SensitiveFilePatterns, overlay.Thresholds.SensitiveFilePatterns),
+			SensitiveDirPatterns:  mergeStringSlices(base.Thresholds.SensitiveDirPatterns, overlay.Thresholds.SensitiveDirPatterns),
+			MaxDiffBytes:          coalesceInt(overlay.Thresholds.MaxDiffBytes, base.Thresholds.MaxDiffBytes),
+			CooldownSeconds:       coalesceInt(overlay.Thresholds.CooldownSeconds, base.Thresholds.CooldownSeconds),
+		},
+		Review: AdvisorReview{
+			Mode:         coalesce(overlay.Review.Mode, base.Review.Mode),
+			CustomPrompt: coalesce(overlay.Review.CustomPrompt, base.Review.CustomPrompt),
+		},
+		Model: AdvisorModel{
+			Model:          coalesce(overlay.Model.Model, base.Model.Model),
+			ThinkingEffort: coalesce(overlay.Model.ThinkingEffort, base.Model.ThinkingEffort),
+			MaxTokens:      coalesceInt(overlay.Model.MaxTokens, base.Model.MaxTokens),
+			TimeoutSeconds: coalesceInt(overlay.Model.TimeoutSeconds, base.Model.TimeoutSeconds),
+			MaxFindings:    coalesceInt(overlay.Model.MaxFindings, base.Model.MaxFindings),
+		},
+		Display: AdvisorDisplay{
+			StatusBar: coalescePtr(overlay.Display.StatusBar, base.Display.StatusBar),
+			HideP3:    coalescePtr(overlay.Display.HideP3, base.Display.HideP3),
+			GroupBy:   coalesce(overlay.Display.GroupBy, base.Display.GroupBy),
+		},
+	}
 }
 
 // mergeSelfLearn does a field-level merge of the L1 configuration: integers

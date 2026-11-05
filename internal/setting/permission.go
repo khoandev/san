@@ -436,6 +436,26 @@ func normalizeParsedCommand(cmd parsedCommand) string {
 	return cmd.Name + ":" + strings.Join(cmd.Args, " ")
 }
 
+// NormalizedBashCommands splits a shell command line into the sub-commands it
+// actually runs, each normalized as "name:args" ("git:push origin main"),
+// through the same AST parse every permission and safety rule uses. It is
+// exported so other layers can ask what a command line does without
+// re-implementing the parser.
+//
+// The dependency points outward: this package must not import its consumers
+// (the advisor's merge detection is one), or the settings layer stops being the
+// bottom of the tree.
+func NormalizedBashCommands(cmd string) []string { return normalizedBashCommands(cmd) }
+
+// MatchPathGlob reports whether path matches a settings glob pattern ("**/.env",
+// "secrets/**", "*.pem") using the same matcher permission rules use. It is
+// exported for the same reason NormalizedBashCommands is: a consumer that reads
+// a configured pattern must read it exactly as the rule engine does, and this
+// package must not import that consumer.
+func MatchPathGlob(pattern, path string) bool {
+	return matchGlob(filepath.ToSlash(path), filepath.ToSlash(pattern))
+}
+
 func normalizedBashCommands(cmd string) []string {
 	if file := parseBashAST(cmd); file != nil {
 		parsed := extractCommandsAST(file)
