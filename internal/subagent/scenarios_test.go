@@ -100,7 +100,7 @@ func TestPermissionScenarios(t *testing.T) {
 		{
 			name: "default mode — Bash with no allow_tools collapses Ask → Deny in subagent",
 			mode: PermissionDefault,
-			tool: "Bash", input: map[string]any{"command": "echo hi"},
+			tool: "Bash", input: map[string]any{"command": "touch hi"},
 			want: false, wantMatch: "would require approval",
 		},
 		{
@@ -124,7 +124,7 @@ func TestPermissionScenarios(t *testing.T) {
 		{
 			name: "acceptEdits mode — Bash without allow_tools still denied",
 			mode: PermissionAcceptEdits,
-			tool: "Bash", input: map[string]any{"command": "echo hi"},
+			tool: "Bash", input: map[string]any{"command": "touch hi"},
 			want: false, wantMatch: "would require approval",
 		},
 		{
