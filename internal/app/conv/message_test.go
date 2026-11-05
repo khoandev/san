@@ -322,6 +322,32 @@ func TestRenderModeStatusShowsBarWhenEnabled(t *testing.T) {
 	}
 }
 
+// Plan Mode is a posture the operation mode cannot express, so it rides as its
+// own badge: "plan" while read-only, "execute" while a plan runs, absent
+// otherwise.
+func TestRenderModeStatusShowsPlanBadge(t *testing.T) {
+	base := OperationModeParams{ModelName: "claude-sonnet-4-6", Width: 120}
+	plain := stripANSI(RenderModeStatus(base))
+
+	for _, tc := range []struct{ planMode, want string }{
+		{"plan", "plan"},
+		{"execute", "execute"},
+	} {
+		params := base
+		params.PlanMode = tc.planMode
+		visible := stripANSI(RenderModeStatus(params))
+		if !strings.Contains(visible, tc.want) {
+			t.Fatalf("badge %q missing from %q", tc.planMode, visible)
+		}
+		if !strings.Contains(visible, "claude-sonnet-4-6") {
+			t.Fatalf("badge dropped the status cluster: %q", visible)
+		}
+	}
+	if got := stripANSI(RenderModeStatus(base)); got != plain {
+		t.Fatalf("an empty PlanMode changed the status line: %q", got)
+	}
+}
+
 func TestRenderModeStatusShowsCompressionsBadgeWhenNonZero(t *testing.T) {
 	rendered := RenderModeStatus(OperationModeParams{
 		ModelName:     "claude-sonnet-4-6",

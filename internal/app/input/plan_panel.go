@@ -438,6 +438,16 @@ func (p *PlanPanel) renderBody() string {
 		if step.Result != "" {
 			p.field(&b, "Result", kit.TruncateText(step.Result, p.innerWidth()-12))
 		}
+		if len(step.Files) > 0 {
+			p.field(&b, "Files", kit.TruncateText(strings.Join(step.Files, ", "), p.innerWidth()-12))
+		}
+		for i, evidence := range step.Evidence {
+			label := "Evidence"
+			if i > 0 {
+				label = ""
+			}
+			p.field(&b, label, kit.TruncateText(evidence, p.innerWidth()-12))
+		}
 	}
 	p.list(&b, "Open questions", focused.OpenQuestions)
 	p.list(&b, "Risks", focused.Risks)

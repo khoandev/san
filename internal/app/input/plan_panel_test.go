@@ -173,6 +173,23 @@ func finishedPlan() plan.Plan {
 	return p
 }
 
+// A step that stopped keeps its evidence on screen: what it changed, what was
+// observed, and why it is blocked.
+func TestPlanPanelShowsStepEvidence(t *testing.T) {
+	p := NewPlanPanel()
+	stopped := blockedPlan()
+	stopped.Steps[0].Files = []string{"internal/auth/auth.go"}
+	stopped.Steps[0].Evidence = []string{"go test ./internal/auth/... — 1 failing"}
+	p.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{stopped}, ActiveID: stopped.ID}, 120, 40)
+
+	view := p.Render()
+	for _, want := range []string{"internal/auth/auth.go", "go test ./internal/auth/", "tests failed", "Retry step"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("panel is missing %q:\n%s", want, view)
+		}
+	}
+}
+
 // Choosing a button produces the action message and nothing else — the store
 // is the app's, so the panel never mutates the plan.
 func TestPlanPanelEmitsActionOnEnter(t *testing.T) {
