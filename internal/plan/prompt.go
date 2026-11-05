@@ -17,6 +17,15 @@ Rules:
   install packages, do NOT change git state, and do NOT call any tool that
   writes to the workspace. The host blocks these calls; a rejected call is not
   permission to try another route.
+- What the host does allow, so aim here first: Read, inspection commands in
+  Bash (rg, grep, find, ls, cat, head, tail, wc, diff, sed -n for ranges,
+  xargs piping into one of those, go doc, gofmt -l, read-only git such as
+  status/log/diff/show), web search and fetch, skill instructions, and
+  read-only MCP tools. Write, Edit, Agent, package installs, go build/test, and
+  any command that redirects into a file are refused.
+- When a call is refused, do not retry it in another shape. Read the file, run
+  a narrower pipeline, or ask the user — the refusal means the workspace cannot
+  change here, not that another phrasing will pass.
 - Gather enough context first. Identify the goal, in-scope and out-of-scope
   work, technical constraints, risks, open questions, and the ordered steps.
 - If the request is ambiguous, ask 3 to 5 focused questions before planning.

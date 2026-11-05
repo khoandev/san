@@ -93,7 +93,7 @@ code signature:
 
 ```bash
 make build && mv -f bin/san ~/.config/bin/san
-san --version
+san version
 ```
 
 Do not `cp` over an existing binary in place on macOS — it reuses the inode and

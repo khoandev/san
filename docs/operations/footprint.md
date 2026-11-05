@@ -70,7 +70,7 @@ toolchain can't follow:
 ```bash
 # On a 64-bit Raspberry Pi OS / arm64 Linux box:
 curl -fsSL https://raw.githubusercontent.com/genai-io/san/main/install.sh | bash
-san --version
+san version
 ```
 
 The installer fetches the matching `linux/arm64` archive (~12 MB), unpacks the

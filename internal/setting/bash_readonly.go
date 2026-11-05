@@ -109,11 +109,13 @@ var xargsValueFlags = map[string]bool{
 	"-d": true, "--delimiter": true,
 	"-E": true, "--eof": true,
 	"-I": true, "--replace": true,
-	"-J": true, "--max-lines": true,
-	"-L": true, "--max-args": true,
-	"-n": true, "--max-chars": true,
+	"-J": true,
+	"-L": true, "--max-lines": true,
+	"-n": true, "--max-args": true,
+	"-s": true, "--max-chars": true,
 	"-P": true, "--max-procs": true,
-	"-R": true, "-S": true,
+	"-R": true, "--process-slot-var": true,
+	"-S": true,
 }
 
 // xargsBoolFlags are options that take no value, so the next word is still the
