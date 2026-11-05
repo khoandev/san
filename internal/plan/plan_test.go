@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -546,5 +547,120 @@ func TestStampsUpdateOnWrite(t *testing.T) {
 	snap := s.Snapshot()
 	if snap.Plans[0].UpdatedAt.IsZero() {
 		t.Fatal("submit must stamp UpdatedAt")
+	}
+}
+
+// A refused completion keeps StepCompleted — the work was done and reported —
+// while carrying the review that refused it, and the plan pauses so the executor
+// cannot walk into the next step. Both fields survive a clone, a JSON round-trip
+// and Normalize, so the refusal is still visible after a resume.
+func TestRefusedStepCompletionSurvivesRoundTrip(t *testing.T) {
+	s := NewStore()
+	s.SubmitDraft(draftPlan(t))
+	if err := s.Approve(); err != nil {
+		t.Fatal(err)
+	}
+	step, _, err := s.BeginStep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompleteStep(StepResult{Status: StepCompleted, Result: "done", Evidence: []string{"go test passed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkStepNeedsReview(step.ID, "review-1", "P0"); err != nil {
+		t.Fatal(err)
+	}
+
+	active, _ := s.Active()
+	recorded := active.Steps[0]
+	if recorded.Status != StepCompleted {
+		t.Fatalf("status = %q, want the completion kept", recorded.Status)
+	}
+	if recorded.AdvisorReviewID != "review-1" || recorded.NeedsReview != "P0" {
+		t.Fatalf("step = %+v, want the refusal recorded", recorded)
+	}
+	if !active.Paused {
+		t.Fatal("a refused completion must pause the plan")
+	}
+	if active.Status != StatusExecuting {
+		t.Fatalf("status = %q, want the plan still executing so it can be resumed", active.Status)
+	}
+	var logged bool
+	for _, entry := range active.Progress {
+		if entry.Kind == "step_review" && entry.StepID == step.ID && strings.Contains(entry.Message, "review-1") {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatalf("progress = %+v, want the refusal journaled with the review id", active.Progress)
+	}
+
+	// A snapshot is a deep copy: mutating it cannot reach back into the store.
+	snap := s.Snapshot()
+	if snap.Plans[0].Steps[0].NeedsReview != "P0" {
+		t.Fatal("the snapshot dropped the refusal")
+	}
+	snap.Plans[0].Steps[0].NeedsReview = "mutated"
+	if current, _ := s.Active(); current.Steps[0].NeedsReview != "P0" {
+		t.Fatal("snapshot aliases live state")
+	}
+
+	blob, err := json.Marshal(s.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded State
+	if err := json.Unmarshal(blob, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	restored := NewStore()
+	restored.Restore(decoded)
+	active, _ = restored.Active()
+	if active.Steps[0].AdvisorReviewID != "review-1" || active.Steps[0].NeedsReview != "P0" {
+		t.Fatalf("restored step = %+v, want the refusal to survive JSON", active.Steps[0])
+	}
+	if !active.Paused {
+		t.Fatal("the pause did not survive the round-trip")
+	}
+
+	// Normalize trims what a hand-written or older plan may carry.
+	loose := Step{Title: "a step", AdvisorReviewID: "  review-2  ", NeedsReview: " P0 "}
+	loose.Normalize()
+	if loose.AdvisorReviewID != "review-2" || loose.NeedsReview != "P0" {
+		t.Fatalf("normalize = %+v", loose)
+	}
+}
+
+// The refusal is only reachable on a completed step: a review cannot decorate a
+// step that never ran or is still running, and nothing about it changes a step
+// that completed cleanly.
+func TestMarkStepNeedsReviewRefusesUnfinishedSteps(t *testing.T) {
+	s := NewStore()
+	s.SubmitDraft(draftPlan(t))
+	if err := s.Approve(); err != nil {
+		t.Fatal(err)
+	}
+	step, _, err := s.BeginStep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkStepNeedsReview(step.ID, "review-1", "P0"); err == nil {
+		t.Fatal("an in-progress step accepted a refusal")
+	}
+	if err := s.MarkStepNeedsReview("", "review-1", "P0"); err == nil {
+		t.Fatal("an empty step id was accepted")
+	}
+	if err := s.MarkStepNeedsReview(step.ID, "review-1", ""); err == nil {
+		t.Fatal("an empty severity was accepted")
+	}
+	if _, err := s.CompleteStep(StepResult{Status: StepCompleted, Result: "done", Evidence: []string{"go test passed"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkStepNeedsReview("step-missing", "review-1", "P0"); err == nil {
+		t.Fatal("an unknown step accepted a refusal")
+	}
+	active, _ := s.Active()
+	if active.Steps[0].NeedsReview != "" || active.Paused {
+		t.Fatalf("a rejected refusal changed the plan: %+v", active)
 	}
 }

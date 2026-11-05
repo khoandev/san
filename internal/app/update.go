@@ -233,6 +233,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.applyPlanEdit(msg.Plan)
 	case planAdvanceMsg:
 		return m, m.planNextStep()
+	case planStepReviewedMsg:
+		return m, m.onPlanStepReviewed(msg)
 	case input.TaskStopMsg:
 		return m, m.stopViewedTask(msg)
 	case input.TaskContinueMsg:

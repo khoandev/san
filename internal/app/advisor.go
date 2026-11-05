@@ -25,6 +25,7 @@ import (
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/log"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/proc"
 	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/setting"
@@ -344,8 +345,21 @@ func (m *model) requestAdvisorReview(in advisor.ReviewInput) bool {
 // the session as a parameter lets a caller that captured it on the UI goroutine
 // submit from its own goroutine without touching model state.
 func (m *model) submitAdvisorReview(s *advisorSession, in advisor.ReviewInput) bool {
-	if s == nil || !s.live.Load() {
+	req, ok := m.claimAdvisorReview(s, in)
+	if !ok {
 		return false
+	}
+	go m.runAdvisorReview(s, req)
+	return true
+}
+
+// claimAdvisorReview applies the gates every trigger shares — liveness, the
+// cooldown, and the one-at-a-time rule — and takes the run slot, returning the
+// request to execute. A caller that needs the verdict does the run itself on its
+// own goroutine; a caller that does not hands it to runAdvisorReview.
+func (m *model) claimAdvisorReview(s *advisorSession, in advisor.ReviewInput) (advisor.Request, bool) {
+	if s == nil || !s.live.Load() {
+		return advisor.Request{}, false
 	}
 	if in.Trigger == "" {
 		in.Trigger = advisor.TriggerUserRequest
@@ -354,15 +368,13 @@ func (m *model) submitAdvisorReview(s *advisorSession, in advisor.ReviewInput) b
 		in.Target = advisor.Target{Kind: advisor.TargetSession}
 	}
 	if !s.cooldown.Due(in.Target, in.DiffHash, s.cfg.ResolvedCooldown()) {
-		return false
+		return advisor.Request{}, false
 	}
 	if !s.busy.CompareAndSwap(false, true) {
-		return false
+		return advisor.Request{}, false
 	}
 	s.cooldown.Mark(in.Target, in.DiffHash)
-	req := advisor.BuildRequest(s.cfg, in)
-	go m.runAdvisorReview(s, req)
-	return true
+	return advisor.BuildRequest(s.cfg, in), true
 }
 
 // requestTaskReview hands a finished subagent task to the advisor. The task
@@ -450,11 +462,160 @@ func awaitAdvisorTask(ch <-chan task.TaskInfo) tea.Cmd {
 	}
 }
 
+// planStepReviewedMsg carries a completed step's verdict back to the UI loop,
+// which owns the plan store.
+type planStepReviewedMsg struct {
+	// step is the step the review inspected, captured before the store mutates
+	// so the loop can still name it once the step is recorded.
+	step plan.Step
+	// outcome is the step's own report, replayed to the loop so it can finish
+	// the turn exactly as it would have without a review.
+	outcome plan.StepResult
+	// review is the verdict, and found reports whether there is one: a review
+	// that never ran or never reached a verdict leaves both empty.
+	review advisor.Review
+	found  bool
+}
+
+// reviewPlanStep reviews a step that just claimed completion, before the store
+// records it, and returns the command that carries the verdict back to the UI
+// loop. The record-and-advance decision waits for that verdict, so a refused
+// completion never briefly reads as a clean one.
+//
+// nil means no review runs — the step did not claim completion, the trigger is
+// off, no runner is live, or no model is connected — and the caller records the
+// step exactly as it would have without an advisor. The diff read and the review
+// itself run inside the command, off the UI goroutine: a git call plus a model
+// round-trip must never stall the panel.
+func (m *model) reviewPlanStep(step plan.Step, outcome plan.StepResult) tea.Cmd {
+	if outcome.Status != plan.StepCompleted {
+		return nil
+	}
+	s := m.services.Advisor.session
+	if s == nil || !s.live.Load() || !m.advisorConfig().BeforePlanStep() {
+		return nil
+	}
+	step = step.Clone()
+	return func() tea.Msg {
+		msg := planStepReviewedMsg{step: step, outcome: outcome}
+		ctx, cancel := context.WithTimeout(context.Background(), advisorDiffTimeout)
+		defer cancel()
+		diff, err := proc.ReadWorkingDiff(ctx, s.cwd, proc.DiffOptions{MaxBytes: s.cfg.ResolvedMaxDiffBytes()})
+		if err != nil {
+			// A step whose change cannot be read is still reported: the review
+			// is an extra check, not a second way for a step to fail.
+			log.Logger().Warn("advisor could not read the step's diff",
+				zap.String("step", step.ID), zap.Error(err))
+			return msg
+		}
+		files := append(append([]string(nil), outcome.Files...), diff.Files...)
+		req, ok := m.claimAdvisorReview(s, advisor.ReviewInput{
+			Trigger:       advisor.TriggerPlanStep,
+			Target:        advisor.Target{Kind: advisor.TargetStep, ID: step.ID, Label: step.Title},
+			Goal:          step.Objective,
+			Acceptance:    step.Verification,
+			Checks:        planStepChecks(outcome),
+			Diff:          diff.Diff,
+			DiffHash:      diff.Hash,
+			Files:         files,
+			DiffTruncated: diff.Truncated,
+		})
+		if !ok {
+			return msg
+		}
+		stored, forkID, ok := m.runClaimedReview(s, req)
+		if !ok {
+			return msg
+		}
+		m.publishAdvisorVerdict(stored, forkID)
+		msg.review, msg.found = stored, true
+		return msg
+	}
+}
+
+// applyStepReview joins a completed step's verdict to the plan store. A verdict
+// the block policy refuses keeps the step completed — the work was done and
+// reported — but marks it as needing review and pauses the plan, so the executor
+// cannot start the next step on work a review rejected. Anything lighter is
+// already in the review history and leaves the plan exactly as it was.
+//
+// It reports whether the plan was paused. Called on the UI goroutine, in the
+// handler that finishes the step turn.
+func (m *model) applyStepReview(step plan.Step, review advisor.Review) bool {
+	if review.Trigger != advisor.TriggerPlanStep {
+		return false
+	}
+	severity := review.Highest()
+	if !advisorPolicy(m.advisorConfig()).Blocks(advisor.ActionPlanStepCompletion, severity) {
+		return false
+	}
+	if err := m.plan.MarkStepNeedsReview(step.ID, review.ID, string(severity)); err != nil {
+		log.Logger().Warn("advisor could not mark the step as needing review",
+			zap.String("step", step.ID), zap.String("review", review.ID), zap.Error(err))
+		return false
+	}
+	m.showPlanPanel()
+	m.conv.AddNotice(stepNeedsReviewNotice(step, review, severity))
+	return true
+}
+
+// stepNeedsReviewNotice says why the plan stopped and where the finding can be
+// read in full. It points at the panel rather than restating findings: the
+// review is the detail, and it is one keystroke away.
+func stepNeedsReviewNotice(step plan.Step, review advisor.Review, severity advisor.Severity) string {
+	title := strings.TrimSpace(step.Title)
+	if title == "" {
+		title = step.ID
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Step %q is recorded as completed, but the advisor refused it", title)
+	if severity != "" {
+		fmt.Fprintf(&b, " (%s)", severity)
+	}
+	if summary := firstLineOf(review.Summary); summary != "" {
+		b.WriteString(": ")
+		b.WriteString(summary)
+	}
+	b.WriteString("\nThe plan is paused. Read the findings in /advisor, then resume, skip, or cancel in the Execution Panel.")
+	return b.String()
+}
+
+// planStepChecks states the step's own report as claims the review may verify,
+// so the reviewer judges what the agent said it did rather than only the diff.
+func planStepChecks(outcome plan.StepResult) []string {
+	checks := make([]string, 0, len(outcome.Evidence)+1)
+	if result := firstLineOf(outcome.Result); result != "" {
+		checks = append(checks, "the step reported: "+result)
+	}
+	for _, evidence := range outcome.Evidence {
+		if line := firstLineOf(evidence); line != "" {
+			checks = append(checks, "claimed evidence: "+line)
+		}
+	}
+	return checks
+}
+
 // runAdvisorReview executes one review and records it. It runs on its own
 // goroutine: every UI mutation goes through a channel, and the liveness gate is
 // re-checked after the fork returns because teardown is most likely to land
 // while the review is waiting on the provider.
 func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
+	stored, forkID, ok := m.runClaimedReview(s, req)
+	if !ok {
+		return
+	}
+	m.publishAdvisorVerdict(stored, forkID)
+}
+
+// runClaimedReview executes a review whose slot claimAdvisorReview took, records
+// it in the history and the transcript, publishes the started/completed states,
+// and releases the slot. It reports false when no verdict was recorded — a
+// failed review, or one that landed after its session was torn down.
+//
+// Every side effect is a mutex or a channel send, so this may run on any
+// goroutine: the plan-step trigger calls it from its own command goroutine
+// because it needs the verdict before the executor continues.
+func (m *model) runClaimedReview(s *advisorSession, req advisor.Request) (advisor.Review, string, bool) {
 	defer s.busy.Store(false)
 
 	m.services.Advisor.Indicator.Begin()
@@ -464,7 +625,7 @@ func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
 	if !s.live.Load() {
 		// The conversation this review belongs to is gone: its verdict is
 		// dropped rather than published or appended to a successor session.
-		return
+		return advisor.Review{}, "", false
 	}
 	if err != nil {
 		m.services.Advisor.Indicator.Fail(err)
@@ -472,7 +633,7 @@ func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
 			zap.String("trigger", string(req.Trigger)),
 			zap.Error(err))
 		m.notifyMain(mainNotice{Display: advisorFailureLine(err)})
-		return
+		return advisor.Review{}, "", false
 	}
 
 	stored, err := m.services.Advisor.Store.Append(review)
@@ -480,7 +641,7 @@ func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
 		m.services.Advisor.Indicator.Fail(err)
 		log.Logger().Warn("advisor review rejected", zap.Error(err))
 		m.notifyMain(mainNotice{Display: advisorFailureLine(err)})
-		return
+		return advisor.Review{}, "", false
 	}
 	m.services.Advisor.Indicator.Finish(stored, nil)
 	m.persistAdvisorReview(stored)
@@ -488,6 +649,13 @@ func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
 		zap.String("status", string(stored.Status)),
 		zap.String("trigger", string(stored.Trigger)),
 		zap.String("fork-session", forkID))
+	return stored, forkID, true
+}
+
+// publishAdvisorVerdict announces a recorded review and joins it back to the
+// work it inspected: the one-line verdict in the transcript, and the tracker
+// flag when the review refused a finished task.
+func (m *model) publishAdvisorVerdict(stored advisor.Review, forkID string) {
 	m.notifyMain(mainNotice{Display: advisorReviewLine(stored, forkID)})
 	m.noteTaskReview(stored)
 }
