@@ -23,6 +23,10 @@ type TaskViewItem struct {
 	Attempt                                                      int
 	SessionID                                                    string
 	Attempts                                                     string // Concise immutable run history, not the child conversation.
+	// NeedsReview is the severity an independent advisor review objected to,
+	// and ReviewID names that review. Both are empty when nothing objected:
+	// a finished task is clean until a review says otherwise.
+	NeedsReview, ReviewID string
 }
 type TaskStopMsg struct {
 	TaskID  string
@@ -113,16 +117,22 @@ func (v *TaskViewer) Refresh(items []TaskViewItem) {
 	v.rebuild()
 }
 func taskViewStatus(item TaskViewItem) string {
+	status := "unknown"
 	if item.Status == task.StatusRunning && item.AwaitingApproval {
 		if item.ApprovalQueued {
-			return "awaiting approval (queued request)"
+			status = "awaiting approval (queued request)"
+		} else {
+			status = "awaiting approval (current request)"
 		}
-		return "awaiting approval (current request)"
+	} else if item.Status != "" {
+		status = string(item.Status)
 	}
-	if item.Status == "" {
-		return "unknown"
+	// The task finished either way; the flag is what says a review refused the
+	// result, so it rides beside the status instead of replacing it.
+	if item.NeedsReview != "" {
+		status += " · needs review " + item.NeedsReview
 	}
-	return string(item.Status)
+	return status
 }
 func taskViewSubject(item TaskViewItem) string {
 	subject := item.Subject
@@ -157,6 +167,9 @@ func (v *TaskViewer) rebuild() {
 			lines = []string{"Task no longer available."}
 		} else {
 			lines = []string{taskViewSubject(item), "Owner: " + item.AgentName, "ID: " + item.ID, "Status: " + taskViewStatus(item)}
+			if item.NeedsReview != "" {
+				lines = append(lines, "Review: "+item.ReviewID+" ("+item.NeedsReview+")")
+			}
 			if item.SessionID != "" {
 				lines = append(lines, "Session: "+item.SessionID)
 			}

@@ -84,12 +84,23 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 		}
 		infos = append(infos, info)
 	}
+	// One read of the tracker serves both the recorded rows below and the
+	// review flag any row may carry, so a live worker and its completed record
+	// answer the same question.
+	tracked := make(map[string]*todo.Item)
+	if m.services.Tracker != nil {
+		for _, item := range m.services.Tracker.List() {
+			if id := todo.BackgroundTaskID(item); id != "" {
+				tracked[id] = item
+			}
+		}
+	}
 	// The session tracker survives process restart; its ended workers must still
 	// be inspectable after folding their old rows out of the inline tracker.
 	if m.services.Tracker != nil {
-		for _, item := range m.services.Tracker.List() {
+		for _, item := range tracked {
 			id := todo.BackgroundTaskID(item)
-			if id == "" || seen[id] || item.Status != todo.StatusCompleted {
+			if seen[id] || item.Status != todo.StatusCompleted {
 				continue
 			}
 			status := task.TaskStatus(todo.BackgroundStatusDetail(item))
@@ -147,9 +158,14 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 			}
 			history = append(history, line)
 		}
+		needsReview, reviewID := "", ""
+		if severity, id, reviewRefused := todo.NeedsReview(tracked[info.ID]); reviewRefused {
+			needsReview, reviewID = severity, id
+		}
 		items = append(items, input.TaskViewItem{
 			ID: info.ID, AgentName: owner, Description: info.Description,
 			Subject: info.Description, Status: info.Status, Progress: progress,
+			NeedsReview: needsReview, ReviewID: reviewID,
 			Output: output, Error: info.Error, OutputTruncated: truncated,
 			OutputFile: info.OutputFile, Recorded: recorded[info.ID],
 			CanContinue: canContinueTask(info), Attempt: info.Attempt, SessionID: info.AgentSessionID, Attempts: strings.Join(history, "\n"),

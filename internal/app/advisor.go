@@ -28,6 +28,8 @@ import (
 	"github.com/genai-io/san/internal/proc"
 	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/setting"
+	"github.com/genai-io/san/internal/task"
+	"github.com/genai-io/san/internal/todo"
 	"github.com/genai-io/san/internal/transcript"
 )
 
@@ -331,6 +333,17 @@ func (i *AdvisorIndicator) Snapshot() AdvisorSnapshot {
 // use a synchronous form of the same runner.
 func (m *model) requestAdvisorReview(in advisor.ReviewInput) bool {
 	s := m.services.Advisor.session
+	if s == nil {
+		return false
+	}
+	return m.submitAdvisorReview(s, in)
+}
+
+// submitAdvisorReview is the body every entry point shares once the session is
+// in hand: liveness, cooldown, one-at-a-time, then the background run. Taking
+// the session as a parameter lets a caller that captured it on the UI goroutine
+// submit from its own goroutine without touching model state.
+func (m *model) submitAdvisorReview(s *advisorSession, in advisor.ReviewInput) bool {
 	if s == nil || !s.live.Load() {
 		return false
 	}
@@ -350,6 +363,91 @@ func (m *model) requestAdvisorReview(in advisor.ReviewInput) bool {
 	req := advisor.BuildRequest(s.cfg, in)
 	go m.runAdvisorReview(s, req)
 	return true
+}
+
+// requestTaskReview hands a finished subagent task to the advisor. The task
+// manager calls it from its own goroutine, so it only posts to the channel: the
+// review runner, the workspace path and the settings it reads all belong to the
+// UI goroutine.
+func (m *model) requestTaskReview(info task.TaskInfo) {
+	if info.Type != task.TaskTypeAgent || info.Status != task.StatusCompleted {
+		return
+	}
+	select {
+	case m.advisorTasks <- info:
+	default:
+		// A burst of completions drops one rather than blocking the task
+		// manager; the tree they changed is what the next review reads.
+	}
+}
+
+// onAdvisorTask starts the review of a finished subagent task and re-arms the
+// listener. UI goroutine only.
+func (m *model) onAdvisorTask(info task.TaskInfo) tea.Cmd {
+	m.startTaskReview(info)
+	return awaitAdvisorTask(m.advisorTasks)
+}
+
+// startTaskReview reviews the change a finished task left behind. The read runs
+// on its own goroutine — a git call must never stall the UI — and the review is
+// submitted with the session captured here, so the goroutine never reads model
+// state.
+func (m *model) startTaskReview(info task.TaskInfo) {
+	s := m.services.Advisor.session
+	// The trigger is read from the live settings, not the copy the runner was
+	// built with: turning it off takes effect on the next finished task instead
+	// of on the next rebuild.
+	if s == nil || !s.live.Load() || !m.advisorConfig().AfterSubagentTask() {
+		return
+	}
+	in := advisor.ReviewInput{
+		Trigger: advisor.TriggerSubagentTask,
+		Target: advisor.Target{
+			Kind:  advisor.TargetTask,
+			ID:    info.ID,
+			Label: taskSubject(info),
+		},
+		Goal:   info.Description,
+		Checks: taskReviewChecks(info),
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), advisorDiffTimeout)
+		defer cancel()
+		diff, err := proc.ReadWorkingDiff(ctx, s.cwd, proc.DiffOptions{MaxBytes: s.cfg.ResolvedMaxDiffBytes()})
+		if err != nil {
+			log.Logger().Warn("advisor could not read the finished task's diff",
+				zap.String("task", info.ID), zap.Error(err))
+			return
+		}
+		in.Diff, in.DiffHash = diff.Diff, diff.Hash
+		in.Files, in.DiffTruncated = diff.Files, diff.Truncated
+		m.submitAdvisorReview(s, in)
+	}()
+}
+
+// taskReviewChecks states the task's own result as a check the review may
+// verify, so the reviewer judges the claim rather than only the diff.
+func taskReviewChecks(info task.TaskInfo) []string {
+	name := strings.TrimSpace(info.AgentName)
+	line := "subagent task " + info.ID
+	if name != "" {
+		line = "subagent " + name + " task " + info.ID
+	}
+	line += " reported " + string(info.Status)
+	if err := strings.TrimSpace(info.Error); err != "" {
+		line += ": " + err
+	}
+	return []string{line}
+}
+
+// advisorTaskMsg wakes the Update loop with a finished subagent task.
+type advisorTaskMsg struct{ info task.TaskInfo }
+
+// awaitAdvisorTask yields one advisorTaskMsg per finished task.
+func awaitAdvisorTask(ch <-chan task.TaskInfo) tea.Cmd {
+	return func() tea.Msg {
+		return advisorTaskMsg{info: <-ch}
+	}
 }
 
 // runAdvisorReview executes one review and records it. It runs on its own
@@ -391,6 +489,43 @@ func (m *model) runAdvisorReview(s *advisorSession, req advisor.Request) {
 		zap.String("trigger", string(stored.Trigger)),
 		zap.String("fork-session", forkID))
 	m.notifyMain(mainNotice{Display: advisorReviewLine(stored, forkID)})
+	m.noteTaskReview(stored)
+}
+
+// noteTaskReview joins a finished task's verdict back to its tracker item. A
+// blocked verdict is the one case that changes what the task reads as: the item
+// keeps StatusCompleted — the work did finish — but it carries the severity and
+// the review id, so /tasks cannot show it as a clean completion. Lighter
+// findings are already in the history, and the task stays clean and quiet.
+//
+// The tracker store is mutex-guarded and the notice goes through notifyMain, so
+// running this on the review goroutine touches no UI state.
+func (m *model) noteTaskReview(review advisor.Review) {
+	if review.Trigger != advisor.TriggerSubagentTask || review.Target.Kind != advisor.TargetTask {
+		return
+	}
+	if review.Status != advisor.StatusBlocked {
+		return
+	}
+	severity := review.Highest()
+	if m.services.Tracker != nil {
+		todo.MarkNeedsReview(m.services.Tracker, review.Target.ID, review.ID, string(severity))
+	}
+	m.notifyMain(mainNotice{Display: taskNeedsReviewLine(review, severity)})
+}
+
+// taskNeedsReviewLine names the task a blocked review refused, so the notice
+// says which finished worker stopped reading as done.
+func taskNeedsReviewLine(review advisor.Review, severity advisor.Severity) string {
+	label := strings.TrimSpace(review.Target.Label)
+	if label == "" {
+		label = review.Target.ID
+	}
+	line := "task " + label + " needs review"
+	if severity != "" {
+		line += " · " + string(severity)
+	}
+	return line + " · " + review.ID
 }
 
 // executeAdvisorReview runs the fork for one review, opening the sidechain

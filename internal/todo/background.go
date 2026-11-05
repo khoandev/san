@@ -11,6 +11,12 @@ const (
 	metaTaskType     = "background_task_type"
 	metaStatusDetail = "background_status_detail"
 	metaError        = "background_error"
+	// metaNeedsReview and metaReviewID join a worker item to the advisor
+	// review that refused its result. They are written after the item already
+	// reached StatusCompleted: the work finished, and what the flag changes is
+	// whether it reads as clean.
+	metaNeedsReview = "background_needs_review"
+	metaReviewID    = "background_review_id"
 )
 
 // An Item is one of two kinds. A plan item is authored by the model and
@@ -48,6 +54,37 @@ func BackgroundStatusDetail(item *Item) string {
 // BackgroundError returns the persisted terminal reason, including after restart.
 func BackgroundError(item *Item) string {
 	return metadataString(item, metaError)
+}
+
+// NeedsReview returns the severity an independent review of this worker's
+// result objected to, and the review that found it. ok is false for items no
+// blocking review touched — including items whose review found only findings
+// the block policy tolerates.
+func NeedsReview(item *Item) (severity, reviewID string, ok bool) {
+	severity = metadataString(item, metaNeedsReview)
+	if severity == "" {
+		return "", "", false
+	}
+	return severity, metadataString(item, metaReviewID), true
+}
+
+// MarkNeedsReview flags a finished worker item as reviewed-and-objected-to. The
+// item keeps StatusCompleted — the work did finish — but it no longer reads as
+// a clean completion, and the review id lets the panel name the verdict. It
+// reports whether the item existed; an unknown task id is not an error, since
+// the task may have been launched before the tracker held it.
+func MarkNeedsReview(svc *Store, taskID, reviewID, severity string) bool {
+	if svc == nil || taskID == "" || severity == "" {
+		return false
+	}
+	item := svc.FindByMetadata(metaTaskID, taskID)
+	if item == nil {
+		return false
+	}
+	return svc.Update(item.ID, WithMetadata(map[string]any{
+		metaNeedsReview: severity,
+		metaReviewID:    reviewID,
+	})) == nil
 }
 
 // WorkerRunning reports whether the background task behind this item is

@@ -91,6 +91,7 @@ func newBaseModel() model {
 		mainNotices:         make(chan mainNotice, 64),
 		selfLearnStarts:     make(chan struct{}, 8),
 		advisorStarts:       make(chan struct{}, 8),
+		advisorTasks:        make(chan task.TaskInfo, 8),
 		systemInput:         trigger.New(),
 		env:                 environment,
 		services:            svc,
@@ -261,6 +262,12 @@ func (m *model) wireTaskLifecycle(hookEngine hook.Handler) {
 			if msg, ok := taskCompletionMessage(info); ok {
 				broker.Send(msg)
 			}
+
+			// The task's own "completed" is a claim about the code, and an
+			// independent review is what checks it. Queued after the
+			// completion notice, so the user learns the task ended whether or
+			// not the advisor is on.
+			m.requestTaskReview(info)
 		},
 	})
 }
