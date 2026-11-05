@@ -94,9 +94,22 @@ them.
 Provably read-only Bash invocations short-circuit to allow at the
 mode-default step (`setting.IsReadOnlyBashCommand`): every command in the
 chain must be on the read-only list (`rg`, `grep`, `find`, `ls`, `cat`,
-`head`, text filters such as `sort`/`uniq`/`jq`, `echo`/`printf` banners, and
-read-only `git`, …), named without a path, with no output redirection
-(`/dev/null` excepted), substitution, or env-var prefix.
+`head`, `stat`, `du`/`df`, text filters such as `sort`/`uniq`/`cut`/`jq`/`yq`,
+digests, `echo`/`printf` banners, `gofmt` without `-w`, and read-only `git`, …),
+named without a path, with no output redirection (`/dev/null` excepted),
+substitution, or env-var prefix.
+A name is not enough for the commands that dispatch, run a program of their
+own, or take an output operand, so `bash_readonly.go` classifies those by
+their arguments: `xargs` is as safe as the command it runs (and fails closed
+on an option it does not know, since an unknown option could consume the word
+the real command starts at); `sed` runs only when it is not `-i`, not `-f`,
+and its program holds no `w`, `W`, or `e` command; `go` counts as inspection
+only for `doc`, `env`, `help`, and `version` (`env -w`/`-u` write); and
+`uniq`/`xxd` take a single operand, because their second one is an output
+file. `awk` stays out of the list on purpose: `system()`, pipes into commands,
+and `print > file` put writes inside the program where no argument check can
+see them.
+***
 This replaces the retired Grep/Glob tools — search runs through Bash
 without approval prompts, in every mode including explore. Deny/ask rules
 and the safety checks still run first and override it. The safety checks
@@ -122,9 +135,10 @@ These checks live in `bash_ast.go`; `bash_git_options_test.go` and
 (`setting.PlanModeAllows`). It refuses anything not provably a read — never
 prompts, because a prompt invites a model that is planning to retry a write —
 and it does not narrow the read side: the read tools, read-only Bash as above,
-`Cron` listing, and mounted MCP tools are all usable while planning. A mounted
-tool arrives with no annotation San can read, so its leading name verb decides:
-`write_file`, `create_issue`, and `delete_*` are refused;
+`Skill` (its instructions are context; the commands they ask for meet this same
+gate), `Cron` listing, and mounted MCP tools are all usable while planning. A
+mounted tool arrives with no annotation San can read, so its leading name verb
+decides: `write_file`, `create_issue`, and `delete_*` are refused;
 `codegraph_explore`, `read_file`, and `get_*` run. Deny rules still run before
 Plan Mode, so a denied read stays denied.
 

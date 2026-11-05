@@ -23,6 +23,12 @@ func TestPlanModeRejectsWorkspaceWrites(t *testing.T) {
 		{"Write", map[string]any{"file_path": "a.go", "content": "x"}},
 		{"Bash", map[string]any{"command": "rm -rf build"}},
 		{"Bash", map[string]any{"command": "go test ./... > out.txt"}},
+		// An inspection-shaped command is not an inspection: sed in place,
+		// xargs handing the listing to rm, and go compiling.
+		{"Bash", map[string]any{"command": "sed -i '' 's/a/b/' internal/x.go"}},
+		{"Bash", map[string]any{"command": "find internal -name '*.go' | xargs rm"}},
+		{"Bash", map[string]any{"command": "go test ./internal/..."}},
+		{"Bash", map[string]any{"command": "gofmt -w internal/x.go"}},
 		{"PowerShell", map[string]any{"command": "Set-Content a.txt x"}},
 		{"Agent", map[string]any{"prompt": "do it"}},
 		{"mcp__filesystem__write_file", map[string]any{"path": "a"}},
@@ -60,6 +66,13 @@ func TestPlanModeAllowsReadsAndQuestions(t *testing.T) {
 		{"mcp__codegraph__codegraph_explore", map[string]any{"query": "plan store"}},
 		{"mcp__context7__resolve-library-id", map[string]any{"libraryName": "bubbletea"}},
 		{"mcp__filesystem__read_file", map[string]any{"path": "a.go"}},
+		// The inspections planning actually runs: an inventory through
+		// xargs, a range read through sed, and doc lookups.
+		{"Bash", map[string]any{"command": "find internal -name '*.go' | xargs wc -l | sort -n | tail -60"}},
+		{"Bash", map[string]any{"command": "sed -n 120,175p internal/llm/registry.go"}},
+		{"Bash", map[string]any{"command": "go doc fmt.Println"}},
+		// A skill's instructions are context, not an effect.
+		{"Skill", map[string]any{"skill": "review"}},
 	}
 	for _, tc := range cases {
 		if got := d.HasPermissionToUseTool(tc.tool, tc.args, session); got.Behavior == perm.Reject {

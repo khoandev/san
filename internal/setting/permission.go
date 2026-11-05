@@ -186,13 +186,18 @@ func ModeDefault(toolName string, mode OperationMode) PermissionDecision {
 // PlanModeAllows reports whether a call is provably read-only and therefore
 // allowed in Plan Mode. Anything the gate cannot prove is a read is refused —
 // but "cannot prove" must not mean "blocks the work": inspecting the tree
-// (read-only shell), a search or code-graph MCP server, and the dedicated read
-// tools all stay available while planning.
+// (read-only shell), a search or code-graph MCP server, a skill's instructions,
+// and the dedicated read tools all stay available while planning.
 func PlanModeAllows(toolName string, args map[string]any) bool {
 	if perm.IsSafeTool(toolName) {
 		return true
 	}
 	if cmd, ok := args["command"].(string); ok && IsReadOnlyShellCommand(toolName, cmd) {
+		return true
+	}
+	// Loading a skill only reads its instructions into context; every command
+	// those instructions ask for meets this same gate when it runs.
+	if toolName == "Skill" {
 		return true
 	}
 	if toolName == "Cron" {

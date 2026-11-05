@@ -181,8 +181,9 @@ func matchesAnyPattern(normalized string, patterns []string) bool {
 // readOnlyBashCommands are commands that only inspect files or system state.
 // A Bash invocation passes IsReadOnlyBashCommand when every command in the
 // chain is on this list (or is a read-only git command), subject to the
-// structural guards below. Such invocations are treated like the dedicated
-// read-only tools: auto-permitted in every mode, including read-only/explore.
+// structural guards below and to the argument guards in bash_readonly.go.
+// Such invocations are treated like the dedicated read-only tools:
+// auto-permitted in every mode, including read-only/explore and Plan Mode.
 var readOnlyBashCommands = map[string]bool{
 	"rg":       true,
 	"grep":     true,
@@ -199,6 +200,7 @@ var readOnlyBashCommands = map[string]bool{
 	"stat":     true,
 	"file":     true,
 	"du":       true,
+	"df":       true,
 	"which":    true,
 	"pwd":      true,
 	"cd":       true,
@@ -226,26 +228,48 @@ var readOnlyBashCommands = map[string]bool{
 	"od":      true,
 	"strings": true,
 	"jq":      true,
+	"yq":      true,
 	// Digests and identity: inspection only.
 	"shasum":    true,
 	"md5sum":    true,
 	"sha256sum": true,
+	"sha1sum":   true,
+	"sha512sum": true,
+	"md5":       true,
+	"cksum":     true,
 	"date":      true,
 	"whoami":    true,
 	"id":        true,
 	"uname":     true,
 	"hostname":  true,
+	"printenv":  true,
+	// More text and binary filters, plus the two shell conditions that turn
+	// an if-statement into an inspection.
+	"base64":   true,
+	"xxd":      true,
+	"hexdump":  true,
+	"fold":     true,
+	"expand":   true,
+	"unexpand": true,
+	"numfmt":   true,
+	"seq":      true,
+	"test":     true,
+	"[":        true,
+	// gofmt prints a formatted file; only -w writes it back.
+	"gofmt": true,
 }
 
 // readOnlyBashUnsafeFlags marks flags that let an otherwise read-only command
 // execute subprocesses or write files. Matched by prefix on each argument.
 var readOnlyBashUnsafeFlags = map[string][]string{
-	"find": {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls"},
-	"fd":   {"-x", "--exec", "-X", "--exec-batch"},
-	"rg":   {"--pre", "--hostname-bin"},
-	"tree": {"-o"},
-	"jq":   {"--in-place"},
-	"sort": {"-o", "--output", "--compress-program"},
+	"find":  {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls"},
+	"fd":    {"-x", "--exec", "-X", "--exec-batch"},
+	"rg":    {"--pre", "--hostname-bin"},
+	"tree":  {"-o"},
+	"jq":    {"--in-place"},
+	"yq":    {"-i", "--inplace"},
+	"sort":  {"-o", "--output", "--compress-program"},
+	"gofmt": {"-w"},
 }
 
 // IsReadOnlyBashCommand reports whether a bash invocation is provably
@@ -296,18 +320,24 @@ func isReadOnlyParsedCommand(c parsedCommand) bool {
 	if c.Argv0 != c.Name {
 		return false
 	}
-	if c.Name == "git" {
+	// Commands whose read-only use depends on their arguments are classified
+	// there rather than by the name list here: xargs dispatches, sed can write
+	// or execute through its own program, and go is safe per subcommand.
+	switch c.Name {
+	case "git":
 		return isReadOnlyGitCommand(c)
+	case "xargs":
+		return isReadOnlyXargsCommand(c.Args)
+	case "sed":
+		return isReadOnlySedCommand(c.Args)
+	case "go":
+		return isReadOnlyGoCommand(c.Args)
 	}
 	if !readOnlyBashCommands[c.Name] {
 		return false
 	}
-	for _, flag := range readOnlyBashUnsafeFlags[c.Name] {
-		for _, arg := range c.Args {
-			if strings.HasPrefix(arg, flag) {
-				return false
-			}
-		}
+	if hasUnsafeReadOnlyFlag(c.Name, c.Args) || exceedsPositionalCap(c.Name, c.Args) {
+		return false
 	}
 	return true
 }

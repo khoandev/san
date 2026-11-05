@@ -94,6 +94,10 @@ func TestIsReadOnlyBashCommand(t *testing.T) {
 		"cat a.txt | sort | uniq -c | sort -rn | head -20",
 		"jq -r '.name' package.json",
 		"date",
+		// A file inventory: find | xargs | sort | tail is one inspection.
+		`cd /repo && find internal/reviewer internal/plan -type f -name '*.go' | xargs wc -l | sort -n | tail -60`,
+		// Reading a range out of a file is the other half of surveying code.
+		`cd /repo && sed -n 120,175p internal/llm/registry.go`,
 	}
 	for _, cmd := range readOnly {
 		if !IsReadOnlyBashCommand(cmd) {

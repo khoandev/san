@@ -136,11 +136,15 @@ live state.
 - Entering Plan Mode flips the session permission posture to read-only; leaving
   it restores ordinary permissions and pauses a running plan.
 - The gate (`setting.PlanModeAllows`) refuses only what provably writes: the
-  read tools, read-only shell commands (pipelines and `echo` banners included,
-  expansions and redirections excepted), and mounted MCP tools whose leading
+  read tools, read-only shell commands (pipelines, `echo` banners, `xargs`
+  dispatch to a read-only command, and `sed -n`-style range reads included;
+  expansions, in-place edits and redirections excepted), skills (their
+  instructions are context, not an effect), and mounted MCP tools whose leading
   name verb is a read all stay usable. A mounted tool San built nothing for is
   judged by that name alone — `write_file` is refused, `codegraph_explore` is
-  not.
+  not. The argument-level classification lives in
+  `internal/setting/bash_readonly.go`; `internal/setting/bash_readonly_test.go`
+  holds its cases.
 - A restored plan with a step left `in_progress` sets `AwaitingStepChoice` so
   the panel can ask continue / restart / skip instead of silently resuming.
 
