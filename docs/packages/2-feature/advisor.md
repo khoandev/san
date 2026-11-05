@@ -319,6 +319,22 @@ human, and `allowProceedWithRisk` is off — a block is final until the finding
 is fixed. See [`reference/configuration.md`](../../reference/configuration.md#advisor)
 for the field list.
 
+`/settings` → Advisor exposes three of them — `enable`, the reviewer model
+(`model.model`, picked from the connected `vendor/model` refs) and the review
+depth `review.mode` (fast / standard / deep) — because that is the whole
+decision a person makes before trusting the layer. Triggers, block policy,
+bounds and display options keep their documented defaults and are edited in
+`settings.json`. A panel with forty rows reads as a system that must be
+configured before it can be switched on, which is the opposite of what an
+opt-in review layer should cost.
+
+The panel edits the session's live config, not the file it was seeded from, and
+it saves whole: the block is replaced at the chosen level, so a knob turned back
+to its default actually persists there. The picked model ref is resolved by
+`resolveReviewer` on the next turn — `ensureAgentRuntime` rebuilds when
+`advisorSignature` changes, so a save or a model switch takes effect without a
+restart.
+
 ## Internals
 
 - `Engine` holds no state. Each `Run` builds a fresh fork from `EngineConfig`,
@@ -378,6 +394,8 @@ internal/app/advisor_plan_test.go — plan step gating and pause.
 internal/app/advisor_task_test.go — task metadata and notices.
 internal/app/advisor_panel_test.go — /advisor targets and panel actions.
 internal/app/input/advisor_panel_test.go — panel rendering, filters, actions.
+internal/app/input/config_advisor_test.go — the /settings tab: live seed, scope
+                                    cycle, save targets, model picker.
 internal/app/conv/status_advisor_test.go — badge states and hiding rules.
 ```
 

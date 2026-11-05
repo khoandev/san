@@ -113,11 +113,13 @@ default". An absent object means the advisor is off.
 | `display.hideP3` | off | Filter minor findings out of the panel's default list. |
 | `display.groupBy` | `severity` | `severity`, `file` or `task`. |
 
-Set it in `/settings` → Advisor, which edits the user, project or this-session
-level: user and project saves write the block to that `settings.json` (field-level
-merge, so unset fields keep the other level's value), and a session save writes no
-file — it pins the config in the transcript for this conversation. When another
-level still supplies a value the save did not change, the notice says so.
+`/settings` → Advisor shows three rows — `enable`, `model.model`, and the review
+depth `review.mode` — and leaves every other knob to this file. It edits the user,
+project or this-session level: user and project saves write the block to that
+`settings.json` (field-level merge, so unset fields keep the other level's value),
+and a session save writes no file — it pins the config in the transcript for this
+conversation. When another level still supplies a value the save did not change,
+the notice says so.
 
 The advisor is off when `enable` is absent or `false`, and it cannot review when
 no model is connected — that is warned at startup and the triggers simply do

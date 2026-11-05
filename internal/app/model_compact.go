@@ -134,7 +134,23 @@ func (m *model) OnCompacted(info core.Compacted) tea.Cmd {
 	}
 
 	scrollPart := tea.Sequence(append(scrollbackCmds, tea.ClearScreen)...)
+	// A plan whose "compact" context asked for this summary starts its first
+	// step now, from the same summary every later step will see.
+	if planCmd := m.planAfterCompact(); planCmd != nil {
+		return tea.Batch(scrollPart, m.ListenForAgentEvents(), kit.StatusTimer(3*time.Second, token), planCmd)
+	}
 	return tea.Batch(scrollPart, m.ListenForAgentEvents(), kit.StatusTimer(3*time.Second, token), m.sendNextQueuedInputIfIdle())
+}
+
+// compactFailed closes the compaction box and, if a plan was waiting on the
+// summary, starts it anyway: a summarizer that fails costs a notice, not the
+// execution the person asked for.
+func (m *model) compactFailed(line string) tea.Cmd {
+	m.conv.Compact.Complete(line, true)
+	if cmd := m.planAfterCompact(); cmd != nil {
+		return tea.Batch(append(m.CommitMessages(), cmd)...)
+	}
+	return tea.Batch(m.CommitMessages()...)
 }
 
 // HandleCompactResult applies a manual /compact result. It does not reset the UI
@@ -156,13 +172,16 @@ func (m *model) HandleCompactResult(msg conv.CompactResultMsg) tea.Cmd {
 	if errors.Is(msg.Err, agent.ErrNothingToCompact) {
 		// Not a failure: there was nothing to do. Saying so is the point —
 		// pressing /compact on a summary used to spend a model call to
-		// summarise it again, a little worse each time.
+		// summarise it again, a little worse each time. A plan waiting on it
+		// runs in place, which is what "keep" would have done.
 		m.conv.Compact.Complete("Nothing to compact — the conversation is already this short.", false)
+		if cmd := m.planAfterCompact(); cmd != nil {
+			return tea.Batch(append(m.CommitMessages(), cmd)...)
+		}
 		return tea.Batch(append(m.CommitMessages(), m.sendNextQueuedInputIfIdle())...)
 	}
 	if msg.Err != nil {
-		m.conv.Compact.Complete(fmt.Sprintf("Compaction could not be completed: %v", msg.Err), true)
-		return tea.Batch(m.CommitMessages()...)
+		return m.compactFailed(fmt.Sprintf("Compaction could not be completed: %v", msg.Err))
 	}
 
 	// Don't complete the SESSION SUMMARY box here: the count is finalized in
@@ -175,18 +194,15 @@ func (m *model) HandleCompactResult(msg conv.CompactResultMsg) tea.Cmd {
 	// A resumed conversation may not have a runtime yet. Record the same
 	// native summary and boundary as live compaction before replacing the UI.
 	if err := m.ensureSessionStore(); err != nil {
-		m.conv.Compact.Complete(fmt.Sprintf("Compaction could not be saved: %v", err), true)
-		return tea.Batch(m.CommitMessages()...)
+		return m.compactFailed(fmt.Sprintf("Compaction could not be saved: %v", err))
 	}
 	opened, err := m.openCurrentSession()
 	if err != nil {
-		m.conv.Compact.Complete(fmt.Sprintf("Compaction could not be saved: %v", err), true)
-		return tea.Batch(m.CommitMessages()...)
+		return m.compactFailed(fmt.Sprintf("Compaction could not be saved: %v", err))
 	}
 	summary, info, err := agent.RecordManualCompaction(opened, msg.CompactResult)
 	if err != nil {
-		m.conv.Compact.Complete(fmt.Sprintf("Compaction could not be saved: %v", err), true)
-		return tea.Batch(m.CommitMessages()...)
+		return m.compactFailed(fmt.Sprintf("Compaction could not be saved: %v", err))
 	}
 	m.services.Agent.SetMessages([]core.Message{summary})
 	return m.OnCompacted(info)

@@ -76,6 +76,10 @@ the Execution Panel.
   **Keep existing context**, **Edit plan**, **Pause** / **Resume**, **Skip
   step**, **Retry step**, **Restart step**, **Cancel**, **Close**. **e** edits
   the plan text in place, **Ctrl+S** saves it, **Esc** closes.
+- Approving a plan also picks the conversation the executor starts from —
+  **keep** (the planning history, the default), **compact** (a summary of it) or
+  **fresh** (a new session carrying only the plan). **c** cycles the choice while
+  **Execute new plan** is offered, and it stays for the next plan.
 - Execute Mode runs one approved step per turn. A step that reports no
   verification evidence is marked blocked, the plan pauses, and the panel
   offers the recovery actions instead of advancing.

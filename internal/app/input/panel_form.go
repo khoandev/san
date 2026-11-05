@@ -324,7 +324,7 @@ func (f *configForm[T]) Render(width int) string {
 		case rowText:
 			b.WriteString(f.renderTextRow(i, row, width))
 		case rowChoice:
-			b.WriteString(f.renderChoiceRow(i, row))
+			b.WriteString(f.renderChoiceRow(i, row, width))
 		case rowEntry:
 			b.WriteString(f.renderEntryRow(i, row, width))
 		}
@@ -426,16 +426,50 @@ func (f *configForm[T]) cursorPad(i, indent int) string {
 	return strings.Repeat(" ", at) + f.cursorMark(i)
 }
 
-func (f *configForm[T]) renderBoolRow(i int, row configRow[T], _ int) string {
+func (f *configForm[T]) renderBoolRow(i int, row configRow[T], width int) string {
 	mark := "[ ]"
 	if row.boolGetter(&f.snap) {
 		mark = selflearnCheckStyle.Render("[✓]")
 	}
 	line := f.cursorPad(i, row.indent) + mark + " " + row.label
-	if row.note != "" {
-		line += "  " + selflearnMutedStyle.Render(row.note)
+	return noteSuffix(line, row.note, width)
+}
+
+// noteSuffix appends a row's muted note when the card is wide enough to hold
+// it. A sentence clipped mid-word explains less than no sentence at all, so at
+// the narrowest width a settings panel gets the row keeps its control and drops
+// the note.
+func noteSuffix(line, note string, width int) string {
+	if note == "" {
+		return line
 	}
-	return line
+	const gap = "  "
+	if lipgloss.Width(line)+lipgloss.Width(gap)+lipgloss.Width(note) > width {
+		return line
+	}
+	return line + gap + selflearnMutedStyle.Render(note)
+}
+
+// mutedNote wraps a panel's own trailing note to the card width, so a pointer
+// at settings.json survives a narrow terminal instead of running past the edge.
+func mutedNote(text string, width int) string {
+	var lines []string
+	line := ""
+	for _, word := range strings.Fields(text) {
+		if line != "" && lipgloss.Width(line)+1+lipgloss.Width(word) > width {
+			lines = append(lines, line)
+			line = ""
+		}
+		if line == "" {
+			line = word
+			continue
+		}
+		line += " " + word
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return selflearnMutedStyle.Render(strings.Join(lines, "\n"))
 }
 
 // renderBoolIntRow draws a checkbox with an inline editable cadence on one line,
@@ -464,17 +498,14 @@ func (f *configForm[T]) renderBoolIntRow(i int, row configRow[T]) string {
 // renderChoiceRow draws a rowChoice as "label   ‹value›": the chevrons say the
 // value steps, which space and enter do. It shows the resolved value, so an
 // unset field reads as the default it behaves as.
-func (f *configForm[T]) renderChoiceRow(i int, row configRow[T]) string {
+func (f *configForm[T]) renderChoiceRow(i int, row configRow[T], width int) string {
 	labelStart := contentCol(row.indent) + 4 // align with bool-row labels
 	leftPad := strings.Repeat(" ", labelStart-cursorWidth)
 	chips := selflearnChipBracketStyle.Render("‹") +
 		selflearnValueStyle.Render(row.getChoice(&f.snap)) +
 		selflearnChipBracketStyle.Render("›")
 	line := leftPad + f.cursorMark(i) + row.label + "   " + chips
-	if row.note != "" {
-		line += "  " + selflearnMutedStyle.Render(row.note)
-	}
-	return line
+	return noteSuffix(line, row.note, width)
 }
 
 // renderEntryRow draws a drill-in section entry: "▸ STRATEGY  how it guides … built-in".

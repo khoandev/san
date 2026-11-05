@@ -9,6 +9,7 @@
 package app
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/genai-io/san/internal/advisor"
+	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/log"
@@ -278,8 +280,7 @@ func (m *model) handlePlanAction(msg input.PlanActionMsg) tea.Cmd {
 			return m.planActionFailed(err)
 		}
 		m.afterPlanChange()
-		m.userInput.Plan.Close()
-		return tea.Batch(append(m.CommitMessages(), m.planNextStep())...)
+		return tea.Batch(append(m.CommitMessages(), m.executeApprovedPlan(msg.Context))...)
 
 	case input.PlanActionKeepExisting:
 		if err := m.plan.KeepExisting(); err != nil {
@@ -362,6 +363,117 @@ func (m *model) handlePlanAction(msg input.PlanActionMsg) tea.Cmd {
 	return nil
 }
 
+// executeApprovedPlan starts the first step after applying the conversation
+// context the panel asked for. Every mode carries the plan itself unchanged;
+// only the history the executor starts from differs:
+//
+//   - keep — the planning conversation stays, dead ends included;
+//   - compact — the planning conversation is summarized first, so the executor
+//     reads the plan and the decisions behind it, not the exploration;
+//   - fresh — a new session is opened and the plan is carried into it, which
+//     leaves the planning conversation intact in the previous one.
+//
+// A mode that cannot run (no provider to summarize with, a conversation too
+// short to be worth it, a session that will not open) falls back to keep rather
+// than leaving the person stuck in front of an approved plan.
+func (m *model) executeApprovedPlan(mode input.PlanContext) tea.Cmd {
+	switch mode {
+	case input.PlanContextFresh:
+		if err := m.startFreshPlanSession(); err != nil {
+			m.conv.AddNotice("Plan: could not start a fresh session (" + err.Error() + "); running in this one.")
+			m.refreshPlanPanel()
+			return tea.Batch(m.CommitMessages()...)
+		}
+		m.userInput.Plan.Close()
+		return tea.Batch(append(m.CommitMessages(), m.planNextStep())...)
+	case input.PlanContextCompact:
+		if cmd := m.startPlanCompaction(); cmd != nil {
+			return cmd
+		}
+		m.conv.AddNotice("Plan: nothing to compact; running in this conversation.")
+	}
+	m.userInput.Plan.Close()
+	return tea.Batch(append(m.CommitMessages(), m.planNextStep())...)
+}
+
+// startFreshPlanSession opens a new session and carries the approved plan into
+// it, so the executor starts with no planning history at all. The previous
+// conversation keeps its own copy of the plan and stays resumable.
+func (m *model) startFreshPlanSession() error {
+	state := m.plan.Snapshot()
+	previous := m.sessionID()
+	if err := m.clearSession(); err != nil {
+		return err
+	}
+	// clearSession drops the plan with the conversation it belonged to; the
+	// approved plan is the one thing that crosses over.
+	m.plan.Restore(state)
+	m.syncPlanPermissions()
+	if err := m.appendSessionState(); err != nil {
+		return err
+	}
+	m.conv.Clear()
+	title := "the plan"
+	if active, ok := m.plan.Active(); ok && active.Title != "" {
+		title = fmt.Sprintf("%q", active.Title)
+	}
+	notice := fmt.Sprintf("Fresh session — executing %s from a clean context.", title)
+	if previous != "" {
+		notice += " The planning conversation is kept in session " + previous + " (/resume)."
+	}
+	m.conv.AddNotice(notice)
+	return nil
+}
+
+// startPlanCompaction summarizes the planning conversation before the first
+// step runs, and returns the command that performs it. The step itself starts
+// from OnCompacted once the agent has swapped in the summary. nil means there is
+// nothing to summarize, and the caller runs in place.
+func (m *model) startPlanCompaction() tea.Cmd {
+	if m.env.LLMProvider == nil || m.conv.Compact.Active || m.conv.Stream.Active {
+		return nil
+	}
+	active, ok := m.plan.Active()
+	if !ok || active.Status != plan.StatusExecuting {
+		return nil
+	}
+	request := m.BuildCompactRequest(planCompactionFocus(active), "manual")
+	if len(request.Messages) < core.MinMessagesToCompact {
+		m.cancelManualCompaction()
+		return nil
+	}
+	m.pendingPlanExecID = active.ID
+	m.conv.Compact.Active = true
+	m.conv.Compact.SummaryFocus = request.SummaryFocus
+	m.conv.Compact.Phase = conv.PhaseSummarizing
+	m.conv.Compact.Count = len(request.Messages)
+	return tea.Batch(m.SpinnerTickCmd(), conv.CompactCmd(request))
+}
+
+// planCompactionFocus tells the summarizer what the executor needs: the plan
+// and the decisions that shaped it, not the exploration that produced them.
+func planCompactionFocus(p plan.Plan) string {
+	return "Keep the approved plan, its steps, and every decision that changed them. " +
+		"Drop exploration that did not change the plan. Plan: " + p.Title
+}
+
+// planAfterCompact starts the step a compaction was waiting for. It clears the
+// pending marker either way, and stays out of the way when the plan it was
+// started for is gone or no longer executing.
+func (m *model) planAfterCompact() tea.Cmd {
+	if m.pendingPlanExecID == "" {
+		return nil
+	}
+	id := m.pendingPlanExecID
+	m.pendingPlanExecID = ""
+	active, ok := m.plan.Active()
+	if !ok || active.ID != id || active.Status != plan.StatusExecuting || active.Paused {
+		return nil
+	}
+	m.userInput.Plan.Close()
+	return m.planNextStep()
+}
+
 // cancelPlan cancels the pending draft when one is waiting, and the running
 // plan otherwise, so Cancel never destroys a plan the person still wants.
 func (m *model) cancelPlan() error {
@@ -421,6 +533,9 @@ func (m *model) restorePlanState(state plan.State) {
 
 // resetPlanState drops the plan when the conversation it belongs to is gone.
 func (m *model) resetPlanState() {
+	// A compaction started for a plan in the old conversation cannot start a
+	// step in the new one.
+	m.pendingPlanExecID = ""
 	m.plan.Reset()
 	m.syncPlanPermissions()
 	m.userInput.Plan.Close()

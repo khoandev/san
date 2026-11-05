@@ -1,7 +1,12 @@
-// /settings Advisor panel: the global review layer's configuration, in six
-// zones — on/off, triggers, block policy, bounds, review, display — with the
-// same user / project / session save control the other panels use, plus the one
-// scope only the advisor has: this session.
+// /settings Advisor panel: the global review layer's configuration, reduced to
+// the decisions a person actually makes — on/off, the model, and the review
+// depth — with the same user / project / session save control the other panels
+// use, plus the one scope only the advisor has: this session.
+//
+// Everything else the advisor supports (triggers, block policy, bounds, display)
+// keeps its documented default and stays editable in settings.json. A panel with
+// forty knobs reads as a system that has to be configured before it can be
+// switched on, which is the opposite of what an opt-in review layer should cost.
 //
 // The panel edits the effective config and saves it whole: the block is
 // replaced at the chosen level rather than merged into it, so a knob turned
@@ -15,6 +20,8 @@
 package input
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/genai-io/san/internal/setting"
@@ -48,6 +55,15 @@ type advisorPanel struct {
 	// copy starts when the app supplies it, because that — not the file — is
 	// what the session is actually running with.
 	live *setting.AdvisorSettings
+
+	// models lists the connected "vendor/model" refs the model picker offers.
+	// The app injects it; a panel without one shows the empty list.
+	models func() []string
+
+	// picking is the model sub-view: while it is open the panel owns the keys
+	// and the shell routes esc to it instead of closing the popup.
+	picking bool
+	pick    advisorModelPick
 }
 
 func newAdvisorPanel(settings *setting.Settings) *advisorPanel {
@@ -77,6 +93,7 @@ func (p *advisorPanel) Title() string { return "advisor" }
 // Enter seeds the working copy: this session's live config when the app pushed
 // one, the settings file otherwise.
 func (p *advisorPanel) Enter() {
+	p.picking = false
 	p.form.Enter()
 	if p.live != nil {
 		p.form.snap = p.live.Clone()
@@ -85,17 +102,79 @@ func (p *advisorPanel) Enter() {
 	}
 }
 
-func (p *advisorPanel) Dirty() bool      { return p.form.Dirty() }
-func (p *advisorPanel) HintLine() string { return p.form.HintLine() }
+func (p *advisorPanel) Dirty() bool { return p.form.Dirty() }
+
+func (p *advisorPanel) HintLine() string {
+	if p.picking {
+		return p.pick.hint()
+	}
+	return p.form.HintLine()
+}
+
+// Modal reports the model sub-view: while it is open the panel drives esc
+// itself, so it backs out of the picker instead of closing /settings.
+func (p *advisorPanel) Modal() bool { return p.picking }
+
+// Breadcrumb names the sub-view the shell shows in the header lockup.
+func (p *advisorPanel) Breadcrumb() string {
+	if p.picking {
+		return p.pick.crumb()
+	}
+	return ""
+}
+
 func (p *advisorPanel) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
-	cmd, done, _ := p.form.HandleKey(msg)
+	if p.picking {
+		closed, picked, ref := p.pick.handleKey(msg)
+		if picked {
+			if ref != p.form.snap.Model.Model {
+				// The reasoning rung belongs to the model that was picked
+				// before; a new model starts from its own default.
+				p.form.snap.Model.ThinkingEffort = ""
+			}
+			p.form.snap.Model.Model = ref
+		}
+		if picked || closed {
+			p.picking = false
+		}
+		return nil, false
+	}
+	cmd, done, activated := p.form.HandleKey(msg)
+	if activated == advisorModelEntry {
+		p.openModelPick()
+	}
 	return cmd, done
 }
 
 func (p *advisorPanel) Render(width, height int) string {
-	p.form.visible = max(height-1, 0)
-	return p.form.Render(width)
+	if p.picking {
+		return p.pick.render(width, p.form.snap.Model.Model)
+	}
+	note := mutedNote(footerNote, width)
+	// The footer's own rows come out of the body's budget, so a wrapped note on
+	// a narrow card does not push the form past the popup.
+	p.form.visible = max(height-3-strings.Count(note, "\n"), 0)
+	body := p.form.Render(width)
+	body += "\n" + note
+	return body
 }
+
+// footerNote is the one line that points past this panel. The knobs it names
+// are real and documented; they are just not worth a row each.
+const footerNote = "Triggers, block policy and bounds keep their defaults — set them in settings.json."
+
+// openModelPick opens the model sub-view on the connected providers.
+func (p *advisorPanel) openModelPick() {
+	var refs []string
+	if p.models != nil {
+		refs = p.models()
+	}
+	p.pick.begin(refs, p.form.snap.Model.Model)
+	p.picking = true
+}
+
+// SetModelSource wires the picker's list of connected "vendor/model" refs.
+func (p *advisorPanel) SetModelSource(fn func() []string) { p.models = fn }
 
 // SetLive points the panel at this session's effective config. The app calls it
 // before opening /settings, so a session that pinned its own advisor config
@@ -127,97 +206,25 @@ func advisorBoolRow(label, note string, getter func(setting.AdvisorSettings) boo
 	}
 }
 
-// advisorIntRow builds a bounded number row.
-func advisorIntRow(label, unit string, get func(setting.AdvisorSettings) int,
-	set func(*setting.AdvisorSettings, int), footnote func(int) string) configRow[setting.AdvisorSettings] {
-	return configRow[setting.AdvisorSettings]{
-		kind:      rowInt,
-		label:     label,
-		unit:      unit,
-		indent:    2,
-		intGetter: func(s *setting.AdvisorSettings) int { return get(*s) },
-		intSetter: func(s *setting.AdvisorSettings, v int) { set(s, v) },
-		intMin:    0,
-		intMax:    9999,
-		footnote:  footnote,
-	}
-}
+// advisorModelEntry is the rowEntry id that opens the model picker.
+const advisorModelEntry = "model"
 
-// advisorTextRow builds a free-text row.
-func advisorTextRow(label, placeholder string, get func(setting.AdvisorSettings) string,
-	set func(*setting.AdvisorSettings, string)) configRow[setting.AdvisorSettings] {
-	return configRow[setting.AdvisorSettings]{
-		kind:        rowText,
-		label:       label,
-		indent:      2,
-		placeholder: placeholder,
-		strGetter:   func(s *setting.AdvisorSettings) string { return get(*s) },
-		strSetter:   func(s *setting.AdvisorSettings, v string) { set(s, v) },
-	}
-}
-
-// advisorRows is the panel body. Turning the advisor on is the first row so the
-// feature switch is never buried: every other row describes what an enabled
-// advisor does.
+// advisorRows is the panel body: the three decisions the advisor needs from a
+// person. Turning it on is the first row so the feature switch is never buried;
+// the rest describe what an enabled advisor does.
 var advisorRows = []configRow[setting.AdvisorSettings]{
-	{kind: rowSubHeader, label: "On / off"},
-	advisorBoolRow("Advisor", "independent review of what the agent produced",
+	{kind: rowSubHeader, label: "Review"},
+	advisorBoolRow("Advisor", "independent review of the result",
 		setting.AdvisorSettings.Enabled,
 		func(s *setting.AdvisorSettings, on bool) { s.Enable = advisorFlag(on) }),
-	advisorBoolRow("Run in background", "keep reviews off the agent's own turn",
-		setting.AdvisorSettings.RunsInBackground,
-		func(s *setting.AdvisorSettings, on bool) { s.RunInBackground = advisorFlag(on) }),
-	{kind: rowSpacer},
-
-	{kind: rowSubHeader, label: "Triggers"},
-	advisorBoolRow("After a subagent task", "", setting.AdvisorSettings.AfterSubagentTask,
-		func(s *setting.AdvisorSettings, on bool) { s.Triggers.AfterSubagentTask = advisorFlag(on) }),
-	advisorBoolRow("Before a merge or push", "", setting.AdvisorSettings.BeforeMerge,
-		func(s *setting.AdvisorSettings, on bool) { s.Triggers.BeforeMerge = advisorFlag(on) }),
-	advisorBoolRow("Before a plan step is done", "", setting.AdvisorSettings.BeforePlanStep,
-		func(s *setting.AdvisorSettings, on bool) { s.Triggers.BeforePlanStep = advisorFlag(on) }),
-	advisorBoolRow("On a large change", "", setting.AdvisorSettings.OnLargeChanges,
-		func(s *setting.AdvisorSettings, on bool) { s.Triggers.OnLargeChanges = advisorFlag(on) }),
-	advisorBoolRow("On a sensitive path", "", setting.AdvisorSettings.SensitivePaths,
-		func(s *setting.AdvisorSettings, on bool) { s.Triggers.SensitivePaths = advisorFlag(on) }),
-	{kind: rowSpacer},
-
-	{kind: rowSubHeader, label: "Block policy"},
-	advisorBoolRow("Merge on P0", "", setting.AdvisorSettings.BlocksMergeOnP0,
-		func(s *setting.AdvisorSettings, on bool) { s.Blocks.MergeOnP0 = advisorFlag(on) }),
-	advisorBoolRow("Merge on P1", "", setting.AdvisorSettings.BlocksMergeOnP1,
-		func(s *setting.AdvisorSettings, on bool) { s.Blocks.MergeOnP1 = advisorFlag(on) }),
-	advisorBoolRow("Task stays open on P0", "", setting.AdvisorSettings.BlocksTaskOnP0,
-		func(s *setting.AdvisorSettings, on bool) { s.Blocks.TaskCompletionOnP0 = advisorFlag(on) }),
-	advisorBoolRow("Plan step stays open on P0", "", setting.AdvisorSettings.BlocksPlanStepOnP0,
-		func(s *setting.AdvisorSettings, on bool) { s.Blocks.PlanStepCompletionOnP0 = advisorFlag(on) }),
-	advisorBoolRow("Ask on P1", "put a P1 to you before continuing", setting.AdvisorSettings.RequiresConfirmationOnP1,
-		func(s *setting.AdvisorSettings, on bool) { s.Blocks.RequireConfirmationOnP1 = advisorFlag(on) }),
-	advisorBoolRow("Allow proceed with risk", "let you go past a block after confirming",
-		setting.AdvisorSettings.AllowProceedWithRisk,
-		func(s *setting.AdvisorSettings, on bool) { s.Blocks.AllowProceedWithRisk = advisorFlag(on) }),
-	{kind: rowSpacer},
-
-	{kind: rowSubHeader, label: "Bounds"},
-	advisorIntRow("Large change: files", "files",
-		func(s setting.AdvisorSettings) int { return s.Thresholds.MinChangedFiles },
-		func(s *setting.AdvisorSettings, v int) { s.Thresholds.MinChangedFiles = v },
-		func(v int) string { return zeroMeans(v, "any count") }),
-	advisorIntRow("Large change: lines", "lines",
-		func(s setting.AdvisorSettings) int { return s.Thresholds.MinChangedLines },
-		func(s *setting.AdvisorSettings, v int) { s.Thresholds.MinChangedLines = v },
-		func(v int) string { return zeroMeans(v, "any count") }),
-	advisorIntRow("Max diff size", "KB",
-		func(s setting.AdvisorSettings) int { return s.Thresholds.MaxDiffBytes / 1024 },
-		func(s *setting.AdvisorSettings, v int) { s.Thresholds.MaxDiffBytes = v * 1024 },
-		func(v int) string { return zeroMeans(v, "256 KB") }),
-	advisorIntRow("Cooldown per target", "seconds",
-		func(s setting.AdvisorSettings) int { return s.Thresholds.CooldownSeconds },
-		func(s *setting.AdvisorSettings, v int) { s.Thresholds.CooldownSeconds = v },
-		func(v int) string { return zeroMeans(v, "60 s") }),
-	{kind: rowSpacer},
-
-	{kind: rowSubHeader, label: "Review"},
+	{
+		kind:    rowEntry,
+		label:   "Model",
+		entryID: advisorModelEntry,
+		indent:  2,
+		desc:    "who reviews",
+		summary: func(s *setting.AdvisorSettings) string { return advisorModelLabel(s) },
+	},
 	{
 		kind:      rowChoice,
 		label:     "Depth",
@@ -227,52 +234,6 @@ var advisorRows = []configRow[setting.AdvisorSettings]{
 		getChoice: func(s *setting.AdvisorSettings) string { return s.Mode() },
 		setChoice: func(s *setting.AdvisorSettings, v string) { s.Review.Mode = v },
 	},
-	advisorTextRow("Model", "default (session model)",
-		func(s setting.AdvisorSettings) string { return s.Model.Model },
-		func(s *setting.AdvisorSettings, v string) { s.Model.Model = v }),
-	advisorTextRow("Thinking effort", "default",
-		func(s setting.AdvisorSettings) string { return s.Model.ThinkingEffort },
-		func(s *setting.AdvisorSettings, v string) { s.Model.ThinkingEffort = v }),
-	advisorIntRow("Max tokens", "tokens",
-		func(s setting.AdvisorSettings) int { return s.Model.MaxTokens },
-		func(s *setting.AdvisorSettings, v int) { s.Model.MaxTokens = v },
-		func(v int) string { return zeroMeans(v, "4000") }),
-	advisorIntRow("Timeout", "seconds",
-		func(s setting.AdvisorSettings) int { return s.Model.TimeoutSeconds },
-		func(s *setting.AdvisorSettings, v int) { s.Model.TimeoutSeconds = v },
-		func(v int) string { return zeroMeans(v, "180 s") }),
-	advisorIntRow("Max findings", "findings",
-		func(s setting.AdvisorSettings) int { return s.Model.MaxFindings },
-		func(s *setting.AdvisorSettings, v int) { s.Model.MaxFindings = v },
-		func(v int) string { return zeroMeans(v, "20") }),
 	{kind: rowSpacer},
-
-	{kind: rowSubHeader, label: "Display"},
-	advisorBoolRow("Status bar badge", "", setting.AdvisorSettings.ShowStatusBar,
-		func(s *setting.AdvisorSettings, on bool) { s.Display.StatusBar = advisorFlag(on) }),
-	advisorBoolRow("Hide P3", "keep minor findings out of the panel list",
-		setting.AdvisorSettings.HidesP3,
-		func(s *setting.AdvisorSettings, on bool) { s.Display.HideP3 = advisorFlag(on) }),
-	{
-		kind:   rowChoice,
-		label:  "Group findings by",
-		indent: 2,
-		choices: []string{
-			setting.AdvisorGroupBySeverity, setting.AdvisorGroupByFile, setting.AdvisorGroupByTask,
-		},
-		getChoice: func(s *setting.AdvisorSettings) string { return s.Grouping() },
-		setChoice: func(s *setting.AdvisorSettings, v string) { s.Display.GroupBy = v },
-	},
-	{kind: rowSpacer},
-
 	{kind: rowSave, label: "Save"},
-}
-
-// zeroMeans renders the footnote of a bounded number: zero is "use the default",
-// which the row states rather than showing a bare 0.
-func zeroMeans(v int, fallback string) string {
-	if v == 0 {
-		return "default: " + fallback
-	}
-	return ""
 }

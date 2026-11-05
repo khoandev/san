@@ -53,8 +53,11 @@ func newModel(opts setting.RunOptions) (*model, error) {
 	m.userInput.Autopilot.SetMissionRefiner(m.missionRefine)
 	m.userInput.Autopilot.SetConfigSource(func() setting.AutoPilotSettings { return m.env.AutoPilot })
 	m.userInput.Autopilot.SetEngagedSource(m.autopilotEngaged)
-	m.userInput.Autopilot.SetModelSource(m.autopilotModelRefs)
+	m.userInput.Autopilot.SetModelSource(m.connectedModelRefs)
 	m.userInput.Autopilot.SetEffortSource(m.autopilotModelEfforts)
+	// The /settings Advisor tab picks its review model from the same connected
+	// providers, so both pickers answer the same list.
+	m.userInput.Settings.SetModelSource(m.connectedModelRefs)
 	if err := m.applyRunOptions(opts); err != nil {
 		return nil, err
 	}

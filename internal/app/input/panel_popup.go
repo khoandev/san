@@ -68,6 +68,10 @@ type PanelPopup struct {
 	panels []Panel
 	index  int
 
+	// modelRefs supplies the Advisor tab's model picker with the connected
+	// "vendor/model" refs. The app injects it after construction.
+	modelRefs func() []string
+
 	active bool
 	width  int
 	height int
@@ -90,8 +94,25 @@ func NewSettingsSelector(settings *setting.Settings) PanelPopup {
 // SetSettings rebinds the Settings panels while keeping the active tab and popup state.
 func (c *PanelPopup) SetSettings(settings *setting.Settings) {
 	c.panels = NewSettingsSelector(settings).panels
+	c.applyModelSource()
 	if c.active {
 		c.activePanel().Enter()
+	}
+}
+
+// SetModelSource wires the connected "vendor/model" refs the Advisor tab's model
+// picker lists. It is kept on the popup so a rebind through SetSettings does not
+// leave the fresh panel without a list.
+func (c *PanelPopup) SetModelSource(fn func() []string) {
+	c.modelRefs = fn
+	c.applyModelSource()
+}
+
+func (c *PanelPopup) applyModelSource() {
+	for _, p := range c.panels {
+		if ap, ok := p.(*advisorPanel); ok {
+			ap.SetModelSource(c.modelRefs)
+		}
 	}
 }
 

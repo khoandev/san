@@ -390,3 +390,78 @@ func TestPlanPanelShowsRefusedCompletion(t *testing.T) {
 		t.Fatalf("a clean plan rendered the refusal section:\n%s", clean.Render())
 	}
 }
+
+// Execute new plan carries a context choice: keep the planning conversation,
+// summarize it first, or start a new session. The panel owns the choice and
+// sends it with the action; c cycles it while a plan is ready to run.
+func TestPlanPanelCyclesExecuteContext(t *testing.T) {
+	p := NewPlanPanel()
+	ready := panelPlan("plan-1", "Split auth", "read", "move")
+	ready.Status = plan.StatusPendingApproval
+	p.Enter(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{ready}, ActiveID: ready.ID}, 100, 40)
+
+	if got := p.Context(); got != PlanContextKeep {
+		t.Fatalf("default context = %q, want keep", got)
+	}
+	for _, want := range []string{"Context", "keep", "planning history"} {
+		if !strings.Contains(p.Render(), want) {
+			t.Fatalf("panel is missing the context row (%q):\n%s", want, p.Render())
+		}
+	}
+
+	steps := []PlanContext{PlanContextCompact, PlanContextFresh, PlanContextKeep}
+	for _, want := range steps {
+		p.HandleKeypress(tea.KeyPressMsg{Code: 'c', Text: "c"})
+		if got := p.Context(); got != want {
+			t.Fatalf("context = %q, want %q", got, want)
+		}
+	}
+
+	// The choice rides on the action, so the app never has to read the panel.
+	p.HandleKeypress(tea.KeyPressMsg{Code: 'c', Text: "c"}) // → compact
+	cmd := p.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on Execute new plan emitted nothing")
+	}
+	msg, ok := cmd().(PlanActionMsg)
+	if !ok || msg.Action != PlanActionExecuteNew || msg.Context != PlanContextCompact {
+		t.Fatalf("message = %+v, want execute-new with the compact context", msg)
+	}
+}
+
+// A narrow card keeps the context control and drops the sentence explaining it:
+// the choice is what a person acts on, and a description broken across two rows
+// under it reads as noise.
+func TestPlanPanelContextRowFitsANarrowCard(t *testing.T) {
+	p := NewPlanPanel()
+	ready := panelPlan("plan-1", "Split auth", "read", "move")
+	ready.Status = plan.StatusPendingApproval
+	p.Enter(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{ready}, ActiveID: ready.ID}, 56, 40)
+
+	body := p.Render()
+	if !strings.Contains(body, "keep") {
+		t.Fatalf("the narrow card lost the context control:\n%s", body)
+	}
+	if strings.Contains(body, "planning history carries over") {
+		t.Fatalf("the narrow card kept a description it cannot fit:\n%s", body)
+	}
+}
+
+// The context row is only a decision while a plan is about to run; an executing
+// plan has no context to choose.
+func TestPlanPanelHidesContextWhileExecuting(t *testing.T) {
+	p := NewPlanPanel()
+	running := runningStep()
+	p.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{running}, ActiveID: running.ID}, 100, 40)
+
+	if p.offersExecute() {
+		t.Fatal("a running plan should not offer Execute new plan")
+	}
+	if strings.Contains(p.Render(), "Context") {
+		t.Fatalf("a running plan rendered the context row:\n%s", p.Render())
+	}
+	p.HandleKeypress(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	if got := p.Context(); got != PlanContextKeep {
+		t.Fatalf("c changed the context with nothing to execute: %q", got)
+	}
+}

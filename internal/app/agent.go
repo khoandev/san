@@ -304,9 +304,10 @@ func (m *model) autopilotModelEfforts(ref string) []string {
 	return llm.ThinkingEffortsForModel(p, m.services.LLM.Store(), info)
 }
 
-// autopilotModelRefs lists "vendor/model" refs for the /autopilot model picker:
-// the cached models of each connected provider under its connected auth method.
-func (m *model) autopilotModelRefs() []string {
+// connectedModelRefs lists "vendor/model" refs for the model pickers (the
+// /autopilot judge and the /settings Advisor tab): the cached models of each
+// connected provider under its connected auth method.
+func (m *model) connectedModelRefs() []string {
 	store := m.services.LLM.Store()
 	if store == nil {
 		return nil

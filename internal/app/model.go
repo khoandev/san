@@ -85,7 +85,11 @@ type model struct {
 	// plan is this session's Plan Mode state: the mode, every plan it produced,
 	// and the active plan's step progress. It is persisted inside the transcript
 	// (transcript.StatePatch.Plan), never in a file of its own.
-	plan              *plan.Store
+	plan *plan.Store
+	// pendingPlanExecID is the plan waiting on a compaction started by Execute
+	// new plan's "compact" context. OnCompacted starts its first step; any
+	// other end to the compaction clears it and falls back to running in place.
+	pendingPlanExecID string
 	services          services             // Domain service singletons, injected at construction
 	learnedStores     *learnedStoreContext // live cwd/settings source for /evolve inventories
 	subscriptionUsage subscriptionUsageState

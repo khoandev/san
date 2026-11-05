@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/genai-io/san/internal/setting"
 )
@@ -252,15 +253,93 @@ func TestAdvisorSettingsPanelRendersAtEveryWidth(t *testing.T) {
 		}
 	}
 	body := p.Render(100, 60)
-	// Sections are upper-cased by the form; the first is on/off.
-	for _, want := range []string{"ON / OFF", "TRIGGERS", "BLOCK POLICY", "BOUNDS", "REVIEW", "DISPLAY"} {
+	// The tab is three decisions: on/off, the review model, and the depth. The
+	// advanced knobs live in settings.json, and the footer says so.
+	for _, want := range []string{"REVIEW", "Advisor", "MODEL", "Depth", "session model", "settings.json"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("panel body is missing section %q", want)
+			t.Errorf("panel body is missing %q", want)
 		}
 	}
+
 	for _, scope := range []string{"user", "project", "session"} {
 		if !strings.Contains(body, scope) {
 			t.Errorf("panel body is missing scope %q", scope)
 		}
+	}
+}
+
+// Every row stays inside the narrowest card the popup hands a panel: the notes
+// that do not fit are dropped rather than clipped, and the footer wraps instead
+// of running past the edge.
+func TestAdvisorPanelFitsTheNarrowestCard(t *testing.T) {
+	p := newTestAdvisorPanel(t)
+	for _, width := range []int{40, 60, 120} {
+		for _, line := range strings.Split(p.Render(width, 30), "\n") {
+			line = strings.TrimRight(line, " ")
+			if got := lipgloss.Width(line); got > width {
+				t.Errorf("width %d: row is %d cols wide: %q", width, got, line)
+			}
+		}
+	}
+}
+
+// The model row opens a picker over the connected providers and stores the pick
+// as a "vendor/model" ref the app resolves through resolveReviewer.
+func TestAdvisorPanelPicksAModel(t *testing.T) {
+	p := newTestAdvisorPanel(t)
+	p.SetModelSource(func() []string {
+		return []string{"anthropic/claude-sonnet-4-5", "anthropic/claude-haiku-4-5", "openai/gpt-5"}
+	})
+
+	// The row after the Advisor toggle is Model.
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !p.picking {
+		t.Fatal("enter on the Model row should open the picker")
+	}
+	if crumb := p.Breadcrumb(); crumb != "Model" {
+		t.Fatalf("breadcrumb = %q, want Model", crumb)
+	}
+
+	// Provider list: session model, then each connected provider.
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown}) // session model → anthropic
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if crumb := p.Breadcrumb(); crumb != "Model › anthropic" {
+		t.Fatalf("breadcrumb = %q, want the provider's models", crumb)
+	}
+	// Anthropic's models are sorted as given: sonnet, then haiku.
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if p.picking {
+		t.Fatal("a completed pick closes the picker")
+	}
+	if got := p.form.snap.Model.Model; got != "anthropic/claude-haiku-4-5" {
+		t.Fatalf("model = %q, want the picked ref", got)
+	}
+	if !p.Dirty() {
+		t.Fatal("a changed model should mark the panel dirty")
+	}
+}
+
+// Esc backs out of the model stage and then the picker, without touching the
+// config.
+func TestAdvisorPanelModelPickerEscBacksOut(t *testing.T) {
+	p := newTestAdvisorPanel(t)
+	p.SetModelSource(func() []string { return []string{"openai/gpt-5"} })
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}) // open the picker
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})  // session model → openai
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}) // model stage
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !p.picking {
+		t.Fatal("esc in the model stage should return to the provider list")
+	}
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if p.picking {
+		t.Fatal("esc on the provider list should close the picker")
+	}
+	if p.form.snap.Model.Model != "" {
+		t.Fatalf("model = %q, want it untouched", p.form.snap.Model.Model)
 	}
 }

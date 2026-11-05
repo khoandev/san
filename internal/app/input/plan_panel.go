@@ -34,8 +34,44 @@ const (
 	PlanActionClose        PlanAction = "close"
 )
 
+// PlanContext is the conversation the executor starts from. Planning is
+// exploratory — long, full of dead ends — and none of that history is what a
+// step needs, so the person decides how much of it carries over when the plan
+// is approved.
+type PlanContext string
+
+const (
+	// PlanContextKeep keeps the planning conversation: the executor sees
+	// everything the planner did.
+	PlanContextKeep PlanContext = "keep"
+	// PlanContextCompact summarizes the planning conversation first.
+	PlanContextCompact PlanContext = "compact"
+	// PlanContextFresh starts a new session that carries only the plan.
+	PlanContextFresh PlanContext = "fresh"
+)
+
+// planContexts lists the choices in cycle order.
+var planContexts = []PlanContext{PlanContextKeep, PlanContextCompact, PlanContextFresh}
+
+// PlanContextDescription explains one choice in the panel's own words. The
+// panel is the only place the mode is set, so this is the whole explanation.
+func PlanContextDescription(c PlanContext) string {
+	switch c {
+	case PlanContextCompact:
+		return "summarize this conversation first"
+	case PlanContextFresh:
+		return "start a new session from the plan"
+	}
+	return "planning history carries over"
+}
+
 // PlanActionMsg asks the app to apply one panel action to the plan store.
-type PlanActionMsg struct{ Action PlanAction }
+type PlanActionMsg struct {
+	Action PlanAction
+	// Context is the conversation the first step starts from; only Execute new
+	// plan reads it.
+	Context PlanContext
+}
 
 // PlanEditSavedMsg carries an edited plan back to the app, which persists it
 // in the session state. The panel merges the edit so the plan keeps its
@@ -52,6 +88,9 @@ type PlanPanel struct {
 	state         plan.State
 	cursor        int
 	status        string
+	// context is where execution starts from. It survives a close, so the
+	// choice a person made once is what the next plan uses too.
+	context PlanContext
 
 	editing bool
 	editor  textarea.Model
@@ -85,6 +124,9 @@ func (p *PlanPanel) Enter(state plan.State, width, height int) {
 	p.editing = false
 	p.status = ""
 	p.cursor = 0
+	if p.context == "" {
+		p.context = PlanContextKeep
+	}
 	p.Resize(width, height)
 	p.invalidate()
 }
@@ -153,6 +195,11 @@ func (p *PlanPanel) HandleKeypress(msg tea.KeyMsg) tea.Cmd {
 			p.openEditor()
 		}
 		return nil
+	case "c":
+		if p.offersExecute() {
+			p.cycleContext()
+		}
+		return nil
 	case "enter", "space":
 		if len(actions) == 0 {
 			return nil
@@ -162,10 +209,37 @@ func (p *PlanPanel) HandleKeypress(msg tea.KeyMsg) tea.Cmd {
 			p.openEditor()
 			return nil
 		}
-		return func() tea.Msg { return PlanActionMsg{Action: action} }
+		return func() tea.Msg { return PlanActionMsg{Action: action, Context: p.context} }
 	}
 	return nil
 }
+
+// offersExecute reports whether the panel is about to run a plan, which is the
+// only state where the conversation context is a decision to make.
+func (p *PlanPanel) offersExecute() bool {
+	for _, action := range p.actions() {
+		if action.Action == PlanActionExecuteNew {
+			return true
+		}
+	}
+	return false
+}
+
+// cycleContext steps the exec context to its next choice, wrapping at the end.
+func (p *PlanPanel) cycleContext() {
+	at := 0
+	for i, c := range planContexts {
+		if c == p.context {
+			at = i
+			break
+		}
+	}
+	p.context = planContexts[(at+1)%len(planContexts)]
+	p.invalidate()
+}
+
+// Context returns the exec context the panel would send with Execute new plan.
+func (p *PlanPanel) Context() PlanContext { return p.context }
 
 // HandlePaste implements pasteHandler so a pasted plan body lands in the
 // editor instead of leaking into the prompt textarea behind the panel.
@@ -407,58 +481,32 @@ func (p *PlanPanel) renderBody() string {
 	active, hasActive := p.activePlan()
 	conflict := p.state.DraftID != "" && hasActive && active.ID != focused.ID && !active.Terminal()
 
-	p.field(&b, "Plan", focused.Title)
-	if focused.Goal != "" {
-		p.field(&b, "Goal", focused.Goal)
-	}
-	p.field(&b, "Status", statusLine(focused))
+	p.titleBlock(&b, focused)
 	if conflict {
+		b.WriteString("\n")
 		b.WriteString(planWarnStyle.Render(fmt.Sprintf("A new plan is ready while %q is still unfinished. Choose one:", active.Title)))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
 	}
 	b.WriteString("\n")
 	b.WriteString(p.steps(focused))
+	p.currentStep(&b, focused)
 
-	if step, ok := focused.CurrentStep(); ok {
-		b.WriteString("\n")
-		p.field(&b, "Now", step.Title)
-		if step.Objective != "" {
-			p.field(&b, "Objective", step.Objective)
-		}
-		for i, criterion := range step.Verification {
-			label := "Verify"
-			if i > 0 {
-				label = ""
-			}
-			p.field(&b, label, criterion)
-		}
-		if step.BlockReason != "" {
-			p.field(&b, "Blocked", planWarnStyle.Render(step.BlockReason))
-		}
-		if step.Result != "" {
-			p.field(&b, "Result", kit.TruncateText(step.Result, p.innerWidth()-12))
-		}
-		if len(step.Files) > 0 {
-			p.field(&b, "Files", kit.TruncateText(strings.Join(step.Files, ", "), p.innerWidth()-12))
-		}
-		for i, evidence := range step.Evidence {
-			label := "Evidence"
-			if i > 0 {
-				label = ""
-			}
-			p.field(&b, label, kit.TruncateText(evidence, p.innerWidth()-12))
-		}
-	}
+	// Risks, decisions and open questions are what a person reads *before*
+	// approving. Once the executor is running they are history; the steps and
+	// the current step are the only things worth the rows.
 	p.refused(&b, focused)
-	p.list(&b, "Open questions", focused.OpenQuestions)
-	p.list(&b, "Risks", focused.Risks)
-	decisions := make([]string, 0, len(focused.Decisions))
-	for _, d := range focused.Decisions {
-		decisions = append(decisions, d.Text)
+	if p.canEdit() {
+		p.list(&b, "Open questions", focused.OpenQuestions)
+		p.list(&b, "Risks", focused.Risks)
+		decisions := make([]string, 0, len(focused.Decisions))
+		for _, d := range focused.Decisions {
+			decisions = append(decisions, d.Text)
+		}
+		p.list(&b, "Decisions", decisions)
 	}
-	p.list(&b, "Decisions", decisions)
 
 	b.WriteString("\n")
+	b.WriteString(p.contextLine())
 	b.WriteString(p.buttons())
 	if p.status != "" {
 		b.WriteString("\n\n")
@@ -473,6 +521,85 @@ func (p *PlanPanel) field(b *strings.Builder, label, value string) {
 	}
 	const width = 11
 	fmt.Fprintf(b, "%s %s\n", planLabelStyle.Render(apPad(label, width)), value)
+}
+
+// titleBlock is the plan's identity: the title in the panel's title style with
+// its status right-aligned on the same row, and the goal muted underneath. A
+// label column in front of the title only pushed the one line a person always
+// reads two columns to the right, so it is gone.
+func (p *PlanPanel) titleBlock(b *strings.Builder, pl plan.Plan) {
+	status := statusLine(pl)
+	title := apTitleStyle.Render(pl.Title)
+	if lipgloss.Width(title)+lipgloss.Width(status)+2 > p.innerWidth() {
+		b.WriteString(title + "\n")
+		b.WriteString(apSummaryStyle.Render(status) + "\n")
+	} else {
+		gap := max(p.innerWidth()-lipgloss.Width(title)-lipgloss.Width(status)-1, 1)
+		b.WriteString(title + strings.Repeat(" ", gap) + apSummaryStyle.Render(status) + "\n")
+	}
+	if goal := strings.TrimSpace(pl.Goal); goal != "" {
+		b.WriteString(apSummaryStyle.Render(kit.TruncateText(goal, p.innerWidth())) + "\n")
+	}
+}
+
+// currentStep describes the step in flight: what it is, what proves it, and
+// what the report said. Files and evidence collapse to one line each — the
+// panel is a control surface, and the full record lives in the transcript.
+func (p *PlanPanel) currentStep(b *strings.Builder, pl plan.Plan) {
+	step, ok := pl.CurrentStep()
+	if !ok {
+		return
+	}
+	b.WriteString("\n")
+	b.WriteString(planSectionStyle.Render("NOW") + "\n")
+	b.WriteString("  " + apTitleStyle.Render(step.Title) + "\n")
+	line := func(label, value string, style lipgloss.Style) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		fmt.Fprintf(b, "  %s %s\n", planLabelStyle.Render(apPad(label, 9)), style.Render(value))
+	}
+	line("objective", kit.TruncateText(step.Objective, p.innerWidth()-12), apSummaryStyle)
+	for i, criterion := range step.Verification {
+		if i == 0 {
+			line("verify", kit.TruncateText(criterion, p.innerWidth()-12), apSummaryStyle)
+			continue
+		}
+		b.WriteString("  " + strings.Repeat(" ", 10) + kit.TruncateText(criterion, p.innerWidth()-12) + "\n")
+	}
+	if step.BlockReason != "" {
+		line("blocked", kit.TruncateText(step.BlockReason, p.innerWidth()-12), planWarnStyle)
+	}
+	line("result", kit.TruncateText(step.Result, p.innerWidth()-12), apSummaryStyle)
+	if len(step.Files) > 0 {
+		line("files", kit.TruncateText(strings.Join(step.Files, ", "), p.innerWidth()-12), apSummaryStyle)
+	}
+	if len(step.Evidence) > 0 {
+		shown := kit.TruncateText(step.Evidence[0], p.innerWidth()-20)
+		if extra := len(step.Evidence) - 1; extra > 0 {
+			shown += fmt.Sprintf(" (+%d more)", extra)
+		}
+		line("evidence", shown, apSummaryStyle)
+	}
+}
+
+// contextLine names the conversation the first step starts from. It only
+// appears while Execute new plan is on offer: once execution started the
+// choice is spent. The explanation is dropped, not wrapped, when the card is
+// too narrow for it — the choice itself is the control, and a sentence broken
+// across two rows under it reads as noise.
+func (p *PlanPanel) contextLine() string {
+	if !p.offersExecute() {
+		return ""
+	}
+	value := planLabelStyle.Render(apPad("Context", 11))
+	choice := planAccentStyle.Render("‹ " + string(p.context) + " ›")
+	line := value + " " + choice
+	desc := PlanContextDescription(p.context)
+	if lipgloss.Width(line)+2+lipgloss.Width(desc) <= p.innerWidth() {
+		line += "  " + apSummaryStyle.Render(desc)
+	}
+	return line + "\n\n"
 }
 
 // refused renders completions an independent review refused. The step keeps its
@@ -611,7 +738,12 @@ func (p *PlanPanel) buttons() string {
 }
 
 func (p *PlanPanel) hint() string {
-	return kit.HintLine(keycap("←→")+" choose", keycap("enter")+" confirm", keycap("e")+" edit", keycap("esc")+" close")
+	parts := []string{keycap("←→") + " choose", keycap("enter") + " confirm", keycap("e") + " edit"}
+	if p.offersExecute() {
+		parts = append(parts, keycap("c")+" context")
+	}
+	parts = append(parts, keycap("esc")+" close")
+	return kit.HintLine(parts...)
 }
 
 // clip bounds the card body to the terminal so a long plan never pushes the

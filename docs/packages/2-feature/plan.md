@@ -148,6 +148,34 @@ live state.
 - A restored plan with a step left `in_progress` sets `AwaitingStepChoice` so
   the panel can ask continue / restart / skip instead of silently resuming.
 
+## Execution context
+
+Approving a plan also decides what conversation the executor starts from. The
+panel offers three, cycled with `c` while **Execute new plan** is on offer, and
+none of them changes the plan itself:
+
+| Context | What the first step starts from | Where |
+| --- | --- | --- |
+| `keep` | this conversation, planning history included — the default | `executeApprovedPlan` |
+| `compact` | a summary of this conversation, seeded before the first step | `startPlanCompaction` → `planAfterCompact` |
+| `fresh` | a new session that carries only the plan | `startFreshPlanSession` |
+
+Planning is exploratory — long, full of dead ends — and none of that history is
+what a step needs, so which of it crosses over is the person's call rather than
+a rule.
+
+- `compact` stashes the plan ID in `m.pendingPlanExecID`; `OnCompacted` starts
+  the first step from the same summary every later step will see. That handler
+  is shared with manual `/compact`, so the two cannot disagree about when a
+  plan may resume. A failed summarizer, an empty conversation, or a plan
+  cancelled while it runs clears the marker and execution falls back to `keep`
+  instead of leaving an approved plan unstarted.
+- `fresh` goes through `clearSession` and copies the approved plan across. The
+  planning conversation keeps its own session — still resumable — and the new
+  one opens on a handoff notice that names it.
+- The choice lives in `PlanPanel.context` and survives a close, so the next plan
+  is approved the same way until the person changes it.
+
 ## Tests
 
 ```
@@ -156,9 +184,10 @@ internal/plan/plan_test.go  — statuses, evidence gating, supersede/keep, step
 internal/plan/text_test.go  — editor round-trip, refused input, identity kept
                               across an edit.
 internal/app/plan_mode_test.go        — /plan, panel wiring, session round-trip,
-                                        supersede vs keep, blocked step.
+                                        supersede vs keep, blocked step, the
+                                        three execution contexts.
 internal/app/input/plan_panel_test.go — which buttons each state offers, the
-                                        editor save path.
+                                        context cycle, the editor save path.
 internal/setting/plan_mode_test.go    — what the read-only gate refuses and
                                         what it lets through.
 ```

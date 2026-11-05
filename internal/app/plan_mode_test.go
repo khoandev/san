@@ -10,20 +10,25 @@ import (
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/plan"
+	"github.com/genai-io/san/internal/reminder"
 	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool/perm"
 	"github.com/genai-io/san/internal/transcript"
 )
 
-// newPlanModel is a model with nothing but the pieces Plan Mode touches: the
-// plan store, the permission posture, and the conversation.
+// newPlanModel is a model with the pieces Plan Mode touches: the plan store,
+// the permission posture, and the conversation. Approving a plan can also
+// replace that conversation (the panel's "fresh" and "compact" contexts), so
+// the harness carries the runtime a session swap needs as well.
 func newPlanModel(t *testing.T) *model {
 	t.Helper()
 	m := fixedComposerModel(100, 40)
 	m.services.Agent = &agent.Runtime{}
 	m.env.SessionPermissions = setting.NewSessionPermissions()
 	m.env.ApplyModePermissions(t.TempDir())
+	initClearSessionTest(t, m)
+	m.services.Reminder = reminder.New()
 	return m
 }
 
@@ -492,5 +497,93 @@ func TestPlanDraftNoticeListsOpenQuestions(t *testing.T) {
 	}
 	if got := planDraftNotice(testPlan("plan-2", "Settled", "a")); strings.Contains(got, "Open questions") {
 		t.Fatalf("notice invented open questions:\n%s", got)
+	}
+}
+
+// Execute new plan can start a fresh session: the plan crosses over, the
+// planning conversation does not.
+func TestExecuteNewPlanFreshContextStartsANewSession(t *testing.T) {
+	m := newPlanModel(t)
+	m.conv.Messages = []core.ChatMessage{{Role: core.ChatUser, Content: "planning chatter"}}
+
+	draft := testPlan("plan-fresh", "Fresh start", "a", "b")
+	draft.Status = plan.StatusPendingApproval
+	m.plan.Restore(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{draft}, ActiveID: draft.ID})
+	m.userInput.Plan.Enter(m.plan.Snapshot(), 100, 40)
+
+	before := m.sessionID()
+	m.handlePlanAction(input.PlanActionMsg{
+		Action:  input.PlanActionExecuteNew,
+		Context: input.PlanContextFresh,
+	})
+
+	if got := m.sessionID(); got == before || got == "" {
+		t.Fatalf("session id = %q, want a fresh session", got)
+	}
+	for _, msg := range m.conv.Messages {
+		if strings.Contains(msg.Content, "planning chatter") {
+			t.Fatal("the fresh session carried the planning conversation")
+		}
+	}
+	active, ok := m.plan.Active()
+	if !ok || active.ID != "plan-fresh" || active.Status != plan.StatusExecuting {
+		t.Fatalf("active plan = %+v, want plan-fresh executing", active)
+	}
+	if len(m.conv.Messages) == 0 || !strings.Contains(m.conv.Messages[0].Content, "Fresh session") {
+		t.Fatalf("the fresh session has no handoff notice: %+v", m.conv.Messages)
+	}
+}
+
+// Without a provider to summarize with, the compact context falls back to
+// running in the conversation rather than leaving the plan unstarted.
+func TestExecuteNewPlanCompactFallsBackWithoutAProvider(t *testing.T) {
+	m := newPlanModel(t)
+	m.conv.Messages = []core.ChatMessage{{Role: core.ChatUser, Content: "planning chatter"}}
+
+	draft := testPlan("plan-compact", "Compact start", "a")
+	draft.Status = plan.StatusPendingApproval
+	m.plan.Restore(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{draft}, ActiveID: draft.ID})
+	m.userInput.Plan.Enter(m.plan.Snapshot(), 100, 40)
+
+	m.handlePlanAction(input.PlanActionMsg{
+		Action:  input.PlanActionExecuteNew,
+		Context: input.PlanContextCompact,
+	})
+
+	if m.pendingPlanExecID != "" {
+		t.Fatalf("pending plan = %q, want none without a compaction", m.pendingPlanExecID)
+	}
+	active, ok := m.plan.Active()
+	if !ok || active.Steps[0].Status != plan.StepInProgress {
+		t.Fatalf("active plan = %+v, want the first step running in place", active)
+	}
+}
+
+// The step a compaction was started for begins from OnCompacted; a marker left
+// over from another plan starts nothing.
+func TestPlanAfterCompactStartsOnlyItsOwnPlan(t *testing.T) {
+	m := newPlanModel(t)
+	active := testPlan("plan-c", "Compacted", "one", "two")
+	active.Status = plan.StatusExecuting
+	m.plan.Restore(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{active}, ActiveID: active.ID})
+
+	// The command the step returns is nil here: the harness has no provider to
+	// submit to, so what the test owns is the store transition.
+	m.pendingPlanExecID = active.ID
+	m.planAfterCompact()
+	if m.pendingPlanExecID != "" {
+		t.Fatal("the pending marker survived the start")
+	}
+	started, _ := m.plan.Active()
+	if started.Steps[0].Status != plan.StepInProgress {
+		t.Fatalf("step status = %q, want in progress", started.Steps[0].Status)
+	}
+
+	m.pendingPlanExecID = "plan-gone"
+	if cmd := m.planAfterCompact(); cmd != nil {
+		t.Fatal("a marker from another plan started a step")
+	}
+	if m.pendingPlanExecID != "" {
+		t.Fatal("a stale marker must be cleared")
 	}
 }
