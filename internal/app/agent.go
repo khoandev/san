@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -598,7 +597,6 @@ func (m *model) wireReminderProviders() {
 const agentStopTimeout = 2 * time.Second
 
 func (m *model) StopAgentRuntime() error {
-	log.Logger().Sugar().Debugf("StopAgentRuntime called\n%s", debug.Stack())
 	m.cancelManualCompaction()
 	m.pendingStopHook = nil
 	ctx, cancel := context.WithTimeout(context.Background(), agentStopTimeout)
