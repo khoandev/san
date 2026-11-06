@@ -86,8 +86,8 @@ func (p StatePatch) changesFrom(current State) (*StatePatch, error) {
 			p.Plan = &owned
 		}
 	}
-	if p.Title == nil && p.LastPrompt == nil && p.Mode == nil && p.AutoPilot == nil && p.Group == nil && p.Tasks == nil && p.Plan == nil &&
-		p.AdvisorSettings == nil {
+	if p.Model == nil && p.Title == nil && p.LastPrompt == nil && p.Mode == nil && p.AutoPilot == nil && p.Group == nil && p.Tasks == nil &&
+		p.Plan == nil && p.AdvisorSettings == nil {
 		return nil, nil
 	}
 	return &p, nil

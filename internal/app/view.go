@@ -236,11 +236,16 @@ func (m *model) renderFooter(separator string) (string, int) {
 		b.WriteString("\n")
 		b.WriteString(suggestions)
 	}
-	// Reserve inference space before allocating chat and activity rows.
-	if status := conv.RenderInferenceStatus(m.messageRenderParams()); status != "" {
-		if m.footerHasBreathingRoom() {
-			b.WriteString("\n")
-		}
+	// Task status owns the row; update information uses only the space left.
+	params := m.messageRenderParams()
+	status := conv.RenderInferenceStatus(params)
+	if m.conv.Compact.Active && !params.DockedModalActive {
+		status = conv.RenderCompactStatus(m.env.Width, m.conv.Spinner.View(), m.conv.Compact)
+	}
+	if status != "" && m.footerHasBreathingRoom() {
+		b.WriteString("\n")
+	}
+	if status = m.withUpdateNotice(status); status != "" {
 		b.WriteString("\n")
 		b.WriteString(status)
 	}
@@ -262,6 +267,28 @@ func (m *model) renderFooter(separator string) (string, int) {
 		b.WriteString(gitBar)
 	}
 	return b.String(), inputRow
+}
+
+func (m model) withUpdateNotice(status string) string {
+	if m.updateInstalled == "" {
+		return status
+	}
+	width := max(0, m.env.Width-1)
+	available := width
+	if status != "" {
+		available -= lipgloss.Width(status) + 3
+	}
+	label := "Restart to update"
+	version := "v" + m.updateInstalled + " installed · "
+	if lipgloss.Width(label+version) > available {
+		version = ""
+	}
+	if lipgloss.Width(label) > available {
+		return status
+	}
+	notice := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render(version) +
+		lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success).Render(label)
+	return status + strings.Repeat(" ", width-lipgloss.Width(status)-lipgloss.Width(notice)) + notice
 }
 
 func (m model) renderInputView() string {
@@ -328,13 +355,10 @@ func (m model) renderChatIndicators(trackerView, bottom string) string {
 		parts = append(parts, "\n"+strings.TrimSuffix(trackerView, "\n"))
 	}
 
-	if compactView := conv.RenderCompactStatus(m.env.Width, m.conv.Spinner.View(), m.conv.Compact); compactView != "" {
-		// Surrounded by blank rows, like the self-learning indicator below
-		// and for the same two reasons: what sits above is the committed
-		// scrollback, where every turn is separated from what follows by a
-		// blank row, and what sits below is the input bar, which a live row
-		// should not be nailed to.
-		parts = append(parts, "", compactView, "")
+	if !m.conv.Compact.Active {
+		if compactView := conv.RenderCompactStatus(m.env.Width, m.conv.Spinner.View(), m.conv.Compact); compactView != "" {
+			parts = append(parts, "", compactView, "")
+		}
 	}
 
 	if live := m.btwLive(); live != "" {
@@ -556,7 +580,6 @@ func (m model) renderModeStatus() string {
 		ReviewApprovals:   reviewApprovals,
 		ReviewEscalations: reviewEscalations,
 		AutopilotThinking: m.autopilotDeciding,
-		UpdateInstalled:   m.updateInstalled,
 		ModeHint:          time.Now().Before(m.modeHintUntil),
 		Group:             m.grp.name,
 		GroupSelf:         m.groupSelfName(),
