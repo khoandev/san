@@ -11,9 +11,6 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
   </p>
   <p>
-    <strong>English</strong> · <a href="README.zh.md">简体中文</a>
-  </p>
-  <p>
     <a href="https://genai-io.github.io/san/intro.html?variant=readme"><picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/san-intro-dark.gif">
       <img src="assets/san-intro.gif" alt="San — animated intro" width="100%">
