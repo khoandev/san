@@ -21,6 +21,7 @@ import (
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/log"
 	"github.com/genai-io/san/internal/plan"
+	agenttool "github.com/genai-io/san/internal/tool/agent"
 	"github.com/genai-io/sdk-go/pkg/ai"
 )
 
@@ -76,7 +77,26 @@ func (m *model) syncPlanPermissions() {
 	if m.env.SessionPermissions == nil {
 		return
 	}
+	// The delegation predicate rides with the posture: the gate runs in the
+	// setting package, which cannot import the agent registry, so the app hands
+	// it a verdict instead. Without a registry nothing may delegate, which is
+	// the same posture Plan Mode had before delegation existed.
+	m.env.SessionPermissions.SetPlanModeDelegates(m.planModeAgentDelegates())
 	m.env.SessionPermissions.SetPlanMode(m.plan.Mode() == plan.ModePlan)
+}
+
+// planModeAgentDelegates answers the Plan Mode gate for the Agent tool: a call
+// may delegate while planning only when the definition it would spawn cannot
+// write. An unnamed call is the posture default, which a read-only session
+// resolves to the bundled explore definition, so it stays allowed.
+func (m *model) planModeAgentDelegates() func(args map[string]any) bool {
+	registry := m.services.Subagent
+	if registry == nil {
+		return nil
+	}
+	return func(args map[string]any) bool {
+		return agenttool.ReadOnlyDelegation(args, registry.ReadOnly)
+	}
 }
 
 // persistPlan writes the plan state into the session transcript. Failures are

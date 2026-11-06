@@ -64,3 +64,50 @@ func TestAgentCatalogContainsOnlyEnabledDiscoveryMetadata(t *testing.T) {
 		t.Fatalf("empty catalog should omit its heading: %q", got)
 	}
 }
+
+// ReadOnly is the Plan Mode gate's only evidence about a definition, so it has
+// to answer what the executor would actually do: a name the runtime will not
+// run — unknown, disabled, or hidden by the active persona — is never
+// vouchered for, and the declared mode is normalized the same way a run does.
+func TestReadOnlyReportsTheEffectiveWriteBoundary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	r := NewRegistry()
+	if err := r.InitStores(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	r.Register(&AgentConfig{Name: "explore", Description: "Investigates", PermissionMode: PermissionExplore})
+	r.Register(&AgentConfig{Name: "scout", Description: "Scouts", PermissionMode: "read-only"})
+	r.Register(&AgentConfig{Name: "task", Description: "Implements", PermissionMode: PermissionAcceptEdits})
+	r.Register(&AgentConfig{Name: "plain", Description: "Declares no mode"})
+
+	for name, want := range map[string]bool{
+		"explore":   true,
+		"scout":     true, // the long spelling normalizes to explore
+		"task":      false,
+		"plain":     false, // an unset mode is not explore
+		"missing":   false,
+		" EXPLORE ": true, // the lookup folds case and space
+	} {
+		if got := r.ReadOnly(name); got != want {
+			t.Errorf("ReadOnly(%q) = %v, want %v", name, got, want)
+		}
+	}
+
+	if err := r.SetEnabled("explore", false, setting.ScopeProject); err != nil {
+		t.Fatal(err)
+	}
+	if r.ReadOnly("explore") {
+		t.Fatal("a disabled definition cannot be delegated")
+	}
+
+	r.LoadPersona([]string{"task"})
+	if r.ReadOnly("scout") {
+		t.Fatal("a persona-hidden definition cannot be delegated")
+	}
+	r.ClearPersona()
+	if !r.ReadOnly("scout") {
+		t.Fatal("clearing the persona must make the definition delegable again")
+	}
+}

@@ -1,6 +1,7 @@
 package setting
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/genai-io/san/internal/tool/perm"
@@ -30,6 +31,8 @@ func TestPlanModeRejectsWorkspaceWrites(t *testing.T) {
 		{"Bash", map[string]any{"command": "go test ./internal/..."}},
 		{"Bash", map[string]any{"command": "gofmt -w internal/x.go"}},
 		{"PowerShell", map[string]any{"command": "Set-Content a.txt x"}},
+		// No delegation predicate is installed here, which is the posture's
+		// default: every Agent call is refused, named or not.
 		{"Agent", map[string]any{"prompt": "do it"}},
 		{"mcp__filesystem__write_file", map[string]any{"path": "a"}},
 		{"mcp__github__create_issue", map[string]any{"title": "x"}},
@@ -78,6 +81,67 @@ func TestPlanModeAllowsReadsAndQuestions(t *testing.T) {
 		if got := d.HasPermissionToUseTool(tc.tool, tc.args, session); got.Behavior == perm.Reject {
 			t.Errorf("%s was rejected in plan mode: %+v", tc.tool, got)
 		}
+	}
+}
+
+// A delegated investigation is still read-only work, so the gate hands the
+// Agent verdict to the app: only this package cannot read the agent registry,
+// and a missing predicate has to mean "no delegation" rather than "allow".
+func TestPlanModeDelegatesOnlyReadOnlyAgents(t *testing.T) {
+	d := &Data{}
+	session := planModeSession()
+	session.SetPlanModeDelegates(func(args map[string]any) bool {
+		name, _ := args["name"].(string)
+		// The app's real predicate treats an unnamed call as the posture
+		// default; mirror that so the allowed cases stay honest.
+		if strings.TrimSpace(name) == "" {
+			return true
+		}
+		return name == "explore" || name == "librarian"
+	})
+
+	allowed := []map[string]any{
+		{"prompt": "map the plan store"},
+		{"name": "explore", "prompt": "map the plan store"},
+		{"name": "librarian", "prompt": "read the upstream changelog"},
+	}
+	for _, args := range allowed {
+		if got := d.HasPermissionToUseTool("Agent", args, session); got.Behavior == perm.Reject {
+			t.Errorf("Agent(%v) was refused in plan mode: %+v", args["name"], got)
+		}
+	}
+
+	refused := []map[string]any{
+		{"name": "task", "prompt": "implement it"},
+		{"name": "designer", "prompt": "restyle the panel"},
+	}
+	for _, args := range refused {
+		got := d.HasPermissionToUseTool("Agent", args, session)
+		if got.Behavior != perm.Reject || got.Reason != "plan mode: read-only" {
+			t.Errorf("Agent(%v) = %+v, want plan-mode rejection", args["name"], got)
+		}
+	}
+
+	// A snapshot taken while the predicate is installed keeps it: the gate
+	// makes one decision against one posture, and the function value never
+	// changes underneath it.
+	if snap := session.Snapshot(); snap.PlanModeDelegates == nil {
+		t.Fatal("Snapshot dropped the delegation predicate")
+	}
+
+	// Without a predicate the posture keeps its default: no delegation at all,
+	// even for a name the app would have vouched for.
+	for _, args := range allowed {
+		got := d.HasPermissionToUseTool("Agent", args, planModeSession())
+		if got.Behavior != perm.Reject || got.Reason != "plan mode: read-only" {
+			t.Errorf("Agent(%v) without a predicate = %+v, want plan-mode rejection", args["name"], got)
+		}
+	}
+
+	// The verdict must not survive into a posture that is not planning.
+	session.SetPlanMode(false)
+	if got := d.HasPermissionToUseTool("Agent", map[string]any{"name": "task"}, session); got.Reason == "plan mode: read-only" {
+		t.Fatalf("leaving plan mode kept the read-only verdict: %+v", got)
 	}
 }
 

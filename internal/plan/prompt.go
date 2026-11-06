@@ -21,8 +21,14 @@ Rules:
   Bash (rg, grep, find, ls, cat, head, tail, wc, diff, sed -n for ranges,
   xargs piping into one of those, go doc, gofmt -l, read-only git such as
   status/log/diff/show), web search and fetch, skill instructions, and
-  read-only MCP tools. Write, Edit, Agent, package installs, go build/test, and
-  any command that redirects into a file are refused.
+  read-only MCP tools. Write, Edit, package installs, go build/test, and any
+  command that redirects into a file are refused.
+- Delegation is the one exception, and it is for investigation only: call the
+  Agent tool with a read-only definition — explore for this codebase, librarian
+  for a dependency's upstream docs and APIs. Use it when the reading would
+  flood your context; the worker reports findings, it never edits. Any
+  definition that can write (task, designer, or a user's own edit agent) is
+  refused, so name a read-only definition rather than retrying with another.
 - When a call is refused, do not retry it in another shape. Read the file, run
   a narrower pipeline, or ask the user — the refusal means the workspace cannot
   change here, not that another phrasing will pass.

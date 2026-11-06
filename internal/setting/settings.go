@@ -628,6 +628,13 @@ type SessionPermissions struct {
 	// rejected, including in bypass mode. Mode cycling and ResetPosture leave
 	// it alone; entering Execute Mode is the only thing that clears it.
 	PlanMode bool
+
+	// PlanModeDelegates answers whether an Agent call may run while Plan Mode
+	// is on, given the call's arguments. It is injected by the app because
+	// only the app owns the agent registry — this package cannot import
+	// subagent and must not learn how a definition is stored. A nil predicate
+	// means no delegation: every Agent call is refused in Plan Mode.
+	PlanModeDelegates func(args map[string]any) bool
 }
 
 func NewSessionPermissions() *SessionPermissions {
@@ -663,6 +670,9 @@ func (sp *SessionPermissions) Snapshot() *SessionPermissions {
 		WorkingDirectories: slices.Clone(sp.WorkingDirectories),
 		ShouldAvoidPrompts: sp.ShouldAvoidPrompts,
 		PlanMode:           sp.PlanMode,
+		// A function value is immutable once installed, so the snapshot can
+		// carry the same predicate the session holds.
+		PlanModeDelegates: sp.PlanModeDelegates,
 	}
 }
 
@@ -691,6 +701,15 @@ func (sp *SessionPermissions) SetPlanMode(on bool) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	sp.PlanMode = on
+}
+
+// SetPlanModeDelegates installs the predicate that decides whether an Agent
+// call may delegate while Plan Mode is on. A nil predicate refuses every Agent
+// call, which is the posture's default.
+func (sp *SessionPermissions) SetPlanModeDelegates(delegates func(args map[string]any) bool) {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	sp.PlanModeDelegates = delegates
 }
 
 // PlanModeActive reports the /plan posture.

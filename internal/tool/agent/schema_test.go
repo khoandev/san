@@ -69,6 +69,31 @@ func TestAgentSchemaExplainsNameResolution(t *testing.T) {
 	}
 }
 
+// ReadOnlyDelegation answers the Plan Mode gate, so the two easy mistakes are
+// refusing the unnamed default (which a read-only session already runs as
+// explore) and vouching for a named definition without the registry.
+func TestReadOnlyDelegationTreatsAnUnnamedCallAsReadOnly(t *testing.T) {
+	if !ReadOnlyDelegation(map[string]any{"prompt": "map it"}, nil) {
+		t.Fatal("an unnamed call defaults to the read-only worker and must be allowed")
+	}
+	if !ReadOnlyDelegation(map[string]any{"prompt": "map it", "name": "   "}, func(string) bool { return false }) {
+		t.Fatal("a blank name is not a lookup and must stay allowed")
+	}
+	if ReadOnlyDelegation(map[string]any{"name": "explore", "prompt": "map it"}, nil) {
+		t.Fatal("a named call without a registry verdict is not read-only")
+	}
+}
+
+func TestReadOnlyDelegationFollowsTheRegistry(t *testing.T) {
+	readOnly := func(name string) bool { return name == "explore" || name == "librarian" }
+	cases := map[string]bool{"explore": true, "librarian": true, "task": false, "designer": false, "unknown": false}
+	for name, want := range cases {
+		if got := ReadOnlyDelegation(map[string]any{"name": name, "prompt": "brief"}, readOnly); got != want {
+			t.Errorf("ReadOnlyDelegation(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestAgentSchemaOmitsPermissionMode(t *testing.T) {
 	properties := agentToolParameters["properties"].(map[string]any)
 	if _, exists := properties["mode"]; exists {

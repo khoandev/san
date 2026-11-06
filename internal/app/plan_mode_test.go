@@ -244,6 +244,49 @@ func TestPlanModeBlocksWorkspaceWrites(t *testing.T) {
 	}
 }
 
+// The gate runs in the setting package, which cannot read the agent registry,
+// so the app installs the verdict with the posture: while planning, delegating
+// an investigation is allowed and an edit agent is still refused.
+func TestPlanModeAllowsOnlyReadOnlyAgentDelegation(t *testing.T) {
+	m := newPlanModel(t)
+	registry := subagent.NewRegistry()
+	registry.Register(&subagent.AgentConfig{Name: "explore", Description: "Investigates", PermissionMode: subagent.PermissionExplore})
+	registry.Register(&subagent.AgentConfig{Name: "task", Description: "Implements", PermissionMode: subagent.PermissionAcceptEdits})
+	m.services.Subagent = registry
+
+	m.enterPlanMode()
+
+	settings := &setting.Data{}
+	delegate := func(args map[string]any) setting.PermissionDecision {
+		return settings.HasPermissionToUseTool("Agent", args, m.env.SessionPermissions)
+	}
+	for _, args := range []map[string]any{
+		{"name": "explore", "prompt": "map the plan gate"},
+		{"prompt": "map the plan gate"}, // the posture default runs explore
+	} {
+		if got := delegate(args); got.Behavior == perm.Reject {
+			t.Errorf("Agent(%v) was refused while planning: %+v", args["name"], got)
+		}
+	}
+	if got := delegate(map[string]any{"name": "task", "prompt": "implement it"}); got.Behavior != perm.Reject || got.Reason != "plan mode: read-only" {
+		t.Errorf("Agent(task) = %+v, want the plan-mode rejection", got)
+	}
+
+	// Execute Mode is not read-only, so the verdict must not outlive the
+	// posture that installed it.
+	m.leavePlanMode()
+	if got := delegate(map[string]any{"name": "task"}); got.Reason == "plan mode: read-only" {
+		t.Fatalf("execute mode kept the plan-mode verdict: %+v", got)
+	}
+
+	// No registry means no delegation: the gate's own default, not a hole.
+	m.services.Subagent = nil
+	m.enterPlanMode()
+	if got := delegate(map[string]any{"name": "explore", "prompt": "map it"}); got.Behavior != perm.Reject || got.Reason != "plan mode: read-only" {
+		t.Fatalf("plan mode delegated without a registry: %+v", got)
+	}
+}
+
 // A ```plan block opening in the turn's final text is what makes the panel
 // appear; nothing else has to be typed.
 func TestPlanBlockOpensExecutionPanel(t *testing.T) {

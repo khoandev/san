@@ -548,3 +548,20 @@ func TestStampsUpdateOnWrite(t *testing.T) {
 		t.Fatal("submit must stamp UpdatedAt")
 	}
 }
+
+// Plan Mode is read-only but not idle: the rules name the two definitions a
+// delegated investigation may use, and say plainly that an edit agent is
+// refused, so the model does not burn turns retrying one.
+func TestPlanModeRulesNameTheReadOnlyDelegates(t *testing.T) {
+	for _, want := range []string{
+		"Agent tool with a read-only definition",
+		"explore for this codebase",
+		"librarian",
+		"definition that can write (task, designer",
+		"rather than retrying with another",
+	} {
+		if !strings.Contains(PlanModeRules, want) {
+			t.Errorf("PlanModeRules should contain %q", want)
+		}
+	}
+}

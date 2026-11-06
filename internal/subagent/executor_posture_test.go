@@ -125,6 +125,9 @@ func TestAgentSelectionPreviewNamesThePostureDefault(t *testing.T) {
 	if info.Name != "explore" || info.PermissionMode != string(PermissionExplore) {
 		t.Fatalf("preview = %+v, want explore in explore mode", info)
 	}
+	if label := displayAgentName(info.Name); label != "Explore" {
+		t.Fatalf("preview label = %q, want Explore", label)
+	}
 	if info.Model != "parent-model" {
 		t.Fatalf("preview model = %q, want the model that answers (parent-model)", info.Model)
 	}

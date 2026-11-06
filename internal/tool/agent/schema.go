@@ -19,6 +19,18 @@ func (t *AgentTool) SchemaWithAgentCatalog(agentCatalog string) core.ToolSchema 
 	return agentSchema(agentCatalog)
 }
 
+// ReadOnlyDelegation reports whether the Agent call described by args would run
+// a definition that cannot write, which is what Plan Mode is willing to
+// delegate. An omitted name is the default worker: a read-only session resolves
+// that to the bundled explore definition, so it counts as read-only. A named
+// call is read-only only when the registry vouches for it.
+func ReadOnlyDelegation(args map[string]any, isReadOnly func(name string) bool) bool {
+	if strings.TrimSpace(tool.GetString(args, "name")) == "" {
+		return true
+	}
+	return isReadOnly != nil && isReadOnly(tool.GetString(args, "name"))
+}
+
 func agentSchema(agentCatalog string) core.ToolSchema {
 	var sb strings.Builder
 	sb.WriteString("Work directly by default. Delegate only when it offers a clear benefit and needs little prior conversation context.\n\n")

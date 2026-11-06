@@ -79,7 +79,7 @@ func (s *Data) HasPermissionToUseTool(toolName string, args map[string]any, sess
 	// /plan is a read-only posture above every operation mode. It rejects
 	// anything not provably read-only before bypass can permit it, and it
 	// never prompts: a prompt invites the model to retry a write.
-	if session != nil && session.PlanMode && !PlanModeAllows(toolName, args) {
+	if session != nil && session.PlanMode && !PlanModeAllows(toolName, args, session.PlanModeDelegates) {
 		return decide(perm.Reject, "plan mode: read-only")
 	}
 
@@ -187,9 +187,19 @@ func ModeDefault(toolName string, mode OperationMode) PermissionDecision {
 // allowed in Plan Mode. Anything the gate cannot prove is a read is refused —
 // but "cannot prove" must not mean "blocks the work": inspecting the tree
 // (read-only shell), a search or code-graph MCP server, a skill's instructions,
-// and the dedicated read tools all stay available while planning.
-func PlanModeAllows(toolName string, args map[string]any) bool {
+// the dedicated read tools, and a delegation to a definition that cannot write
+// all stay available while planning.
+//
+// delegates is the app's verdict on an Agent call, since only the app owns the
+// agent registry. A nil predicate keeps the default: no delegation.
+func PlanModeAllows(toolName string, args map[string]any, delegates func(args map[string]any) bool) bool {
 	if perm.IsSafeTool(toolName) {
+		return true
+	}
+	// Delegating an investigation is still read-only work: the spawned
+	// definition runs behind its own read-only mode, so the plan gains an
+	// explorer without the gate opening to a writer.
+	if toolName == "Agent" && delegates != nil && delegates(args) {
 		return true
 	}
 	if cmd, ok := args["command"].(string); ok && IsReadOnlyShellCommand(toolName, cmd) {

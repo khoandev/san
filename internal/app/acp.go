@@ -24,6 +24,7 @@ import (
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/subagent"
 	"github.com/genai-io/san/internal/task"
+	agenttool "github.com/genai-io/san/internal/tool/agent"
 	"github.com/genai-io/san/internal/tool/fs"
 	"github.com/genai-io/san/internal/transcript"
 	"github.com/genai-io/sdk-go/pkg/acp"
@@ -199,6 +200,14 @@ func (h *acpHost) open(ctx context.Context, req protocol.NewSessionRequest, resu
 	audit := func(rec transcript.Record) { _ = opened.Append(context.Background(), rec) }
 	s.permissions = &acpPermissions{SessionPermissions: setting.NewSessionPermissions(), settings: settings, audit: audit}
 	s.permissions.AddWorkingDirectory(req.CWD)
+	// ACP exposes no Plan Mode today, but the gate's default (nil = no
+	// delegation) is a policy, not a wiring detail: install the same verdict the
+	// TUI uses, so a plan posture here would behave identically.
+	if s.agents != nil {
+		s.permissions.SetPlanModeDelegates(func(args map[string]any) bool {
+			return agenttool.ReadOnlyDelegation(args, s.agents.ReadOnly)
+		})
+	}
 	if history != nil {
 		s.runtime.SetMessages(history.Messages)
 		s.reminders.RestoreHistory(store.ChatRows(history))

@@ -62,6 +62,18 @@ func (r *Registry) LookupAgent(name string) (config *AgentConfig, exists, enable
 	return config, true, !r.isDisabledInternal(lowerName)
 }
 
+// ReadOnly reports whether the named definition cannot write: its normalized
+// mode is explore and it is enabled under the active persona and the
+// enable/disable stores. An unknown or disabled name is not read-only — the
+// runtime cannot vouch for a definition it will not run.
+func (r *Registry) ReadOnly(name string) bool {
+	config, exists, enabled := r.LookupAgent(name)
+	if !exists || !enabled {
+		return false
+	}
+	return NormalizePermissionMode(string(config.PermissionMode)) == PermissionExplore
+}
+
 // ListConfigs returns all registered agent configurations that are visible
 // under the active persona allow-list.
 func (r *Registry) ListConfigs() []*AgentConfig {
