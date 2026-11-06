@@ -71,6 +71,7 @@ type runConfig struct {
 	config        *AgentConfig
 	provider      llm.Provider // provider this run talks to (parent's, or a routed vendor)
 	modelID       string
+	effort        string // effort bound to the role that supplied modelID; "" = that model's own default
 	maxSteps      int
 	displayName   string
 	brief         system.SubagentBrief // identity/charter for this run; immutable
@@ -142,11 +143,28 @@ func (e *Executor) SetResolver(r ProviderResolver) {
 	e.resolver = r
 }
 
-// RoleResolver turns a role name into the provider and model that answer the
-// work, reporting whether the role is assigned. It is a func rather than an
-// interface because the host owns role bindings: the executor must not learn
-// how settings are stored, only what the role currently resolves to.
-type RoleResolver func(role string) (llm.Provider, string, bool)
+// RoleAssignment is one role resolved for a run: the provider and model that
+// answer the work, the reasoning effort the user bound to the role, and whether
+// the role resolved at all.
+//
+// Effort is already validated by the host against the ladder of the model it
+// accompanies — the live catalog is the only thing that knows which rungs a
+// model offers — so the executor sends it unchanged. "" means the model's own
+// default.
+type RoleAssignment struct {
+	Provider llm.Provider
+	ModelID  string
+	Effort   string
+	// Assigned reports that the role resolved to a model; false means the
+	// session model answers instead and Effort is unused.
+	Assigned bool
+}
+
+// RoleResolver turns a role name into the provider, model and effort that
+// answer the work. It is a func rather than an interface because the host owns
+// role bindings: the executor must not learn how settings are stored, only what
+// the role currently resolves to.
+type RoleResolver func(role string) RoleAssignment
 
 // SetRoleResolver enables "@role" model references in agent definitions, so a
 // definition can name the kind of work ("@slow") while the user decides which
@@ -513,7 +531,7 @@ func (e *Executor) prepareRunConfig(ctx context.Context, req tool.AgentExecReque
 		maxSteps = req.MaxSteps
 	}
 
-	provider, modelID, err := e.resolveModel(ctx, req.Model, e.configuredModel(config, req.Agent))
+	provider, modelID, effort, err := e.resolveModel(ctx, req.Model, e.configuredModel(config, req.Agent))
 	if err != nil {
 		return nil, err
 	}
@@ -523,6 +541,7 @@ func (e *Executor) prepareRunConfig(ctx context.Context, req tool.AgentExecReque
 		config:        config,
 		provider:      provider,
 		modelID:       modelID,
+		effort:        effort,
 		maxSteps:      maxSteps,
 		displayName:   displayName,
 		brief:         e.buildBrief(config, permMode),
@@ -665,7 +684,7 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 		return decision, err
 	})
 
-	llmClient := llm.NewClient(rc.provider, rc.modelID, 0)
+	llmClient := newRunClient(rc)
 	llmClient.SetSessionID(e.parentSessionID)
 	llmClient.SetWorkingDir(run.currentCwd)
 	ag = core.NewAgent(core.Config{
@@ -683,6 +702,18 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 	})
 
 	return ag, cleanup, nil
+}
+
+// newRunClient is the client every run talks through: the run's provider and
+// model, plus the reasoning effort the role behind them asked for. The role
+// that supplied the model also supplied the depth, so a subagent defined as
+// "@explore" thinks as hard as the user asked the explore role to. The host
+// validated the label against this model's ladder, so an empty effort means
+// "send none" rather than "unknown", and the model's own default applies.
+func newRunClient(rc *runConfig) *llm.Client {
+	client := llm.NewClient(rc.provider, rc.modelID, 0)
+	client.SetThinkingEffort(rc.effort)
+	return client
 }
 
 func fileReadToolGuidance(schemas []core.ToolSchema, mode PermissionMode) string {
@@ -827,7 +858,8 @@ func (e *Executor) fireSubagentStop(req tool.AgentExecRequest, agentHookID, agen
 	})
 }
 
-// resolveModel picks the provider and model id for a run, by priority:
+// resolveModel picks the provider, model id and reasoning effort for a run, by
+// priority:
 // 1. Explicit request override (req.Model)
 // 2. Agent configuration (config.Model)
 // 3. Parent conversation model ("inherit" or empty)
@@ -836,61 +868,62 @@ func (e *Executor) fireSubagentStop(req tool.AgentExecRequest, agentHookID, agen
 // resolver only when a linked provider can be resolved. Otherwise it falls
 // back to the parent conversation. An "@role" reference asks the host's role
 // resolver, so the definition names the kind of work and the user names the
-// model; an unassigned role falls back to the parent. Every other form — an
-// alias, a bare model id, or "inherit" — stays on the parent's provider,
-// preserving prior behavior.
-func (e *Executor) resolveModel(ctx context.Context, requestModel, configModel string) (llm.Provider, string, error) {
+// model — and the depth. An unassigned role falls back to the parent. Every
+// other form — an alias, a bare model id, or "inherit" — stays on the parent's
+// provider with no role effort, preserving prior behavior.
+func (e *Executor) resolveModel(ctx context.Context, requestModel, configModel string) (llm.Provider, string, string, error) {
 	ref := strings.TrimSpace(requestModel)
 	if ref == "" {
 		ref = strings.TrimSpace(configModel)
 	}
 	if ref == "" || ref == "inherit" {
-		return e.provider, e.parentModelID, nil
+		return e.provider, e.parentModelID, "", nil
 	}
 	// A role reference ("@smol") names a routing slot, not a model, so it never
 	// reaches a provider as a model name. An unassigned role, or one whose
 	// binding does not resolve, inherits the parent model.
 	if role, ok := llm.ParseRoleAlias(ref); ok {
-		if provider, modelID, assigned := e.resolveRole(role); assigned {
-			return provider, modelID, nil
+		if assignment := e.resolveRole(role); assignment.Assigned {
+			return assignment.Provider, assignment.ModelID, assignment.Effort, nil
 		}
-		return e.provider, e.parentModelID, nil
+		return e.provider, e.parentModelID, "", nil
 	}
 	// Something that only looks like an alias ("@", "@Slow Role") is a typo:
 	// sending it as a model id would fail the run, so the parent model answers.
 	if strings.HasPrefix(ref, "@") {
-		return e.provider, e.parentModelID, nil
+		return e.provider, e.parentModelID, "", nil
 	}
 	if vendor, modelID, ok := llm.ParseVendorModel(ref); ok {
 		if e.resolver == nil {
-			return e.provider, e.parentModelID, nil
+			return e.provider, e.parentModelID, "", nil
 		}
 		p, err := e.resolver.Resolve(ctx, vendor)
 		if err != nil || p == nil {
-			return e.provider, e.parentModelID, nil
+			return e.provider, e.parentModelID, "", nil
 		}
-		return p, modelID, nil
+		return p, modelID, "", nil
 	}
 	// A bare id or alias stays on the parent provider; a model it lacks fails
 	// the first request and retries on the parent model.
-	return e.provider, resolveModelAlias(ref), nil
+	return e.provider, resolveModelAlias(ref), "", nil
 }
 
-// resolveRole asks the host's role resolver for the provider and model assigned
-// to role. It reports false whenever the parent model should answer instead:
-// no resolver, an unassigned role, or a binding that resolved to nothing.
-func (e *Executor) resolveRole(role string) (llm.Provider, string, bool) {
+// resolveRole asks the host's role resolver for the provider, model and effort
+// assigned to role. It reports an unassigned result whenever the parent model
+// should answer instead: no resolver, an unassigned role, or a binding that
+// resolved to nothing.
+func (e *Executor) resolveRole(role string) RoleAssignment {
 	// "@default" is the session's own model. The model picker owns that choice,
 	// so an agent definition cannot route interactive work elsewhere by naming
 	// the default role.
 	if role == string(llm.RoleDefault) || e.roleResolver == nil {
-		return nil, "", false
+		return RoleAssignment{}
 	}
-	provider, modelID, ok := e.roleResolver(role)
-	if !ok || provider == nil || modelID == "" {
-		return nil, "", false
+	assignment := e.roleResolver(role)
+	if !assignment.Assigned || assignment.Provider == nil || assignment.ModelID == "" {
+		return RoleAssignment{}
 	}
-	return provider, modelID, true
+	return assignment
 }
 
 // effectiveModelName is the model shown before a run is approved: a role
@@ -904,8 +937,8 @@ func (e *Executor) effectiveModelName(config *AgentConfig, name string) string {
 	if !ok {
 		return ref
 	}
-	if _, modelID, assigned := e.resolveRole(role); assigned {
-		return modelID
+	if assignment := e.resolveRole(role); assignment.Assigned {
+		return assignment.ModelID
 	}
 	return e.parentModelID
 }

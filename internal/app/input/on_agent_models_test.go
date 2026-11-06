@@ -25,16 +25,23 @@ func (r anyVendorResolver) Resolve(context.Context, llm.ProviderID) (llm.Provide
 // map, so the list is tested against the rule the executor follows rather than
 // a stub that agrees with itself.
 func fakeAgentModels(assigned map[string]string, session string) AgentModelSource {
+	return fakeAgentModelsWithEfforts(assigned, nil, session)
+}
+
+// fakeAgentModelsWithEfforts is the same list with modelRoleEfforts bound too,
+// so a row can be checked for the depth it will actually ask for.
+func fakeAgentModelsWithEfforts(assigned, efforts map[string]string, session string) AgentModelSource {
 	resolver := llm.NewRoleResolver(anyVendorResolver{provider: &connectFailProvider{}})
-	roles := llm.Bindings(assigned)
+	roles := llm.BindingsOf(assigned, efforts)
 	return AgentModelSource{
-		Model: func(ref string) (string, bool) {
+		Model: func(ref string) (string, string, bool) {
+			var target llm.RoleTarget
 			if role, isRole := llm.ParseRoleAlias(ref); isRole {
-				target := resolver.Resolve(context.Background(), roles, role, nil, session)
-				return target.ModelID, target.Inherited
+				target = resolver.Resolve(context.Background(), roles, role, nil, session)
+			} else {
+				target = resolver.ResolveRef(context.Background(), ref, nil, session)
 			}
-			target := resolver.ResolveRef(context.Background(), ref, nil, session)
-			return target.ModelID, target.Inherited
+			return target.ModelID, target.Effort, target.Inherited
 		},
 		Worker: func() string { return assigned["task"] },
 	}
@@ -203,6 +210,38 @@ func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
 	}
 	if !strings.Contains(view, "session model: claude-sonnet-4-6") {
 		t.Errorf("detail line does not name the session model:\n%s", view)
+	}
+}
+
+// TestAgentRowNamesTheRoleEffort pins the third fact of a role row: the depth
+// the role asks for travels to the list beside the model it resolved to, so the
+// user sees what the run will send rather than only where it routes.
+func TestAgentRowNamesTheRoleEffort(t *testing.T) {
+	src := fakeAgentModelsWithEfforts(
+		map[string]string{"slow": "anthropic/claude-opus-4-1"},
+		map[string]string{"slow": "high"},
+		"claude-sonnet-4-6",
+	)
+	selector, _ := bundledAgentSelector(t, src, 120)
+
+	reviewer, ok := agentItemNamed(selector, "reviewer")
+	if !ok {
+		t.Fatal("reviewer not listed")
+	}
+	if reviewer.EffectiveEffort != "high" {
+		t.Fatalf("reviewer effort = %q, want the role's high", reviewer.EffectiveEffort)
+	}
+	view := xansi.Strip(selector.Render())
+	if !strings.Contains(view, "@slow → claude-opus-4-1 (high)") {
+		t.Errorf("role row does not name its effort:\n%s", view)
+	}
+
+	// A role with no effort bound shows the model alone: "(default)" would be
+	// a claim the list cannot make, since the rung belongs to the model.
+	plain, _ := bundledAgentSelector(t, fakeAgentModels(map[string]string{"slow": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6"), 120)
+	view = xansi.Strip(plain.Render())
+	if strings.Contains(view, "claude-opus-4-1 (") {
+		t.Errorf("unbound effort rendered a suffix:\n%s", view)
 	}
 }
 

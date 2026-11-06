@@ -1,8 +1,8 @@
 ---
 name: librarian
-description: External documentation and API research from upstream sources.
-when-to-use: When the answer lives in a library's documentation, changelog or upstream repository rather than in this workspace.
-model: "@smol"
+description: Upstream documentation and API research — what a dependency actually guarantees in the version this project uses.
+when-to-use: "When: the answer lives in a library's docs, changelog or upstream repository rather than in this workspace. Not when: the answer is in this repository's own code (use explore) or the task needs a change (use task)."
+model: "@librarian"
 mode: explore
 allow_tools: [Read, WebFetch, WebSearch, Bash]
 ---

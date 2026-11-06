@@ -45,11 +45,10 @@ type autopilotRuntime struct {
 // change takes effect on the running agent without a restart.
 func (m *model) rebuildAutopilotReviewer() {
 	ar := m.env.AutoPilot
-	provider, info := m.resolveReviewer(ar.Model)
+	target := m.resolveReviewerTarget(ar.Model)
+	provider, info := target.Provider, m.roleModelInfo(target)
 	rev := reviewer.New(provider, info.ModelID)
-	if ar.ThinkingEffort != "" {
-		rev.SetThinkingEffort(llm.ResolveThinkingEffortForModel(provider, m.services.LLM.Store(), info, ar.ThinkingEffort))
-	}
+	rev.SetThinkingEffort(autopilotJudgeEffort(ar.ThinkingEffort, provider, m.llmStore(), info, m.resolveRoleEffort(target)))
 	rev.SetSteeringInstructions(m.autopilotSteeringInstructions())
 	// Publish the judge and the config it resolved from as one snapshot so the
 	// agent goroutine (steer gates + reviewer) never sees a judge/config skew;

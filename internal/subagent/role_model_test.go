@@ -33,11 +33,11 @@ func roleExecutor(t *testing.T, resolve RoleResolver) (*Executor, llm.Provider) 
 // modelRoles binding decides which model — and which vendor — answers it.
 func TestAgentModelRoleResolvesToAssignedModel(t *testing.T) {
 	var bound *namedProvider
-	executor, _ := roleExecutor(t, func(role string) (llm.Provider, string, bool) {
+	executor, _ := roleExecutor(t, func(role string) RoleAssignment {
 		if role != string(llm.RoleSlow) {
-			return nil, "", false
+			return RoleAssignment{}
 		}
-		return bound, "opus", true
+		return RoleAssignment{Provider: bound, ModelID: "opus", Assigned: true}
 	})
 	bound = &namedProvider{label: "bound"}
 
@@ -74,8 +74,8 @@ func TestAgentModelRoleFallsBackToSessionModel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var executor *Executor
 			if tc.set {
-				executor, _ = roleExecutor(t, func(string) (llm.Provider, string, bool) {
-					return nil, "", false
+				executor, _ = roleExecutor(t, func(string) RoleAssignment {
+					return RoleAssignment{}
 				})
 			} else {
 				executor = NewExecutor(&namedProvider{label: "parent"}, t.TempDir(), "parent-model", nil)
@@ -101,11 +101,11 @@ func TestAgentModelRoleFallsBackToSessionModel(t *testing.T) {
 // the default worker model — a role is a configuration, not a fallback.
 func TestAgentModelRoleLosesToRequestButWinsOverDefault(t *testing.T) {
 	var bound *namedProvider
-	executor, _ := roleExecutor(t, func(role string) (llm.Provider, string, bool) {
+	executor, _ := roleExecutor(t, func(role string) RoleAssignment {
 		if role == string(llm.RoleTask) {
-			return bound, "task-model", true
+			return RoleAssignment{Provider: bound, ModelID: "task-model", Assigned: true}
 		}
-		return nil, "", false
+		return RoleAssignment{}
 	})
 	bound = &namedProvider{label: "bound"}
 	executor.SetDefaultModel("default-worker")
@@ -133,15 +133,71 @@ func TestAgentModelRoleLosesToRequestButWinsOverDefault(t *testing.T) {
 	}
 }
 
+// TestAgentModelRoleCarriesEffort pins the second half of a role binding: the
+// depth the user bound to the role travels with the model the role supplied, so
+// an "@explore" definition thinks exactly as hard as the explore role says.
+func TestAgentModelRoleCarriesEffort(t *testing.T) {
+	bound := &namedProvider{label: "bound"}
+	executor, _ := roleExecutor(t, func(role string) RoleAssignment {
+		if role == string(llm.RoleExplore) {
+			return RoleAssignment{Provider: bound, ModelID: "haiku", Effort: "xhigh", Assigned: true}
+		}
+		return RoleAssignment{}
+	})
+
+	run, err := executor.prepareRun(context.Background(), tool.AgentExecRequest{
+		Agent: "scout", Prompt: "Find the parser entry point",
+		ResolvedAgentConfig: &AgentConfig{Name: "scout", Model: "@explore"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.cfg.effort != "xhigh" {
+		t.Fatalf("run effort = %q, want the explore role's xhigh", run.cfg.effort)
+	}
+	if client := newRunClient(run.cfg); client.ThinkingEffort() != "xhigh" {
+		t.Fatalf("client effort = %q, want the role effort to reach the request", client.ThinkingEffort())
+	}
+
+	// A definition with no role — or a role with no effort bound — sends no
+	// effort at all: the model's own default is the honest answer.
+	plain, _ := roleExecutor(t, func(role string) RoleAssignment {
+		return RoleAssignment{Provider: bound, ModelID: "haiku", Assigned: true}
+	})
+	run, err = plain.prepareRun(context.Background(), tool.AgentExecRequest{
+		Agent: "scout", Prompt: "Find the parser entry point",
+		ResolvedAgentConfig: &AgentConfig{Name: "scout", Model: "@slow"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.cfg.effort != "" {
+		t.Fatalf("unbound effort = %q, want none", run.cfg.effort)
+	}
+
+	// The per-call override names its own model, so the role's depth does not
+	// apply to it either.
+	run, err = executor.prepareRun(context.Background(), tool.AgentExecRequest{
+		Agent: "scout", Prompt: "Find the parser entry point", Model: "explicit-model",
+		ResolvedAgentConfig: &AgentConfig{Name: "scout", Model: "@explore"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.cfg.modelID != "explicit-model" || run.cfg.effort != "" {
+		t.Fatalf("override = %q/%q, want explicit-model with no role effort", run.cfg.modelID, run.cfg.effort)
+	}
+}
+
 // TestApprovalShowsResolvedRoleModel covers what the user approves: the prompt
 // names the model that will actually answer, not the slot the definition holds.
 func TestApprovalShowsResolvedRoleModel(t *testing.T) {
 	var bound *namedProvider
-	executor, _ := roleExecutor(t, func(role string) (llm.Provider, string, bool) {
+	executor, _ := roleExecutor(t, func(role string) RoleAssignment {
 		if role == string(llm.RoleSlow) {
-			return bound, "opus", true
+			return RoleAssignment{Provider: bound, ModelID: "opus", Assigned: true}
 		}
-		return nil, "", false
+		return RoleAssignment{}
 	})
 	bound = &namedProvider{label: "bound"}
 	executor.registry = NewRegistry()
@@ -159,7 +215,7 @@ func TestApprovalShowsResolvedRoleModel(t *testing.T) {
 
 	// The same definition with nothing assigned shows the session model: the
 	// run will use it, so approval must not imply "@slow".
-	unassigned, _ := roleExecutor(t, func(string) (llm.Provider, string, bool) { return nil, "", false })
+	unassigned, _ := roleExecutor(t, func(string) RoleAssignment { return RoleAssignment{} })
 	unassigned.registry = NewRegistry()
 	unassigned.registry.Register(&AgentConfig{Name: "review", Model: "@slow"})
 	if info, _, ok := NewExecutorAdapter(unassigned).ResolveAgentSelection("review"); !ok || info.Model != "parent-model" {

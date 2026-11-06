@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/genai-io/san/internal/llm"
@@ -63,11 +64,38 @@ func TestBundledAgentsLoadOnAFreshInstall(t *testing.T) {
 			t.Errorf("%s is missing its mode or tool list: %+v", name, config)
 		}
 		// A bundled model is a role reference: an "@" prefix and a role name,
-		// so a typo cannot silently become a model id nobody serves.
-		if name, ok := llm.ParseRoleAlias(config.Model); !ok {
-			t.Errorf("%s model = %q, want an @role reference", config.Name, config.Model)
-		} else if !llm.IsRoleName(name) {
-			t.Errorf("%s model names an invalid role: %q", config.Name, config.Model)
+		// so a typo cannot silently become a model id nobody serves. Each
+		// definition owns the role of its own name, so tuning one in /models
+		// cannot move another's model or effort.
+		if role, ok := llm.ParseRoleAlias(config.Model); !ok {
+			t.Errorf("%s model = %q, want an @role reference", name, config.Model)
+		} else if !llm.IsRoleName(role) {
+			t.Errorf("%s model names an invalid role: %q", name, config.Model)
+		} else if want := "@" + name; config.Model != want {
+			t.Errorf("%s model = %q, want its own role %q", name, config.Model, want)
+		}
+		// Discovery metadata is what the delegating model reads before it
+		// picks: one line of scope, then when to use it and when not to.
+		if strings.Contains(config.Description, "\n") {
+			t.Errorf("%s description must be one line: %q", name, config.Description)
+		}
+		if !strings.HasPrefix(config.WhenToUse, "When:") || !strings.Contains(config.WhenToUse, "Not when:") {
+			t.Errorf("%s when-to-use must state when and when not: %q", name, config.WhenToUse)
+		}
+	}
+
+	// The catalog must carry the same constraints, since that string is the
+	// only thing the delegating model sees.
+	catalog := r.AgentCatalog()
+	for _, want := range []string{
+		"- explore [read-only, @explore]: ",
+		"- librarian [read-only, @librarian]: ",
+		"- reviewer [read-only, @reviewer]: ",
+		"- designer [edit, @designer]: ",
+		"- task [edit, @task]: ",
+	} {
+		if !strings.Contains(catalog, want) {
+			t.Errorf("catalog does not tell the delegating model %q:\n%s", want, catalog)
 		}
 	}
 }
@@ -155,20 +183,9 @@ func TestBundledAgentCanBeDisabled(t *testing.T) {
 	if _, _, enabled := r.LookupAgent("task"); !enabled {
 		t.Error("disabling one bundled agent disabled another")
 	}
-	if got := r.AgentCatalog(); got != "" && (contains(got, "- explore:") || contains(got, "- reviewer:")) {
+	if got := r.AgentCatalog(); got != "" && (strings.Contains(got, "- explore [") || strings.Contains(got, "- reviewer [")) {
 		t.Fatalf("catalog lists a disabled bundled agent:\n%s", got)
 	}
-}
-
-func contains(haystack, needle string) bool {
-	return len(needle) > 0 && len(haystack) >= len(needle) && (func() bool {
-		for i := 0; i+len(needle) <= len(haystack); i++ {
-			if haystack[i:i+len(needle)] == needle {
-				return true
-			}
-		}
-		return false
-	})()
 }
 
 // TestBundledAgentToolsExist guards the one mistake an embedded agent cannot

@@ -113,6 +113,79 @@ func TestRoleModelPrecedence(t *testing.T) {
 	}
 }
 
+// roleModelWithEfforts is roleModel with modelRoleEfforts bound and a provider
+// that advertises a reasoning ladder, so effort resolution is checked against a
+// live model catalog rather than a stub that agrees with itself.
+func roleModelWithEfforts(roles, efforts map[string]string, ladder []string, def string) (*model, *testThinkingProvider) {
+	provider := &testThinkingProvider{efforts: ladder, def: def}
+	return &model{
+		env: env{
+			LLMProvider:  provider,
+			CurrentModel: &llm.CurrentModelInfo{ModelID: "session-model", Provider: llm.Anthropic},
+		},
+		services: services{
+			LLM: &llm.Conn{},
+			Setting: setting.New(&setting.Data{
+				ModelRoles:       roles,
+				ModelRoleEfforts: efforts,
+			}),
+		},
+	}, provider
+}
+
+// TestResolveRoleEffortValidatesAgainstTheModel keeps a stored effort a hint,
+// not a value: only a rung the model that will answer actually offers is sent,
+// and a label it does not offer falls back to that model's default instead of
+// spending a request the vendor rejects.
+func TestResolveRoleEffortValidatesAgainstTheModel(t *testing.T) {
+	m, _ := roleModelWithEfforts(
+		map[string]string{"explore": "haiku", "reviewer": "@slow"},
+		map[string]string{"explore": "high", "reviewer": "ultra", "plan": "low"},
+		[]string{"low", "medium", "high"}, "medium",
+	)
+
+	if got := m.resolveRoleEffort(m.resolveRole(llm.RoleExplore)); got != "high" {
+		t.Errorf("explore effort = %q, want its bound high", got)
+	}
+	// reviewer is unassigned, so the slow role supplies its model — and the
+	// named role's own effort still wins, rescaled to the model's ladder.
+	if got := m.resolveRoleEffort(m.resolveRole(llm.RoleReviewer)); got != "medium" {
+		t.Errorf("reviewer effort = %q, want the model default for a rung it lacks", got)
+	}
+	// A role nobody bound to anything sends no effort at all.
+	if got := m.resolveRoleEffort(m.resolveRole(llm.RoleTask)); got != "" {
+		t.Errorf("task effort = %q, want none", got)
+	}
+
+	// A model with no ladder to climb sends no effort, whatever is stored.
+	plain, _ := roleModelWithEfforts(map[string]string{"explore": "haiku"}, map[string]string{"explore": "high"}, nil, "")
+	if got := plain.resolveRoleEffort(plain.resolveRole(llm.RoleExplore)); got != "" {
+		t.Errorf("non-reasoning model effort = %q, want none", got)
+	}
+}
+
+// TestAutopilotJudgeEffortPrecedence pins the judge's order: the rung saved on
+// the judge itself wins, then the effort bound to the role behind its model.
+func TestAutopilotJudgeEffortPrecedence(t *testing.T) {
+	provider := &testThinkingProvider{efforts: []string{"low", "medium", "high"}, def: "medium"}
+	info := &llm.CurrentModelInfo{ModelID: "judge-model", Provider: llm.Anthropic}
+
+	if got := autopilotJudgeEffort("low", provider, nil, info, "high"); got != "low" {
+		t.Fatalf("saved rung = %q, want the judge's own low", got)
+	}
+	if got := autopilotJudgeEffort("", provider, nil, info, "high"); got != "high" {
+		t.Fatalf("role rung = %q, want the role's high", got)
+	}
+	if got := autopilotJudgeEffort("", provider, nil, info, ""); got != "" {
+		t.Fatalf("no rung = %q, want none", got)
+	}
+	// A saved rung the judge model does not offer is validated away rather than
+	// sent: the model's default answers.
+	if got := autopilotJudgeEffort("ultra", provider, nil, info, "high"); got != "medium" {
+		t.Fatalf("invalid saved rung = %q, want the model default", got)
+	}
+}
+
 // TestRoleModelWithoutSettings keeps the helpers safe before settings are wired:
 // a bare test model (or a first-build model) must resolve to the session model
 // rather than panic on a nil service.
@@ -141,24 +214,54 @@ func TestSubagentRoleResolver(t *testing.T) {
 	m, provider := roleModel(roles, "")
 	resolve := roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID())
 
-	if p, id, ok := resolve("slow"); !ok || id != "opus" || p != provider {
-		t.Fatalf("slow = %v/%q/%v, want the session provider and opus", p, id, ok)
+	if got := resolve("slow"); !got.Assigned || got.ModelID != "opus" || got.Provider != provider {
+		t.Fatalf("slow = %+v, want the session provider and opus", got)
 	}
 	// A role bound to another role follows the chain instead of stopping.
-	if _, id, ok := resolve("smol"); !ok || id != "opus" {
-		t.Fatalf("smol chain = %q/%v, want opus", id, ok)
+	if got := resolve("smol"); !got.Assigned || got.ModelID != "opus" {
+		t.Fatalf("smol chain = %+v, want opus", got)
 	}
 	// Nothing assigned, and a vendor this session has not connected, both leave
 	// the session model to answer rather than failing the worker.
 	for _, role := range []string{"designer", "librarian"} {
-		if _, id, ok := resolve(role); ok {
-			t.Fatalf("%s resolved to %q, want the session fallback", role, id)
+		if got := resolve(role); got.Assigned {
+			t.Fatalf("%s resolved to %+v, want the session fallback", role, got)
 		}
 	}
 	// The bindings are read per call, so a settings change is visible.
 	roles["designer"] = "haiku"
-	if _, id, ok := resolve("designer"); !ok || id != "haiku" {
-		t.Fatalf("designer = %q/%v, want the newly assigned haiku", id, ok)
+	if got := resolve("designer"); !got.Assigned || got.ModelID != "haiku" {
+		t.Fatalf("designer = %+v, want the newly assigned haiku", got)
+	}
+}
+
+// TestSubagentRoleResolverCarriesEffort covers what the executor receives: the
+// depth bound to a role travels with the model it supplied, validated against
+// that model; a role bound to an effort alone still gets its depth on the
+// session model, and a role bound to nothing hands the run back untouched.
+func TestSubagentRoleResolverCarriesEffort(t *testing.T) {
+	m, provider := roleModelWithEfforts(
+		map[string]string{"explore": "haiku", "reviewer": "opus"},
+		map[string]string{"explore": "high", "reviewer": "ultra", "smol": "low"},
+		[]string{"low", "medium", "high"}, "medium",
+	)
+	resolve := roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID())
+
+	if got := resolve("explore"); !got.Assigned || got.ModelID != "haiku" || got.Effort != "high" || got.Provider != provider {
+		t.Fatalf("explore = %+v, want haiku with the role's high on the session provider", got)
+	}
+	// "ultra" is not on this model's ladder: the model's default answers.
+	if got := resolve("reviewer"); got.Effort != "medium" {
+		t.Fatalf("reviewer = %+v, want the model default for a rung it lacks", got)
+	}
+	// An effort with no model of its own still reaches the run, on the session
+	// model the role inherits.
+	if got := resolve("smol"); !got.Assigned || got.ModelID != "session-model" || got.Effort != "low" {
+		t.Fatalf("smol = %+v, want the session model with the role's low", got)
+	}
+	// Nothing bound anywhere: the executor keeps its own parent model.
+	if got := resolve("task"); got.Assigned || got.Effort != "" {
+		t.Fatalf("task = %+v, want an unassigned result", got)
 	}
 }
 
@@ -167,8 +270,8 @@ func TestSubagentRoleResolver(t *testing.T) {
 func TestRoleResolverWithoutBindings(t *testing.T) {
 	provider := &switchProviderStub{name: "anthropic"}
 	resolve := roleResolverFor(nil, nil, provider, "session-model")
-	if p, id, ok := resolve("slow"); ok || p != provider || id != "session-model" {
-		t.Fatalf("slow = %v/%q/%v, want the session model", p, id, ok)
+	if got := resolve("slow"); got.Assigned || got.Provider != nil || got.ModelID != "" || got.Effort != "" {
+		t.Fatalf("slow = %+v, want an unassigned result the executor turns into the session model", got)
 	}
 }
 
@@ -193,9 +296,12 @@ func TestAgentModelForRef(t *testing.T) {
 		// model answers it rather than the provider receiving "@" as a model.
 		{"@", "session-model", true},
 	} {
-		model, inherited := m.agentModelForRef(tc.ref)
+		model, effort, inherited := m.agentModelForRef(tc.ref)
 		if model != tc.model || inherited != tc.inherited {
 			t.Errorf("agentModelForRef(%q) = %q/%v, want %q/%v", tc.ref, model, inherited, tc.model, tc.inherited)
+		}
+		if effort != "" {
+			t.Errorf("agentModelForRef(%q) reported effort %q with none bound", tc.ref, effort)
 		}
 	}
 }

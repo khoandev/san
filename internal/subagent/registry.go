@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/setting"
 )
 
@@ -188,14 +189,17 @@ func (r *Registry) isDisabledInternal(name string) bool {
 }
 
 // AgentCatalog returns discovery metadata for the Agent tool description.
-// Only enabled definitions are listed, sorted by name. Full prompts, models,
-// tool rules and permission modes are not included.
+// Only enabled definitions are listed, sorted by name. Each entry names the
+// definition, the write boundary it runs behind, and — when it runs on one —
+// the role whose model and effort its work uses, because that last pair is
+// what a user tunes in /models. Full prompts, tool rules and exact model ids
+// are not included.
 func (r *Registry) AgentCatalog() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	type entry struct {
-		name, desc, whenToUse string
+		name, desc, whenToUse, label string
 	}
 
 	var entries []entry
@@ -207,6 +211,7 @@ func (r *Registry) AgentCatalog() string {
 			name:      config.Name,
 			desc:      strings.Join(strings.Fields(config.Description), " "),
 			whenToUse: strings.Join(strings.Fields(config.WhenToUse), " "),
+			label:     catalogLabel(config),
 		})
 	}
 
@@ -221,13 +226,48 @@ func (r *Registry) AgentCatalog() string {
 	var sb strings.Builder
 	sb.WriteString("Available predefined agents:\n\n")
 	for i, e := range entries {
-		sb.WriteString("- " + e.name + ": " + e.desc)
+		sb.WriteString("- " + e.name + " [" + e.label + "]: " + e.desc)
 		if e.whenToUse != "" {
-			sb.WriteString("\n  Use when: " + e.whenToUse)
+			sb.WriteString("\n  " + guidanceLine(e.whenToUse))
 		}
 		if i < len(entries)-1 {
 			sb.WriteString("\n")
 		}
 	}
 	return sb.String()
+}
+
+// catalogLabel summarises what a definition runs under: the write boundary the
+// delegating model must respect, and the role whose model and effort the work
+// is billed to when the definition names one.
+func catalogLabel(config *AgentConfig) string {
+	label := modeLabel(config.PermissionMode)
+	if role, ok := llm.ParseRoleAlias(config.Model); ok {
+		label += ", @" + role
+	}
+	return label
+}
+
+// modeLabel names the write boundary in the words a delegating model acts on:
+// a read-only agent investigates and reports but never changes the workspace,
+// so sending it a fix wastes a round trip.
+func modeLabel(mode PermissionMode) string {
+	switch NormalizePermissionMode(string(mode)) {
+	case PermissionExplore:
+		return "read-only"
+	case PermissionAcceptEdits, PermissionBypass, PermissionAuto:
+		return "edit"
+	default:
+		return "default"
+	}
+}
+
+// guidanceLine renders the hint under a catalog entry. A definition written in
+// the canonical "When: … / Not when: …" shape already reads as a sentence;
+// older user files keep the "Use when:" prefix their author wrote for.
+func guidanceLine(when string) string {
+	if strings.HasPrefix(strings.ToLower(when), "when:") {
+		return when
+	}
+	return "Use when: " + when
 }

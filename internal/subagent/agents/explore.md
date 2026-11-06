@@ -1,8 +1,8 @@
 ---
 name: explore
-description: Read-only investigation of a codebase, a dependency, or a behaviour.
-when-to-use: When the answer requires reading many files and the main conversation should keep its context for the work that follows.
-model: "@smol"
+description: Read-only investigation of this repository — where code lives, how it behaves, why it misbehaves.
+when-to-use: "When: the question is about this workspace and answering it means reading many files. Not when: the answer lives in a vendor's documentation (use librarian), the work needs edits (use task), or a diff needs judging (use reviewer)."
+model: "@explore"
 mode: explore
 allow_tools: [Read, Bash, WebFetch, WebSearch]
 ---

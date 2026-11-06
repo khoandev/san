@@ -1,7 +1,7 @@
 ---
 name: designer
-description: Interface and visual work — layout, components, and design-system consistency.
-when-to-use: When the change is user-facing and the question is how it should look and feel, not only whether it compiles.
+description: Interface and visual work — layout, components and design-system consistency.
+when-to-use: "When: the change is user-facing and the question is how it should look and feel, not only whether it compiles. Not when: the work is mostly behaviour or data flow, or a bounded change with no visual surface (use task)."
 model: "@designer"
 mode: edit
 allow_tools: [Read, Write, Edit, Bash, WebFetch, WebSearch, Skill]

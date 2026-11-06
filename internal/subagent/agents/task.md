@@ -1,7 +1,7 @@
 ---
 name: task
-description: General implementation worker for a well-scoped change.
-when-to-use: When the work is bounded — a few files with a clear definition of done — and can run while the main conversation does something else.
+description: Bounded implementation work in this repository — a few files with a clear definition of done.
+when-to-use: "When: the change is understood and can be made while the main conversation continues. Not when: it needs investigating first (use explore), it is only a review (use reviewer), or the work is user-facing look and feel (use designer)."
 model: "@task"
 mode: edit
 allow_tools: [Read, Write, Edit, Bash, WebFetch, WebSearch, Skill]

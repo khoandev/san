@@ -104,16 +104,16 @@ func TestResolveModelUsesConfigBeforeParent(t *testing.T) {
 	executor := &Executor{parentModelID: "parent-model"}
 	ctx := context.Background()
 
-	if _, got, _ := executor.resolveModel(ctx, "", ""); got != "parent-model" {
+	if _, got, _, _ := executor.resolveModel(ctx, "", ""); got != "parent-model" {
 		t.Fatalf("empty config model = %q, want parent", got)
 	}
-	if _, got, _ := executor.resolveModel(ctx, "", "sonnet"); got != "claude-sonnet-4-6" {
+	if _, got, _, _ := executor.resolveModel(ctx, "", "sonnet"); got != "claude-sonnet-4-6" {
 		t.Fatalf("config model = %q, want sonnet alias", got)
 	}
-	if _, got, _ := executor.resolveModel(ctx, "", "inherit"); got != "parent-model" {
+	if _, got, _, _ := executor.resolveModel(ctx, "", "inherit"); got != "parent-model" {
 		t.Fatalf("inherit model = %q, want parent", got)
 	}
-	if _, got, _ := executor.resolveModel(ctx, "override-model", "sonnet"); got != "override-model" {
+	if _, got, _, _ := executor.resolveModel(ctx, "override-model", "sonnet"); got != "override-model" {
 		t.Fatalf("request override = %q, want override", got)
 	}
 }
@@ -142,7 +142,7 @@ func TestResolveModelRoutesQualifiedRefToResolver(t *testing.T) {
 	stub := &stubResolver{provider: stubProvider{}}
 	executor := &Executor{parentModelID: "parent-model", resolver: stub}
 
-	_, modelID, err := executor.resolveModel(context.Background(), "deepseek/deepseek-v4", "")
+	_, modelID, _, err := executor.resolveModel(context.Background(), "deepseek/deepseek-v4", "")
 	if err != nil {
 		t.Fatalf("resolveModel() error: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestResolveModelRoutesQualifiedRefToResolver(t *testing.T) {
 func TestResolveModelQualifiedRefWithoutResolverInheritsParent(t *testing.T) {
 	executor := &Executor{parentModelID: "parent-model"} // no resolver wired
 
-	provider, modelID, err := executor.resolveModel(context.Background(), "deepseek/deepseek-v4", "")
+	provider, modelID, _, err := executor.resolveModel(context.Background(), "deepseek/deepseek-v4", "")
 	if err != nil {
 		t.Fatalf("resolveModel() error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestResolveModelResolverErrorInheritsParent(t *testing.T) {
 	stub := &stubResolver{err: errors.New("provider \"deepseek\" is not connected")}
 	executor := &Executor{parentModelID: "parent-model", resolver: stub}
 
-	provider, modelID, err := executor.resolveModel(context.Background(), "deepseek/deepseek-v4", "")
+	provider, modelID, _, err := executor.resolveModel(context.Background(), "deepseek/deepseek-v4", "")
 	if err != nil {
 		t.Fatalf("resolveModel() error: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestResolveModelResolverErrorInheritsParent(t *testing.T) {
 func TestResolveModelBareOverridePassesThrough(t *testing.T) {
 	executor := &Executor{provider: stubProvider{}, parentModelID: "gpt-5.6-sol"}
 
-	_, modelID, err := executor.resolveModel(context.Background(), "haiku", "")
+	_, modelID, _, err := executor.resolveModel(context.Background(), "haiku", "")
 	if err != nil {
 		t.Fatalf("resolveModel() error: %v", err)
 	}

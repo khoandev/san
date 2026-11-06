@@ -75,14 +75,14 @@ func (h *acpHost) setConfig(ctx context.Context, request protocol.SetSessionConf
 		s.runtimeBuildParams.ModelID = id
 		var hookRoles llm.RoleBindings
 		if s.permissions != nil && s.permissions.settings != nil {
-			hookRoles = llm.Bindings(s.permissions.settings.ModelRoles)
+			hookRoles = llm.BindingsOf(s.permissions.settings.ModelRoles, s.permissions.settings.ModelRoleEfforts)
 		}
 		var hookStore *llm.Store
 		if conn := llm.Default(); conn != nil {
 			hookStore = conn.Store()
 		}
-		hookProvider, hookModel := resolveRoleModelOver(hookRoles, hookStore, llm.RoleSmol, s.runtimeBuildParams.Provider, id)
-		s.hooks.SetLLMCompleter(buildHookCompleter(hookProvider), hookModel)
+		hookProvider, hookModel, hookEffort := resolveRoleModelOver(hookRoles, hookStore, llm.RoleSmol, s.runtimeBuildParams.Provider, id)
+		s.hooks.SetLLMCompleter(buildHookCompleter(hookProvider, hookModel, hookEffort), hookModel)
 	}
 	return protocol.SetSessionConfigOptionResponse{ConfigOptions: s.configOptions()}, nil
 }

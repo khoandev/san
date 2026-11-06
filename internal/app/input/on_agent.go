@@ -36,12 +36,15 @@ type agentItem struct {
 	Enabled        bool
 	BuiltinPreview bool // default worker description, not a toggleable definition
 
-	// EffectiveModel is the model that will answer this definition's work, and
-	// InheritedModel reports that it is the session model because the reference
-	// resolved to nothing. Both are filled from the injected AgentModelSource;
-	// empty means the list does not know, and the row shows Model as written.
-	EffectiveModel string
-	InheritedModel bool
+	// EffectiveModel is the model that will answer this definition's work,
+	// EffectiveEffort the reasoning depth that model is asked for, and
+	// InheritedModel reports that the model is the session model because the
+	// reference resolved to nothing. All three are filled from the injected
+	// AgentModelSource; empty means the list does not know, and the row shows
+	// Model as written.
+	EffectiveModel  string
+	EffectiveEffort string
+	InheritedModel  bool
 }
 
 // AgentToggleMsg is sent when an agent's enabled state is toggled.
@@ -56,9 +59,10 @@ type AgentToggleMsg struct {
 // executor will actually use.
 type AgentModelSource struct {
 	// Model resolves a model reference ("@slow", "vendor/model", "inherit") to
-	// the model that will answer, reporting whether the session model answered
-	// instead.
-	Model func(ref string) (string, bool)
+	// the model that will answer and the reasoning effort bound to the role
+	// behind it, reporting whether the session model answered instead. The
+	// effort is "" when nothing is bound, which reads as the model's default.
+	Model func(ref string) (model, effort string, inherited bool)
 	// Worker returns the default worker's model reference: the subagentModel
 	// setting when set, otherwise the task role's binding. "" is the session
 	// model, which is what an unnamed worker inherits.
@@ -198,16 +202,17 @@ func (s *AgentSelector) resolveModel(item *agentItem) {
 		// "inherit" is how a row learns which model that is.
 		ref = llm.ModelInherit
 	}
-	model, inherited := s.models.Model(ref)
+	model, effort, inherited := s.models.Model(ref)
 	if model == "" {
 		return
 	}
-	item.EffectiveModel, item.InheritedModel = model, inherited
+	item.EffectiveModel, item.EffectiveEffort, item.InheritedModel = model, effort, inherited
 }
 
 // modelLabel is the row cell for a definition's model: the configured
-// reference, and for a role the model it resolves to — so "@slow" reads as a
-// model rather than a slot name.
+// reference, and for a role the model it resolves to and the depth it asks for
+// — so "@slow" reads as "slow → claude-sonnet-4-6 (high)" rather than a slot
+// name the user has to look up.
 func (a agentItem) modelLabel() string {
 	ref := strings.TrimSpace(a.Model)
 	if _, isRole := llm.ParseRoleAlias(ref); !isRole {
@@ -215,11 +220,20 @@ func (a agentItem) modelLabel() string {
 	}
 	switch {
 	case a.InheritedModel:
-		return ref + " → session model"
+		return ref + " → session model" + effortSuffix(a.EffectiveEffort)
 	case a.EffectiveModel != "":
-		return ref + " → " + a.EffectiveModel
+		return ref + " → " + a.EffectiveModel + effortSuffix(a.EffectiveEffort)
 	}
 	return ref
+}
+
+// effortSuffix renders a reasoning depth the way the status line does, or
+// nothing when the model answers at its own default.
+func effortSuffix(effort string) string {
+	if effort = strings.TrimSpace(effort); effort == "" {
+		return ""
+	}
+	return " (" + effort + ")"
 }
 
 // workerLabel names the model the default worker runs on. The worker inherits

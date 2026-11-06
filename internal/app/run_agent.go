@@ -72,11 +72,12 @@ func RunAgent(opts AgentRunOptions) error {
 	executor := subagent.NewExecutor(provider, cwd, modelID, nil)
 	executor.SetDefaultModel(effectiveWorkerModel(workerSettings.SubagentModel, workerSettings.ModelRole(string(llm.RoleTask))))
 	executor.SetResolver(llm.NewProviderPool(llm.Default().Store()))
-	// An agent definition's "@role" model resolves through the same bindings the
-	// TUI uses, so a headless run honours modelRoles; nothing assigned keeps the
-	// provider/model resolved above.
+	// An agent definition's "@role" model — and the effort bound to that role —
+	// resolves through the same bindings the TUI uses, so a headless run honours
+	// modelRoles and modelRoleEfforts; nothing assigned keeps the provider/model
+	// resolved above.
 	executor.SetRoleResolver(roleResolverFor(func() llm.RoleBindings {
-		return llm.Bindings(workerSettings.ModelRoles)
+		return llm.BindingsOf(workerSettings.ModelRoles, workerSettings.ModelRoleEfforts)
 	}, llm.Default().Store(), provider, modelID))
 
 	if opts.Name != "" {

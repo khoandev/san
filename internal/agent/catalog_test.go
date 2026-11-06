@@ -22,11 +22,11 @@ func TestMainSchemasDiscoverConfiguredAgentsAndRefreshCatalog(t *testing.T) {
 		t.Fatal("Agent schema missing")
 		return ""
 	}
-	if got := description(); !strings.Contains(got, "Available predefined agents:") || !strings.Contains(got, "- reviewer: Reviews changes") {
+	if got := description(); !strings.Contains(got, "Available predefined agents:") || !strings.Contains(got, "- reviewer [default]: Reviews changes") {
 		t.Fatalf("main model cannot discover configured agent: %s", got)
 	}
 	r.Register(&subagent.AgentConfig{Name: "test-runner", Description: "Runs tests"})
-	if got := description(); !strings.Contains(got, "- test-runner: Runs tests") {
+	if got := description(); !strings.Contains(got, "- test-runner [default]: Runs tests") {
 		t.Fatalf("catalog did not refresh: %s", got)
 	}
 	r.LoadPersona([]string{"reviewer"})

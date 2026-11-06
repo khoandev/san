@@ -167,13 +167,18 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 
 	// Plan Mode can run on the plan role's model without the session's own model
 	// changing: provider, model id, output cap and thinking effort all follow
-	// whichever model answers this turn.
+	// whichever model answers this turn. The plan role's own effort wins over
+	// the session's selection, because that selection belongs to a different
+	// model; without one, the session's choice is validated on the plan model.
 	modelInfo, provider, modelID := m.env.CurrentModel, m.env.LLMProvider, m.env.GetModelID()
 	effort := m.env.EffectiveThinkingEffort()
 	if target, ok := m.planModelTarget(); ok {
 		modelInfo = m.roleModelInfo(target)
 		provider, modelID = target.Provider, target.ModelID
-		effort = llm.ResolveThinkingEffortForModel(target.Provider, m.services.LLM.Store(), modelInfo, m.env.ThinkingEffort)
+		effort = m.resolveRoleEffort(target)
+		if effort == "" {
+			effort = llm.ResolveThinkingEffortForModel(target.Provider, m.services.LLM.Store(), modelInfo, m.env.ThinkingEffort)
+		}
 	}
 
 	maxTokens := kit.GetMaxOutput(m.services.LLM.Store(), modelInfo, setting.DefaultMaxTokens)
@@ -282,20 +287,23 @@ func (m *model) sessionModelInfo() *llm.CurrentModelInfo {
 	return info
 }
 
-// modelRoleBindings is the live modelRoles map, or empty when settings are not
-// wired (a bare test model) so an unassigned role simply inherits.
+// modelRoleBindings is the live modelRoles and modelRoleEfforts maps, or empty
+// when settings are not wired (a bare test model) so an unassigned role simply
+// inherits. Both maps are handed to the resolver together, so a role's model
+// and the depth it asks for are read as one binding.
 func (m *model) modelRoleBindings() llm.RoleBindings {
 	if m.services.Setting == nil {
 		return llm.RoleBindings{}
 	}
-	return llm.Bindings(m.services.Setting.ModelRoles())
+	return llm.BindingsOf(m.services.Setting.ModelRoles(), m.services.Setting.ModelRoleEfforts())
 }
 
 // agentModelForRef resolves an agent definition's model reference for the
-// /agents list: the model that will answer its work, and whether the session
-// model answered instead. A role goes through the same bindings the executor
-// reads, so the list cannot advertise a model the run will not use.
-func (m *model) agentModelForRef(ref string) (string, bool) {
+// /agents list: the model and reasoning effort that will answer its work, and
+// whether the session model answered instead. A role goes through the same
+// bindings the executor reads, so the list cannot advertise a model the run
+// will not use.
+func (m *model) agentModelForRef(ref string) (string, string, bool) {
 	resolver := llm.NewStoreRoleResolver(m.llmStore())
 	var target llm.RoleTarget
 	if role, isRole := llm.ParseRoleAlias(ref); isRole {
@@ -303,7 +311,7 @@ func (m *model) agentModelForRef(ref string) (string, bool) {
 	} else {
 		target = resolver.ResolveRef(context.Background(), ref, m.env.LLMProvider, m.env.GetModelID())
 	}
-	return target.ModelID, target.Inherited
+	return target.ModelID, m.resolveRoleEffort(target), target.Inherited
 }
 
 // resolveRole answers the provider and model for one model role. The role's
@@ -319,10 +327,22 @@ func (m *model) resolveRole(role llm.ModelRole) llm.RoleTarget {
 }
 
 // resolveRoleModel answers just the provider and model id for role — the shape
-// callers that hand a client or a judge a model need.
+// callers that hand a client or a judge a model need. A caller that also sends
+// a reasoning effort asks resolveRoleEffort for the same target, so the two
+// answers always describe one resolution.
 func (m *model) resolveRoleModel(role llm.ModelRole) (llm.Provider, string) {
 	target := m.resolveRole(role)
 	return target.Provider, target.ModelID
+}
+
+// resolveRoleEffort answers the reasoning effort to send for a resolved role:
+// the label bound to modelRoleEfforts for it, validated against the ladder of
+// the model that actually answers. A stored label is a hint, not a value — a
+// role rebound to a model without that rung sends the model's own default
+// instead of a label the vendor would reject — so "" here means "send none or
+// let the model decide", exactly like the picker's "default".
+func (m *model) resolveRoleEffort(target llm.RoleTarget) string {
+	return llm.ResolveTargetEffort(target.Provider, m.llmStore(), m.roleModelInfo(target), target)
 }
 
 // resolveRoleWithOverride answers role unless the caller's own setting names a
@@ -383,15 +403,16 @@ func (m *model) planModelTarget() (llm.RoleTarget, bool) {
 	return target, true
 }
 
-// planModelSignature fingerprints the model Plan Mode runs on: "" when the
-// session model answers. ensureAgentRuntime compares it against the live agent's
-// build, the same way it compares the toolset signatures beside it.
+// planModelSignature fingerprints the model and depth Plan Mode runs on: "" when
+// the session model answers. ensureAgentRuntime compares it against the live
+// agent's build, the same way it compares the toolset signatures beside it, so
+// rebinding the plan role's effort reaches the runtime as a model change does.
 func (m *model) planModelSignature() string {
 	target, ok := m.planModelTarget()
 	if !ok {
 		return ""
 	}
-	return providerName(target.Provider) + "/" + target.ModelID
+	return providerName(target.Provider) + "/" + target.ModelID + "/" + m.resolveRoleEffort(target)
 }
 
 // syncPlanModelDisplay points the status line at the model Plan Mode runs on, so
@@ -443,8 +464,26 @@ func (m *model) resolveReviewerModel(ref string) (llm.Provider, string) {
 // auto-review/smol path. The info names whichever provider was actually picked,
 // for capability lookups.
 func (m *model) resolveReviewer(ref string) (llm.Provider, *llm.CurrentModelInfo) {
-	target := m.resolveRoleWithOverride(llm.RoleSmol, ref)
+	target := m.resolveReviewerTarget(ref)
 	return target.Provider, m.roleModelInfo(target)
+}
+
+// resolveReviewerTarget is the same resolution with its provenance kept, so a
+// caller that also sends an effort validates the role's label against the model
+// that actually answers.
+func (m *model) resolveReviewerTarget(ref string) llm.RoleTarget {
+	return m.resolveRoleWithOverride(llm.RoleSmol, ref)
+}
+
+// autopilotJudgeEffort is the precedence the autopilot judge follows: its own
+// saved rung when the user set one, otherwise the effort bound to the role
+// behind its model. An explicit setting is validated against the judge model it
+// will be sent to; a role label travels already validated for the same reason.
+func autopilotJudgeEffort(saved string, provider llm.Provider, store *llm.Store, info *llm.CurrentModelInfo, roleEffort string) string {
+	if strings.TrimSpace(saved) != "" {
+		return llm.ResolveThinkingEffortForModel(provider, store, info, saved)
+	}
+	return roleEffort
 }
 
 // workerModel is the model the Agent tool's default worker runs on: the
@@ -470,23 +509,32 @@ func effectiveWorkerModel(subagentModel, taskRole string) string {
 }
 
 // roleResolverFor is the "@role" resolver an agent executor receives, so a
-// definition can hold a role ("@slow") and the user can move the model behind
-// it. bindings is called per resolution rather than captured, because a
-// settings reload must reach an executor that is already running. The bool
-// reports an assigned role; an unassigned one, an alias chain that loops or a
-// binding whose vendor is not connected leaves the session model to answer.
-func roleResolverFor(bindings func() llm.RoleBindings, store *llm.Store, provider llm.Provider, modelID string) func(role string) (llm.Provider, string, bool) {
+// definition can hold a role ("@slow") and the user can move the model — and
+// the depth — behind it. bindings is called per resolution rather than
+// captured, because a settings reload must reach an executor that is already
+// running. A role bound to nothing at all — or an alias chain that loops, or a
+// vendor that is not connected — reports nothing, so the run keeps the parent
+// model and behaves exactly as it did before roles carried an effort.
+func roleResolverFor(bindings func() llm.RoleBindings, store *llm.Store, provider llm.Provider, modelID string) subagent.RoleResolver {
 	resolver := llm.NewStoreRoleResolver(store)
-	return func(role string) (llm.Provider, string, bool) {
+	return func(role string) subagent.RoleAssignment {
 		var roles llm.RoleBindings
 		if bindings != nil {
 			roles = bindings()
 		}
 		target := resolver.Resolve(context.Background(), roles, role, provider, modelID)
-		if target.Inherited {
-			return provider, modelID, false
+		// A role bound to nothing but an effort still says how hard its work
+		// should think, on whatever model answers — the session model here. A
+		// role bound to neither hands the run back to the executor untouched.
+		if target.Inherited && target.Effort == "" {
+			return subagent.RoleAssignment{}
 		}
-		return target.Provider, target.ModelID, true
+		return subagent.RoleAssignment{
+			Provider: target.Provider,
+			ModelID:  target.ModelID,
+			Effort:   llm.ResolveTargetEffort(target.Provider, store, nil, target),
+			Assigned: true,
+		}
 	}
 }
 

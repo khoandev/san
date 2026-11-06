@@ -116,34 +116,36 @@ func (m *model) switchProvider(p llm.Provider) {
 // role, an unconnected vendor or settings that are not wired all leave the
 // session provider and model in charge.
 func (m *model) wireHookCompleter() {
-	provider, modelID := m.resolveRoleModel(llm.RoleSmol)
+	target := m.resolveRole(llm.RoleSmol)
+	provider, modelID := target.Provider, target.ModelID
 	if provider == nil {
 		provider = m.env.LLMProvider
 	}
 	if modelID == "" {
 		modelID = m.env.GetModelID()
 	}
-	m.services.Hook.SetLLMCompleter(buildHookCompleter(provider), modelID)
+	m.services.Hook.SetLLMCompleter(buildHookCompleter(provider, modelID, m.resolveRoleEffort(target)), modelID)
 }
 
-// resolveRoleModelOver answers role from a settings snapshot and a provider
-// store, for the headless runtimes (hook init, ACP sessions) that hold a
-// *setting.Data rather than the TUI's live services. An unassigned role or an
-// unresolvable binding falls back to the caller's session model, so hook
-// completion never fails because a role is stale.
-func resolveRoleModelOver(roles llm.RoleBindings, store *llm.Store, role llm.ModelRole, fallback llm.Provider, fallbackModel string) (llm.Provider, string) {
+// resolveRoleModelOver answers role's provider, model and effort from a
+// settings snapshot and a provider store, for the headless runtimes (hook init,
+// ACP sessions) that hold a *setting.Data rather than the TUI's live services.
+// An unassigned role or an unresolvable binding falls back to the caller's
+// session model with no role effort, so hook completion never fails because a
+// role is stale.
+func resolveRoleModelOver(roles llm.RoleBindings, store *llm.Store, role llm.ModelRole, fallback llm.Provider, fallbackModel string) (llm.Provider, string, string) {
 	target := llm.NewStoreRoleResolver(store).Resolve(context.Background(), roles, string(role), fallback, fallbackModel)
-	return target.Provider, target.ModelID
+	return target.Provider, target.ModelID, llm.ResolveTargetEffort(target.Provider, store, nil, target)
 }
 
-// hookModelFor resolves the model hooks complete on for a settings snapshot,
-// falling back to the given session model. The store comes from the default
-// connection: a headless runtime that never initialized one simply cannot route
-// a vendor-qualified binding and falls back.
-func hookModelFor(settings *setting.Data, fallback llm.Provider, fallbackModel string) (llm.Provider, string) {
+// hookModelFor resolves the model and effort hooks complete on for a settings
+// snapshot, falling back to the given session model. The store comes from the
+// default connection: a headless runtime that never initialized one simply
+// cannot route a vendor-qualified binding and falls back.
+func hookModelFor(settings *setting.Data, fallback llm.Provider, fallbackModel string) (llm.Provider, string, string) {
 	var roles llm.RoleBindings
 	if settings != nil {
-		roles = llm.Bindings(settings.ModelRoles)
+		roles = llm.BindingsOf(settings.ModelRoles, settings.ModelRoleEfforts)
 	}
 	var store *llm.Store
 	if conn := llm.Default(); conn != nil {
@@ -203,12 +205,19 @@ func joinSections(parts []string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func buildHookCompleter(p llm.Provider) hook.LLMCompleter {
+// buildHookCompleter builds the one-shot completion a hook runs on. hookModel
+// and effort are the model and rung the role behind the hook resolved to, so
+// the effort is only sent when the completion really runs on that model: a
+// hook command that names a model of its own gets no rung nobody validated.
+func buildHookCompleter(p llm.Provider, hookModel, effort string) hook.LLMCompleter {
 	if p == nil {
 		return nil
 	}
 	return func(ctx context.Context, systemPrompt, userMessage, model string) (string, error) {
 		c := llm.NewClient(p, model, 0)
+		if effort != "" && model == hookModel {
+			c.SetThinkingEffort(effort)
+		}
 		// A hook runs outside any conversation, so it has no session id to
 		// carry — but the working directory is still where this answer belongs,
 		// and one vendor states it in the prompt.

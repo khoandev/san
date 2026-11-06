@@ -57,13 +57,14 @@ func (s *acpSession) configureAgents() {
 	for _, file := range system.LoadMemoryFiles(s.runtimeBuildParams.CWD) {
 		instructions = append(instructions, file.Content)
 	}
-	// A definition's "@role" model resolves through this session's modelRoles.
-	// s.permissions holds the loaded settings for the session's CWD.
+	// A definition's "@role" model — and the effort bound to that role — resolves
+	// through this session's settings. s.permissions holds the loaded settings
+	// for the session's CWD.
 	e.SetRoleResolver(roleResolverFor(func() llm.RoleBindings {
 		if s.permissions == nil || s.permissions.settings == nil {
 			return llm.RoleBindings{}
 		}
-		return llm.Bindings(s.permissions.settings.ModelRoles)
+		return llm.BindingsOf(s.permissions.settings.ModelRoles, s.permissions.settings.ModelRoleEfforts)
 	}, llm.Default().Store(), s.runtimeBuildParams.Provider, s.runtimeBuildParams.ModelID))
 	e.SetProjectInstructions(strings.Join(instructions, "\n\n"))
 	e.SetSessionStore(s.nativeSession.Store, s.runtimeBuildParams.SessionID)

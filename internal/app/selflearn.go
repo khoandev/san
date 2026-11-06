@@ -109,9 +109,11 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 	// closure runs on a background goroutine and must not read live env state.
 	// An unassigned role keeps the session model, and with it the prefix-cache
 	// parity the fork relies on.
-	reviewProvider, reviewModel := m.resolveRoleModel(llm.RoleSmol)
+	reviewTarget := m.resolveRole(llm.RoleSmol)
+	reviewProvider, reviewModel := reviewTarget.Provider, reviewTarget.ModelID
+	reviewEffort := m.resolveRoleEffort(reviewTarget)
 	if reviewProvider == nil {
-		reviewProvider, reviewModel = params.Provider, params.ModelID
+		reviewProvider, reviewModel, reviewEffort = params.Provider, params.ModelID, params.ThinkingEffort
 	}
 
 	// The write observer feeds the live spinner-tail and the post-pass recap.
@@ -157,11 +159,15 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 		m.publishSelfLearnStarted()
 
 		client := llm.NewClient(reviewProvider, reviewModel, params.MaxTokens)
-		if reviewModel == params.ModelID {
-			// The rung belongs to the session model; a different smol model has
-			// its own ladder, so passing it through could name a rung it lacks.
-			client.SetThinkingEffort(params.ThinkingEffort)
+		// The rung follows the model that answers: the effort bound to the smol
+		// role when it supplied a model of its own — already validated against it,
+		// so a rung that model lacks never leaks here — and otherwise the
+		// session's own selection, which is the rung the session model defines.
+		effort := reviewEffort
+		if effort == "" && reviewModel == params.ModelID {
+			effort = params.ThinkingEffort
 		}
+		client.SetThinkingEffort(effort)
 		// Sidechain writer: each L1 fork gets its OWN session ID
 		// (formatted "<parent>.selflearn-review.<unix>") so
 		// `san --resume <fork-id>` replays exactly that review's LLM

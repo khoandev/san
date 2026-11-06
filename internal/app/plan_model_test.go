@@ -91,6 +91,40 @@ func TestBuildAgentParamsUsesPlanRole(t *testing.T) {
 	}
 }
 
+// Plan Mode sends the plan role's own reasoning effort. The session's selection
+// belongs to the session model, so it is not carried to a different model the
+// plan role routes the turn to; without a role effort it is rescaled to that
+// model's ladder instead of being dropped.
+func TestBuildAgentParamsUsesPlanRoleEffort(t *testing.T) {
+	ladder := &testThinkingProvider{efforts: []string{"low", "medium", "high"}, def: "medium"}
+	build := func(t *testing.T, efforts map[string]string) agent.BuildParams {
+		t.Helper()
+		m := planModeModel(t, map[string]string{"plan": "plan-model"})
+		m.services.Setting = setting.New(&setting.Data{
+			ModelRoles:       map[string]string{"plan": "plan-model"},
+			ModelRoleEfforts: efforts,
+		})
+		m.env.LLMProvider = ladder
+		m.env.ThinkingEffort = "low"
+		m.enterPlanMode()
+		params, err := m.buildAgentParams()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if params.ModelID != "plan-model" {
+			t.Fatalf("plan-mode model = %q, want plan-model", params.ModelID)
+		}
+		return params
+	}
+
+	if got := build(t, map[string]string{"plan": "high"}).ThinkingEffort; got != "high" {
+		t.Fatalf("plan effort = %q, want the role's high over the session's low", got)
+	}
+	if got := build(t, nil).ThinkingEffort; got != "low" {
+		t.Fatalf("plan effort without a role binding = %q, want the session's low on the plan model", got)
+	}
+}
+
 // Toggling Plan Mode restarts the runtime only when the plan role moves the turn
 // to a different model and nothing is in flight.
 func TestPlanModeToggleRestartsIdleRuntimeOnly(t *testing.T) {

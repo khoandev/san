@@ -25,12 +25,19 @@ func TestAgentCatalogContainsOnlyEnabledDiscoveryMetadata(t *testing.T) {
 		AllowTools: ToolList{{Name: "Bash", Pattern: "COMMAND_SENTINEL"}}, SourceFile: promptPath}
 	r.Register(config)
 	r.Register(&AgentConfig{Name: "a-plugin:reader", Description: "Reads source"})
+	r.Register(&AgentConfig{Name: "scout", Description: "Scouts code", Model: "@explore", PermissionMode: PermissionExplore})
 	r.Register(&AgentConfig{Name: "disabled", Description: "DISABLED_SENTINEL"})
 	if err := r.SetEnabled("disabled", false, setting.ScopeProject); err != nil {
 		t.Fatal(err)
 	}
 	catalog := r.AgentCatalog()
-	for _, want := range []string{"Available predefined agents:", "- reviewer: Reviews changes", "Use when: Before merging", "- a-plugin:reader: Reads source"} {
+	for _, want := range []string{
+		"Available predefined agents:",
+		"- reviewer [edit]: Reviews changes",
+		"Use when: Before merging",
+		"- a-plugin:reader [default]: Reads source",
+		"- scout [read-only, @explore]: Scouts code",
+	} {
 		if !strings.Contains(catalog, want) {
 			t.Fatalf("catalog lost %q: %s", want, catalog)
 		}
