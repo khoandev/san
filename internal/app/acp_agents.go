@@ -72,7 +72,7 @@ func (s *acpSession) configureAgents() {
 	e.SetMCPDependencies(s.mcp)
 	e.SetSkillsDirectory(s.runtimeBuildParams.Skills.PromptSection())
 	e.SetSkillResolver(s.runtimeBuildParams.Skills.SkillInvocationPrompt)
-	e.SetParentPermissionMode(func() subagent.PermissionMode { return subagent.InheritedPermissionMode(s.permissions.CurrentMode()) })
+	e.SetParentPermissionMode(func() subagent.PermissionMode { return parentPosture(s.permissions.SessionPermissions) })
 	worker := agenttool.NewAgentTool()
 	worker.SetExecutor(subagent.NewExecutorAdapter(e))
 	schema := worker.Schema()

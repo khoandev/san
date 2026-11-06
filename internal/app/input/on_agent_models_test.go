@@ -160,7 +160,7 @@ func TestAgentListShowsBundledDefinitions(t *testing.T) {
 // assigned role names its model, an unassigned one says the session model
 // answers, and the detail line names which one that is.
 func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
-	src := fakeAgentModels(map[string]string{"slow": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6")
+	src := fakeAgentModels(map[string]string{"reviewer": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6")
 	selector, _ := bundledAgentSelector(t, src, 120)
 	// The role column is what this test reads, so it must fit the panel at the
 	// widths /agents is actually used at.
@@ -177,23 +177,24 @@ func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
 	if !ok {
 		t.Fatal("reviewer not listed")
 	}
-	if reviewer.Model != "@slow" {
-		t.Errorf("reviewer model reference = %q, want the configured @slow", reviewer.Model)
+	if reviewer.Model != "@reviewer" {
+		t.Errorf("reviewer model reference = %q, want the definition's own @reviewer", reviewer.Model)
 	}
 	if reviewer.EffectiveModel != "claude-opus-4-1" || reviewer.InheritedModel {
 		t.Fatalf("reviewer resolves to %q inherited=%v, want claude-opus-4-1", reviewer.EffectiveModel, reviewer.InheritedModel)
 	}
 
 	view := xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@slow → claude-opus-4-1") {
+	if !strings.Contains(view, "@reviewer → claude-opus-4-1") {
 		t.Errorf("assigned role row does not name its model:\n%s", view)
 	}
-	if strings.Contains(view, "@slow → session model") {
+	if strings.Contains(view, "@reviewer → session model") {
 		t.Errorf("assigned role claims the session model:\n%s", view)
 	}
 
-	// explorer's "@smol" is unassigned in this map: the session model answers,
-	// and the row says so instead of showing a model that will not run.
+	// explore's own "@explore" is unassigned in this map, and so is the smol it
+	// falls back to: the session model answers, and the row says so instead of
+	// showing a model that will not run.
 	explore, _ := agentItemNamed(selector, "explore")
 	if !explore.InheritedModel || explore.EffectiveModel != "claude-sonnet-4-6" {
 		t.Fatalf("unassigned role = %q inherited=%v, want the session model", explore.EffectiveModel, explore.InheritedModel)
@@ -205,7 +206,7 @@ func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
 		}
 	}
 	view = xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@smol → session model") {
+	if !strings.Contains(view, "@explore → session model") {
 		t.Errorf("unassigned role row does not say session model:\n%s", view)
 	}
 	if !strings.Contains(view, "session model: claude-sonnet-4-6") {
@@ -218,8 +219,8 @@ func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
 // user sees what the run will send rather than only where it routes.
 func TestAgentRowNamesTheRoleEffort(t *testing.T) {
 	src := fakeAgentModelsWithEfforts(
-		map[string]string{"slow": "anthropic/claude-opus-4-1"},
-		map[string]string{"slow": "high"},
+		map[string]string{"reviewer": "anthropic/claude-opus-4-1"},
+		map[string]string{"reviewer": "high"},
 		"claude-sonnet-4-6",
 	)
 	selector, _ := bundledAgentSelector(t, src, 120)
@@ -232,13 +233,13 @@ func TestAgentRowNamesTheRoleEffort(t *testing.T) {
 		t.Fatalf("reviewer effort = %q, want the role's high", reviewer.EffectiveEffort)
 	}
 	view := xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@slow → claude-opus-4-1 (high)") {
+	if !strings.Contains(view, "@reviewer → claude-opus-4-1 (high)") {
 		t.Errorf("role row does not name its effort:\n%s", view)
 	}
 
 	// A role with no effort bound shows the model alone: "(default)" would be
 	// a claim the list cannot make, since the rung belongs to the model.
-	plain, _ := bundledAgentSelector(t, fakeAgentModels(map[string]string{"slow": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6"), 120)
+	plain, _ := bundledAgentSelector(t, fakeAgentModels(map[string]string{"reviewer": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6"), 120)
 	view = xansi.Strip(plain.Render())
 	if strings.Contains(view, "claude-opus-4-1 (") {
 		t.Errorf("unbound effort rendered a suffix:\n%s", view)
@@ -259,8 +260,8 @@ func TestAgentWorkerRowNamesTheTaskModel(t *testing.T) {
 		t.Fatalf("worker model = %q inherited=%v, want gpt-5 from the task role", worker.EffectiveModel, worker.InheritedModel)
 	}
 	view := xansi.Strip(selector.Render())
-	if !strings.Contains(view, "model follows the task role") || !strings.Contains(view, "gpt-5") {
-		t.Errorf("worker row does not name the model it will run:\n%s", view)
+	if !strings.Contains(view, "read-only sessions run as explore") || !strings.Contains(view, "gpt-5") {
+		t.Errorf("worker row does not say which charter it runs or the model it will run:\n%s", view)
 	}
 	if cmd := selector.Toggle(); cmd != nil {
 		t.Fatal("the default worker row must stay non-toggleable")
@@ -281,10 +282,10 @@ func TestAgentRowsWithoutResolverKeepTheReference(t *testing.T) {
 		t.Fatalf("reviewer model = %q, want nothing resolved", reviewer.EffectiveModel)
 	}
 	view := xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@slow") {
+	if !strings.Contains(view, "@reviewer") {
 		t.Errorf("row lost its configured reference:\n%s", view)
 	}
-	if strings.Contains(view, "@slow →") || strings.Contains(view, "session model:") {
+	if strings.Contains(view, "@reviewer →") || strings.Contains(view, "session model:") {
 		t.Errorf("row claims a resolution it does not have:\n%s", view)
 	}
 }

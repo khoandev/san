@@ -13,9 +13,36 @@ import (
 	"github.com/genai-io/san/internal/reminder"
 	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/setting"
+	"github.com/genai-io/san/internal/subagent"
 	"github.com/genai-io/san/internal/tool/perm"
 	"github.com/genai-io/san/internal/transcript"
 )
+
+// TestParentPostureIsReadOnlyInPlanMode pins what a spawned worker inherits:
+// while planning, a worker starts from explore even though the session mode
+// still reads normal, so an unnamed Agent call cannot edit its way around the
+// plan gate.
+func TestParentPostureIsReadOnlyInPlanMode(t *testing.T) {
+	perms := setting.NewSessionPermissions()
+	if got := parentPosture(perms); got != subagent.PermissionDefault {
+		t.Fatalf("normal posture = %q, want default", got)
+	}
+	perms.SetMode(setting.ModeBypassPermissions)
+	if got := parentPosture(perms); got != subagent.PermissionBypass {
+		t.Fatalf("bypass posture = %q, want bypass", got)
+	}
+	perms.SetPlanMode(true)
+	if got := parentPosture(perms); got != subagent.PermissionExplore {
+		t.Fatalf("plan-mode posture = %q, want explore", got)
+	}
+	perms.SetPlanMode(false)
+	if got := parentPosture(perms); got != subagent.PermissionBypass {
+		t.Fatalf("posture after plan mode = %q, want the session mode back", got)
+	}
+	if got := parentPosture(nil); got != subagent.PermissionDefault {
+		t.Fatalf("nil permissions = %q, want default", got)
+	}
+}
 
 // newPlanModel is a model with the pieces Plan Mode touches: the plan store,
 // the permission posture, and the conversation. Approving a plan can also

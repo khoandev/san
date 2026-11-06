@@ -73,7 +73,10 @@ func (a *ExecutorAdapter) RunBackground(req tool.AgentExecRequest) (tool.AgentTa
 // ResolveAgentSelection returns the display projection and exact configuration
 // selected for a request so permission preparation can bind execution to it.
 func (a *ExecutorAdapter) ResolveAgentSelection(name string) (tool.AgentConfigInfo, any, bool) {
-	config, ok := a.Executor.resolveAgentConfig(name)
+	// One posture read: the definition this approval binds and the mode it
+	// reports come from the same parent state.
+	parent := a.Executor.currentParentPermissionMode()
+	config, ok := a.Executor.resolveAgentConfigIn(name, parent)
 	if !ok {
 		return tool.AgentConfigInfo{}, nil, false
 	}
@@ -82,7 +85,7 @@ func (a *ExecutorAdapter) ResolveAgentSelection(name string) (tool.AgentConfigIn
 	// actually answer, so approval names a model rather than a slot.
 	info.Model = a.Executor.effectiveModelName(config, name)
 	if strings.TrimSpace(name) == "" || config.displayOnly {
-		info.PermissionMode = string(a.Executor.currentParentPermissionMode())
+		info.PermissionMode = string(parent)
 	}
 	return info, config, true
 }

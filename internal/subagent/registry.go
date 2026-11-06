@@ -237,9 +237,11 @@ func (r *Registry) AgentCatalog() string {
 	return sb.String()
 }
 
-// catalogLabel summarises what a definition runs under: the write boundary the
-// delegating model must respect, and the role whose model and effort the work
-// is billed to when the definition names one.
+// catalogLabel summarises what a definition declares: the mode its author set
+// and the role whose model and effort the work is billed to when the
+// definition names one. It is the declared mode, not the boundary the runtime
+// ends up enforcing — mode "default" still asks before a mutation, and asks
+// resolve against the parent's posture.
 func catalogLabel(config *AgentConfig) string {
 	label := modeLabel(config.PermissionMode)
 	if role, ok := llm.ParseRoleAlias(config.Model); ok {
@@ -248,9 +250,11 @@ func catalogLabel(config *AgentConfig) string {
 	return label
 }
 
-// modeLabel names the write boundary in the words a delegating model acts on:
-// a read-only agent investigates and reports but never changes the workspace,
-// so sending it a fix wastes a round trip.
+// modeLabel names the declared mode in the words a delegating model acts on:
+// "read-only" never changes the workspace, so sending it a fix wastes a round
+// trip, while "edit" may. "default" is a definition that declared nothing and
+// still needs approval for a mutation, so it is reported as declared rather
+// than folded into either promise.
 func modeLabel(mode PermissionMode) string {
 	switch NormalizePermissionMode(string(mode)) {
 	case PermissionExplore:

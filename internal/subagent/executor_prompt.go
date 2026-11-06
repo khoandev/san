@@ -181,6 +181,12 @@ func formatAgentActivity(params map[string]any) string {
 }
 
 func (e *Executor) requestPermissionMode(config *AgentConfig, req tool.AgentExecRequest) PermissionMode {
+	return requestPermissionModeIn(config, req, e.currentParentPermissionMode())
+}
+
+// requestPermissionModeIn decides the mode a run executes under. parent is the
+// posture read once per launch, so the decision cannot straddle a mode change.
+func requestPermissionModeIn(config *AgentConfig, req tool.AgentExecRequest, parent PermissionMode) PermissionMode {
 	// Explicit explore is a read-only ceiling; edit preserves the accept-edits
 	// policy. An unnamed definition snapshots the parent session, while a named
 	// definition retains its configured policy.
@@ -191,7 +197,7 @@ func (e *Executor) requestPermissionMode(config *AgentConfig, req tool.AgentExec
 		return PermissionAcceptEdits
 	case "", "default":
 		if strings.TrimSpace(req.Agent) == "" || config.displayOnly {
-			return e.currentParentPermissionMode()
+			return parent
 		}
 		return NormalizePermissionMode(string(config.PermissionMode))
 	default:

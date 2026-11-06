@@ -943,6 +943,21 @@ func (m *model) HandlePermGate(req *agent.PermGateRequest) tea.Cmd {
 // Agent tool configuration
 // ============================================================
 
+// parentPosture is the permission mode a worker inherits from the session. Plan
+// Mode is a read-only posture of its own: the session mode may still read
+// "normal" while the planning gate refuses every write, so a worker that
+// inherits the parent's posture must start from explore rather than from a mode
+// that can edit.
+func parentPosture(perms *setting.SessionPermissions) subagent.PermissionMode {
+	if perms == nil {
+		return subagent.PermissionDefault
+	}
+	if perms.PlanModeActive() {
+		return subagent.PermissionExplore
+	}
+	return subagent.InheritedPermissionMode(perms.CurrentMode())
+}
+
 func (m *model) preparePermissionRequest(req *agent.PermGateRequest) (*perm.PermissionRequest, error) {
 	return interaction.PreparePermission(req, m.env.CWD, m.env.SessionMode(), m.services.Setting, m.env.SessionPermissions)
 }
@@ -960,7 +975,7 @@ func (m *model) ReconfigureAgentTool() {
 	executor.SetRoleResolver(roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID()))
 	perms := m.env.SessionPermissions
 	executor.SetParentPermissionMode(func() subagent.PermissionMode {
-		return subagent.InheritedPermissionMode(perms.CurrentMode())
+		return parentPosture(perms)
 	})
 	if m.services.SessionStore != nil && m.sessionID() != "" {
 		executor.SetSessionStore(m.services.SessionStore, m.sessionID())

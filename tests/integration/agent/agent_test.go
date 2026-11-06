@@ -123,7 +123,11 @@ func TestAgent_BackgroundFailureRetainsInspectionFile(t *testing.T) {
 	}
 }
 
-func TestAgent_GeneralExploreMode(t *testing.T) {
+// TestAgent_UnnamedExploreModeRunsExploreDefinition pins the read-only default:
+// a call that asks for an explore ceiling without naming a definition runs the
+// bundled explore charter, because investigating is the job it just described.
+func TestAgent_UnnamedExploreModeRunsExploreDefinition(t *testing.T) {
+	restoreExploreRegistry(t)
 	mp := &testutil.FakeProvider{
 		Responses: []llm.CompletionResponse{
 			{
@@ -146,12 +150,50 @@ func TestAgent_GeneralExploreMode(t *testing.T) {
 	if !result.Success {
 		t.Errorf("expected success, got error: %s", result.Error)
 	}
-	if result.AgentName != "" {
-		t.Errorf("expected unnamed agent, got %q", result.AgentName)
+	if result.AgentName != "explore" {
+		t.Errorf("expected the explore definition, got %q", result.AgentName)
 	}
 	if result.Content != "Explored the codebase" {
 		t.Errorf("unexpected content: %q", result.Content)
 	}
+}
+
+// TestAgent_UnnamedEditModeKeepsTheGeneralTemplate is the other half: a request
+// in a session that can write still runs the general worker, so the read-only
+// substitution does not leak out of that posture.
+func TestAgent_UnnamedEditModeKeepsTheGeneralTemplate(t *testing.T) {
+	restoreExploreRegistry(t)
+	mp := &testutil.FakeProvider{
+		Responses: []llm.CompletionResponse{
+			{Content: ai.TextContent("Implemented"), StopReason: ai.StopEndTurn},
+		},
+	}
+	executor := subagent.NewExecutor(mp, t.TempDir(), "fake-model", nil)
+	result, err := executor.Run(context.Background(), tool.AgentExecRequest{
+		Mode:   "edit",
+		Prompt: "Write a file",
+	})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if result.AgentName != "" {
+		t.Errorf("edit request ran as %q, want the unnamed general worker", result.AgentName)
+	}
+}
+
+// restoreExploreRegistry installs a registry holding only the bundled explore
+// definition, so the posture default is exercised without depending on whatever
+// another test left in the package-level registry.
+func restoreExploreRegistry(t *testing.T) {
+	t.Helper()
+	old := subagent.Default()
+	registry := subagent.NewRegistry()
+	registry.Register(&subagent.AgentConfig{
+		Name: "explore", Description: "Investigates", Model: "inherit",
+		PermissionMode: subagent.PermissionExplore, SystemPrompt: "EXPLORE_CHARTER",
+	})
+	subagent.SetDefaultRegistry(registry)
+	t.Cleanup(func() { subagent.SetDefaultRegistry(old) })
 }
 
 func TestAgent_UnknownNameUsesDefaultTemplate(t *testing.T) {

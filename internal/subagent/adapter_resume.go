@@ -23,7 +23,9 @@ func (a *ExecutorAdapter) ContinuationConfig(taskID string) (tool.AgentConfigInf
 	if !ok || state.cfg == nil || state.cfg.config == nil {
 		return tool.AgentConfigInfo{}, fmt.Errorf("original continuation policy is unavailable; do not silently start a fresh agent")
 	}
-	if _, enabled := a.resolveAgentConfig(state.req.Agent); !enabled {
+	// The frozen definition, not the request name: an unnamed call may have run
+	// as a posture default, and the review must name what actually executed.
+	if _, enabled := a.resolveAgentConfig(state.cfg.config.Name); !enabled {
 		return tool.AgentConfigInfo{}, fmt.Errorf("the original agent definition is now disabled")
 	}
 	info := ToAgentConfigInfo(state.cfg.config)

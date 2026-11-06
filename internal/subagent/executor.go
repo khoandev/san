@@ -214,8 +214,14 @@ func (e *Executor) SetDefaultModel(model string) {
 	e.defaultModel = strings.TrimSpace(model)
 }
 
+// configuredModel is the model reference a run asks for: an unnamed default
+// worker follows the configured worker model, a definition the caller named
+// uses its own. A posture default is the exception: the executor substitutes
+// the explore definition without the caller naming it, so the run must use
+// explore's role instead of the default worker's model.
 func (e *Executor) configuredModel(config *AgentConfig, name string) string {
-	if strings.TrimSpace(name) == "" || config.displayOnly {
+	unnamed := strings.TrimSpace(name) == ""
+	if config.displayOnly || (unnamed && strings.TrimSpace(config.Name) == "") {
 		return e.defaultModel
 	}
 	return config.Model
@@ -316,7 +322,14 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 			cancel()
 			return nil, fmt.Errorf("native continuation checkpoint unavailable")
 		}
-		if _, enabled := e.resolveAgentConfig(state.req.Agent); !enabled {
+		// The frozen configuration, not the request name: an unnamed call may
+		// have been substituted by the parent's posture at launch, and a
+		// continuation must keep checking the definition it actually ran.
+		originalName := state.req.Agent
+		if state.cfg != nil && state.cfg.config != nil {
+			originalName = state.cfg.config.Name
+		}
+		if _, enabled := e.resolveAgentConfig(originalName); !enabled {
 			cancel()
 			return nil, fmt.Errorf("the original agent definition is now disabled")
 		}
@@ -492,20 +505,84 @@ func displayOnlyAgentConfig(name string) *AgentConfig {
 	return config
 }
 
+// readOnlyDefaultAgent is the bundled definition an unnamed Agent call runs as
+// while the parent session is read-only: a read-only session investigates
+// before it edits, so the default worker must be the investigator rather than
+// the base implementation charter.
+const readOnlyDefaultAgent = "explore"
+
+// resolveAgentConfig returns the definition an Agent call runs under the parent's
+// current posture.
 func (e *Executor) resolveAgentConfig(name string) (*AgentConfig, bool) {
+	return e.resolveAgentConfigIn(name, e.currentParentPermissionMode())
+}
+
+// resolveAgentConfigIn returns the definition an Agent call runs. An omitted
+// name means "the default worker", and which definition that is depends on the
+// parent's posture: a read-only session delegates investigation, so it gets the
+// bundled explore definition; every other posture keeps the base charter. A
+// missing or disabled explore falls back to the base worker instead of failing
+// a call the parent never named. parent is passed in so one launch resolves the
+// posture once instead of reading a mode that may change mid-preparation.
+func (e *Executor) resolveAgentConfigIn(name string, parent PermissionMode) (*AgentConfig, bool) {
+	if strings.TrimSpace(name) == "" {
+		if config := e.readOnlyDefaultConfig(parent); config != nil {
+			return config, true
+		}
+	}
 	return resolveAgentConfigFrom(e.registry, name)
 }
 
-func (e *Executor) resolveRequestAgentConfig(req tool.AgentExecRequest) (*AgentConfig, bool) {
+// readOnlyDefaultConfig returns the bundled explore definition while parent is
+// read-only and that definition is enabled; nil otherwise.
+func (e *Executor) readOnlyDefaultConfig(parent PermissionMode) *AgentConfig {
+	if e.registry == nil || parent != PermissionExplore {
+		return nil
+	}
+	config, exists, enabled := e.registry.LookupAgent(readOnlyDefaultAgent)
+	if !exists || !enabled {
+		return nil
+	}
+	return config
+}
+
+func (e *Executor) resolveRequestAgentConfig(req tool.AgentExecRequest, parent PermissionMode) (*AgentConfig, bool) {
 	if req.ResolvedAgentConfig != nil {
 		config, ok := req.ResolvedAgentConfig.(*AgentConfig)
 		return config, ok && config != nil
 	}
-	return e.resolveAgentConfig(req.Agent)
+	return e.resolveAgentConfigIn(req.Agent, parent)
+}
+
+// parentPosture is the parent mode a launch inherits, read at most once. A
+// request that fixes its own mode derives it from the request instead of the
+// session, so the definition the call runs as and the mode it inherits cannot
+// straddle a mode change the launch never observed. A named definition with an
+// explicit mode never consults the parent at all; the value returned there is a
+// placeholder the decision does not read.
+func (e *Executor) parentPosture(req tool.AgentExecRequest) PermissionMode {
+	named := strings.TrimSpace(req.Agent) != ""
+	switch strings.TrimSpace(req.Mode) {
+	case "explore":
+		if named {
+			return PermissionDefault
+		}
+		return PermissionExplore
+	case "edit":
+		if named {
+			return PermissionDefault
+		}
+		return PermissionAcceptEdits
+	default:
+		return e.currentParentPermissionMode()
+	}
 }
 
 func (e *Executor) prepareRunConfig(ctx context.Context, req tool.AgentExecRequest) (*runConfig, error) {
-	config, ok := e.resolveRequestAgentConfig(req)
+	// One read of the parent posture per launch: the definition the call runs
+	// as and the mode it inherits must not see a mode change mid-preparation.
+	parent := e.parentPosture(req)
+	config, ok := e.resolveRequestAgentConfig(req, parent)
 	if !ok {
 		return nil, fmt.Errorf("unknown or disabled agent: %s", req.Agent)
 	}
@@ -520,7 +597,7 @@ func (e *Executor) prepareRunConfig(ctx context.Context, req tool.AgentExecReque
 		MaxSteps: config.MaxSteps, Source: config.Source, McpServers: slices.Clone(config.McpServers),
 		displayOnly: config.displayOnly,
 	}
-	permMode := e.requestPermissionMode(config, req)
+	permMode := requestPermissionModeIn(config, req, parent)
 	displayName := displayAgentName(config.Name)
 
 	maxSteps := config.MaxSteps

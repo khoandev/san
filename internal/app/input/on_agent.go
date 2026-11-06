@@ -161,11 +161,13 @@ func (s *AgentSelector) EnterSelect(width, height int) error {
 // builtinAgentItems describes the sole default worker, not a registered
 // definition: it is what the Agent tool runs when no specialist is named, so it
 // has no toggle and its model follows the task role unless subagentModel
-// overrides it.
+// overrides it. Which charter it runs depends on the parent's posture: a
+// read-only session substitutes the explore definition, so an unnamed call
+// investigates instead of implementing.
 func (s *AgentSelector) builtinAgentItems() []agentItem {
 	item := agentItem{
 		Name:           "Agent",
-		Summary:        "inherits session permissions; model follows the task role",
+		Summary:        "inherits session permissions; read-only sessions run as explore",
 		Source:         "built-in",
 		Enabled:        true,
 		BuiltinPreview: true,
@@ -368,10 +370,12 @@ func (s *AgentSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 		}
 	}
 	maxNameLen = min(maxNameLen, 28)
-	// A role row carries two facts — the role and the model it resolved to — so
-	// the column grows for it, but never past what leaves the tool column
-	// legible.
-	maxModelLen = min(maxModelLen, 30)
+	// A role row carries three facts — the role, the model it resolved to and
+	// the depth it asks for — so the column grows for them, but never past what
+	// leaves the tool column legible. The ceiling below is what a name like
+	// "@reviewer → claude-opus-4-1 (high)" needs; the clamp after it keeps the
+	// tool column readable when the panel is narrower than that.
+	maxModelLen = min(maxModelLen, 36)
 	maxModelLen = min(maxModelLen, max(14, panel.ContentWidth()-4-(2+1+1+maxNameLen+2+2+8+2+8)))
 
 	descStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
