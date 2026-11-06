@@ -1,6 +1,6 @@
 # Advisor — global review layer
 
-Design: [PROP-0005](../../docs/design/proposals/0005-advisor-global-review.md).
+Design: [PROP-0005](../../docs/design/proposal-0005-advisor-global-review.md).
 Status: Phase 1 complete (2026-11-05). Phase 2 not started.
 
 Goal: the advisor runs as an independent review layer behind the agent, in

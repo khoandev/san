@@ -10,6 +10,12 @@ This page is the system-level overview. For per-package design see
 see [`reference/dependency-rules.md`](../reference/dependency-rules.md) and
 [`reference/package-map.md`](../reference/package-map.md).
 
+## Overview diagram
+
+![San — pluggable models, search backends, personas, skills and extensions, and a self-evolving agent](../../assets/san.png)
+
+For a grouped capability list, see the [feature overview](../features.md).
+
 ## Primitives
 
 1. **Agent** — an LLM-in-a-loop: messages in through `Append`, events out on an `Outbox` channel. Contracts
@@ -62,7 +68,7 @@ events that mutate the TUI model.
 
 The detailed walkthrough (sub-model conventions, runtime adapters, cmd
 chains, directory structure of `internal/app/`) lives in
-[`packages/ui.md`](../packages/1-app/app.md). For the step-by-step trace from a
+[`packages/app.md`](../packages/app.md). For the step-by-step trace from a
 keystroke (or cron fire, or hub event) through the agent and back to
 the terminal, see [`concepts/data-flow.md`](data-flow.md).
 For how rendered output is composed (View() layout, Markdown pipeline,
@@ -98,8 +104,8 @@ is added.
 | One specific package | [`packages/<name>.md`](../packages/) |
 | A cross-cutting concept (extension model, prompt slots, permissions) | [`concepts/`](./) |
 | A fact (slash command list, config field, env var, token limits) | [`reference/`](../reference/) |
-| Why a decision was made | [`decisions/`](../design/decisions/) |
-| A design not yet built | [`proposals/`](../design/proposals/) |
+| Why a decision was made | [Decision records](../design/index.md#decision-records) |
+| A design not yet built | [Proposals](../design/index.md#proposals) |
 | How to accomplish a task | [`guides/`](../guides/) |
 | Build, test, release the repo | [`operations/`](../operations/) |
 

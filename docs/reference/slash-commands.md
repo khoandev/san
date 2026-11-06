@@ -89,7 +89,7 @@ the Execution Panel.
   transcript (`transcript.StatePatch.Plan`), so reopening or forking the
   session restores the panel where it left off. No plan file is ever written.
 
-See [`packages/2-feature/plan.md`](../packages/2-feature/plan.md) for the data
+See [`packages/plan.md`](../packages/plan.md) for the data
 model and store rules.
 
 ## Advisor
@@ -120,7 +120,7 @@ finished subagent tasks, plan steps and merges whether or not a plan exists.
   review instead of replacing the verdict it supersedes, and a resume restores
   the whole history. Dismissals are recorded as decisions.
 
-See [`packages/2-feature/advisor.md`](../packages/2-feature/advisor.md) for the
+See [`packages/advisor.md`](../packages/advisor.md) for the
 finding model, the block policy and the trigger detection.
 
 ## Automated Tests
