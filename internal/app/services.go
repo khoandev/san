@@ -53,11 +53,9 @@ type services struct {
 	// path can always Snapshot() without a nil check.
 	SelfLearn SelfLearnServices
 
-	// Advisor groups the global advisor's state: the session's append-only
-	// review history, the live run (nil when the advisor is off, so a disabled
-	// advisor costs no goroutine and no model call), and the status snapshot
-	// the status bar reads.
-	Advisor AdvisorServices
+	// Advisor is the session's live advisor, nil when the advisor is off so a
+	// disabled advisor costs no goroutine and no model call.
+	Advisor *advisorSession
 }
 
 // SelfLearnServices holds the L1 self-learning state.
@@ -120,6 +118,5 @@ func newServices() services {
 		Persona:      persona.Default(),
 		Reminder:     reminder.New(),
 		SelfLearn:    SelfLearnServices{Indicator: NewSelfLearnIndicator(), Recent: NewRecentLearnLog()},
-		Advisor:      newAdvisorServices(),
 	}
 }

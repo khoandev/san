@@ -297,10 +297,6 @@ func (s *Store) readHistory(ctx context.Context, sessionID string, includeCompac
 		Messages:    tx.Messages,
 		Tasks:       tx.State.Tasks,
 		Plan:        tx.State.Plan,
-		// A resume replays the advisor's verdicts and the settings the session
-		// carried, so neither is re-derived from the current settings file.
-		Advisor:         tx.State.Advisor.Clone(),
-		AdvisorSettings: tx.State.AdvisorSettings,
 	}
 
 	if sess.Metadata.Title == "" {

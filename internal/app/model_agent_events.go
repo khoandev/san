@@ -180,6 +180,11 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 		return tea.Batch(commitCmds...)
 	}
 
+	// The advisor reads what this turn added and may drop one short note into
+	// the conversation. It runs in the background and blocks nothing, so the
+	// turn ends the same way whether it answers or not.
+	m.reviewCompletedTurn(result)
+
 	// Normal completion never broadens the cancellation-only receipt contract.
 	_ = agent.EndTurn(agent.TurnCallbacks{
 		RecordState: m.appendTurnState,

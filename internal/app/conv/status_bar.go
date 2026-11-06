@@ -11,7 +11,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/setting"
@@ -226,89 +225,6 @@ type OperationModeParams struct {
 	// "execute" while it runs an approved plan, "" otherwise. The operation
 	// mode cannot express either posture.
 	PlanMode string
-	// Advisor is the review layer's badge: the latest verdict and the findings
-	// it still holds open. Hidden unless the session has something to report.
-	Advisor AdvisorBadge
-}
-
-// AdvisorBadge is what the status line says about the advisor: its latest
-// verdict and the findings it still holds open. The zero value renders
-// nothing, which is what an advisor that is off, hidden by its display setting,
-// or has not reviewed anything yet looks like.
-type AdvisorBadge struct {
-	// Show renders the badge.
-	Show bool
-	// Running reports a review in flight. It wins over Status: an in-flight
-	// review is the newer news, and its counts are not final yet.
-	Running bool
-	// Status is the latest review's verdict.
-	Status advisor.ReviewStatus
-	// P0 and P1 count the unresolved findings at the two levels that can block
-	// something. P2/P3 never reach the badge — they are notes, and the panel
-	// with its HideP3 filter is where they belong.
-	P0, P1 int
-}
-
-// advisorBadgeStatus names a verdict for the status line and picks its color.
-// The mapping lives here because the status line is the one place that has to
-// fit a verdict into a few characters.
-func advisorBadgeStatus(b AdvisorBadge) (label string, clr kit.AdaptiveColor) {
-	if b.Running {
-		return "reviewing", kit.CurrentTheme.Muted
-	}
-	switch b.Status {
-	case advisor.StatusPassed:
-		return "passed", kit.CurrentTheme.Success
-	case advisor.StatusPassedWithNotes:
-		return "passed · notes", kit.CurrentTheme.Success
-	case advisor.StatusChangesRequired:
-		return "changes required", kit.CurrentTheme.Warning
-	case advisor.StatusBlocked:
-		return "blocked", kit.CurrentTheme.Error
-	case advisor.StatusError:
-		return "error", kit.CurrentTheme.Error
-	}
-	return "idle", kit.CurrentTheme.Muted
-}
-
-// renderAdvisorBadge draws "advisor · blocked · P0 1". Empty when the badge is
-// not shown, so callers can concatenate it unconditionally.
-func renderAdvisorBadge(b AdvisorBadge) string {
-	if !b.Show {
-		return ""
-	}
-	label, clr := advisorBadgeStatus(b)
-	muted := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
-	text := label
-	// Counts describe a settled verdict. While a review runs they belong to the
-	// review it is about to supersede, so they stay off the line.
-	var counts []string
-	if !b.Running {
-		if b.P0 > 0 {
-			counts = append(counts, fmt.Sprintf("P0 %d", b.P0))
-		}
-		if b.P1 > 0 {
-			counts = append(counts, fmt.Sprintf("P1 %d", b.P1))
-		}
-	}
-	if len(counts) > 0 {
-		text += " · " + strings.Join(counts, " · ")
-	}
-	badge := lipgloss.NewStyle().Foreground(clr).Bold(b.Status == advisor.StatusBlocked).Render(text)
-	return muted.Render("advisor") + muted.Render(" · ") + badge
-}
-
-// withAdvisorBadge puts the review layer beside the mode and plan badges: all
-// three answer "how is this session running?".
-func withAdvisorBadge(left string, b AdvisorBadge) string {
-	badge := renderAdvisorBadge(b)
-	switch {
-	case badge == "":
-		return left
-	case left == "":
-		return "  " + badge // the indent the mode indicator would have
-	}
-	return left + "  " + badge
 }
 
 // RenderModeStatus renders the combined mode status line.
@@ -318,7 +234,6 @@ func RenderModeStatus(params OperationModeParams) string {
 		mode += hint
 	}
 	mode = withPlanBadge(mode, params.PlanMode)
-	mode = withAdvisorBadge(mode, params.Advisor)
 	left := withGroupStatus(mode, params)
 	if params.Width <= 0 {
 		return left

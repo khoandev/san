@@ -8,11 +8,6 @@ import (
 )
 
 func taskViewTerminal(item TaskViewItem) bool {
-	// A completion a review refused is not resting work: it asks to be looked
-	// at, so it stays in the active list instead of folding away into history.
-	if item.NeedsReview != "" && item.Status == task.StatusCompleted {
-		return false
-	}
 	switch item.Status {
 	case task.StatusCompleted, task.StatusFailed, task.StatusStopped, task.StatusKilled, "interrupted":
 		return true

@@ -37,7 +37,6 @@ import (
 	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/setting"
-	"github.com/genai-io/san/internal/task"
 	"github.com/genai-io/san/internal/tool/evolve"
 )
 
@@ -74,14 +73,9 @@ type model struct {
 	// (PostTool fires once per tool). Reset each step in OnInference (PostInfer).
 	drainedThisStep bool
 	selfLearnStarts chan struct{} // fork goroutine → Update loop: a review started (start the spinner)
-	advisorStarts   chan struct{} // review goroutine → Update loop: an advisor review started
 	systemInput     trigger.Model // Source 3: system events (cron/hooks/watcher)
 	conv            conv.Model    // Agent Outbox: conversation + output rendering
 	env             env           // Shared app state: provider, session, permission, plan, config
-	// advisorTasks carries a finished subagent task from the task manager's
-	// goroutine to the Update loop, which owns the advisor runner and the
-	// workspace path the review reads.
-	advisorTasks chan task.TaskInfo
 	// plan is this session's Plan Mode state: the mode, every plan it produced,
 	// and the active plan's step progress. It is persisted inside the transcript
 	// (transcript.StatePatch.Plan), never in a file of its own.
@@ -190,10 +184,9 @@ type model struct {
 	// the next turn.
 	agentDisabledToolsSignature string
 
-	// agentAdvisorSignature is the advisorSignature() the live review runner was
-	// built from; ensureAgentRuntime rebuilds when it no longer matches, so an
-	// /advisor save, a settings-file edit or a model switch takes effect on the
-	// next turn.
+	// agentAdvisorSignature is the advisorSignature() the live advisor was built
+	// from; ensureAgentRuntime rewires when it no longer matches, so an /advisor
+	// toggle, a settings edit or a model switch takes effect on the next turn.
 	agentAdvisorSignature string
 
 	// turnOpenedBy is the message that started the running turn; messages
@@ -231,8 +224,6 @@ func (m *model) Init() tea.Cmd {
 		trigger.StartAsyncHookTicker(),
 		awaitMainNotice(m.mainNotices),
 		awaitSelfLearnStart(m.selfLearnStarts),
-		awaitAdvisorChange(m.advisorStarts),
-		awaitAdvisorTask(m.advisorTasks),
 		autoUpdate(m.env.Version, m.services.Setting.AutoUpdate()),
 		refreshModelData(),
 		m.syncGitBar(),

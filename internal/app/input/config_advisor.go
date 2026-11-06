@@ -1,60 +1,46 @@
-// /settings Advisor panel: the global review layer's configuration, reduced to
-// the decisions a person actually makes — on/off, the model, and the review
-// depth — with the same user / project / session save control the other panels
-// use, plus the one scope only the advisor has: this session.
+// /settings Advisor panel: the advisor's whole configuration — on or off, and
+// which model reviews. There is nothing else to decide.
 //
-// Everything else the advisor supports (triggers, block policy, bounds, display)
-// keeps its documented default and stays editable in settings.json. A panel with
-// forty knobs reads as a system that has to be configured before it can be
-// switched on, which is the opposite of what an opt-in review layer should cost.
+// The advisor reads the conversation after each turn and, when it has something
+// concrete to say, drops one short note into it. Every extra knob (triggers,
+// block policy, bounds, display) made the feature look like a system that has to
+// be configured before it can be switched on, so those are gone with the
+// machinery they drove.
 //
 // The panel edits the effective config and saves it whole: the block is
-// replaced at the chosen level rather than merged into it, so a knob turned
-// back to its default actually persists there (see setting.UpdateAdvisorAt).
-// Every on/off row writes an explicit pointer, which is what makes an explicit
-// "off" survive a reload instead of reading as "unset, therefore default".
-//
-// Session scope writes no file. It hands the config to the app through
-// AdvisorConfigSavedMsg: the session's live config and its transcript record are
-// the app's to write, and the next session inherits the file, not this pin.
+// replaced at the chosen level rather than merged into it (see
+// setting.UpdateAdvisorAt). The on/off row writes an explicit pointer, so an
+// explicit "off" round-trips through settings.json instead of reading as
+// "unset, therefore off anyway".
 package input
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/genai-io/san/internal/setting"
 )
 
-// AdvisorScope names where an Advisor panel save goes. It mirrors
-// setting.Scope and adds the session, which has no settings file.
+// AdvisorScope names where an Advisor panel save goes. It mirrors setting.Scope;
+// turning the advisor on for this session alone is what /advisor does instead.
 type AdvisorScope string
 
 const (
 	AdvisorScopeUser    AdvisorScope = "user"
 	AdvisorScopeProject AdvisorScope = "project"
-	AdvisorScopeSession AdvisorScope = "session"
 )
 
 // AdvisorConfigSavedMsg reports a saved Advisor config. The panel has already
-// written the user or project file; the app owns the rest — the live session
-// config (which is also the seed for the next session's session scope) and, for
-// a session save, the transcript record that keeps the pin across a resume.
+// written the file; the app owns the live session config and the rewiring that
+// follows from it.
 type AdvisorConfigSavedMsg struct {
 	Scope  AdvisorScope
 	Config setting.AdvisorSettings
 }
 
-// advisorPanel is the /settings Advisor tab. It is a configForm over
-// setting.AdvisorSettings plus the session's live config, which the app pushes
-// in before the popup opens.
+// advisorPanel is the /settings Advisor tab: a configForm over the two
+// setting.AdvisorSettings fields, plus the model sub-view that picks the second.
 type advisorPanel struct {
 	form configForm[setting.AdvisorSettings]
-	// live is this session's effective advisor config. It is where the working
-	// copy starts when the app supplies it, because that — not the file — is
-	// what the session is actually running with.
-	live *setting.AdvisorSettings
 
 	// models lists the connected "vendor/model" refs the model picker offers.
 	// The app injects it; a panel without one shows the empty list.
@@ -71,14 +57,11 @@ func newAdvisorPanel(settings *setting.Settings) *advisorPanel {
 	p.form = configForm[setting.AdvisorSettings]{
 		workspace: func() (string, *setting.Settings) { return "", settings },
 		rowsFn:    func() []configRow[setting.AdvisorSettings] { return advisorRows },
-		scopes:    []configScope{scopeUser, scopeProject, scopeSession},
+		scopes:    []configScope{scopeUser, scopeProject},
 		seed:      func(data *setting.Data) setting.AdvisorSettings { return data.Advisor.Clone() },
 		equal:     func(a, b setting.AdvisorSettings) bool { return a.Equal(b) },
 		validate:  func(a setting.AdvisorSettings) error { return a.Validate() },
 		persist: func(a setting.AdvisorSettings, scope configScope) error {
-			if scope == scopeSession {
-				return nil // no file: the message carries it
-			}
 			return setting.UpdateAdvisorAt(a, setting.Scope(scope))
 		},
 		saved: func(a setting.AdvisorSettings, scope configScope) tea.Msg {
@@ -90,16 +73,10 @@ func newAdvisorPanel(settings *setting.Settings) *advisorPanel {
 
 func (p *advisorPanel) Title() string { return "advisor" }
 
-// Enter seeds the working copy: this session's live config when the app pushed
-// one, the settings file otherwise.
+// Enter seeds the working copy from the settings file the panel was built over.
 func (p *advisorPanel) Enter() {
 	p.picking = false
 	p.form.Enter()
-	if p.live != nil {
-		p.form.snap = p.live.Clone()
-		p.form.baseline = p.live.Clone()
-		p.form.cursor = findEditable(advisorRows, 0, +1, 0)
-	}
 }
 
 func (p *advisorPanel) Dirty() bool { return p.form.Dirty() }
@@ -127,12 +104,7 @@ func (p *advisorPanel) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	if p.picking {
 		closed, picked, ref := p.pick.handleKey(msg)
 		if picked {
-			if ref != p.form.snap.Model.Model {
-				// The reasoning rung belongs to the model that was picked
-				// before; a new model starts from its own default.
-				p.form.snap.Model.ThinkingEffort = ""
-			}
-			p.form.snap.Model.Model = ref
+			p.form.snap.Model = ref
 		}
 		if picked || closed {
 			p.picking = false
@@ -148,20 +120,11 @@ func (p *advisorPanel) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 func (p *advisorPanel) Render(width, height int) string {
 	if p.picking {
-		return p.pick.render(width, p.form.snap.Model.Model)
+		return p.pick.render(width, p.form.snap.Model)
 	}
-	note := mutedNote(footerNote, width)
-	// The footer's own rows come out of the body's budget, so a wrapped note on
-	// a narrow card does not push the form past the popup.
-	p.form.visible = max(height-3-strings.Count(note, "\n"), 0)
-	body := p.form.Render(width)
-	body += "\n" + note
-	return body
+	p.form.visible = max(height-1, 0)
+	return p.form.Render(width)
 }
-
-// footerNote is the one line that points past this panel. The knobs it names
-// are real and documented; they are just not worth a row each.
-const footerNote = "Triggers, block policy and bounds keep their defaults — set them in settings.json."
 
 // openModelPick opens the model sub-view on the connected providers.
 func (p *advisorPanel) openModelPick() {
@@ -169,54 +132,32 @@ func (p *advisorPanel) openModelPick() {
 	if p.models != nil {
 		refs = p.models()
 	}
-	p.pick.begin(refs, p.form.snap.Model.Model)
+	p.pick.begin(refs, p.form.snap.Model)
 	p.picking = true
 }
 
 // SetModelSource wires the picker's list of connected "vendor/model" refs.
 func (p *advisorPanel) SetModelSource(fn func() []string) { p.models = fn }
 
-// SetLive points the panel at this session's effective config. The app calls it
-// before opening /settings, so a session that pinned its own advisor config
-// edits that pin rather than the file it no longer follows.
-func (p *advisorPanel) SetLive(cfg setting.AdvisorSettings) {
-	cloned := cfg.Clone()
-	p.live = &cloned
-}
-
 // ── Rows ────────────────────────────────────────────────────────────────
-
-// advisorFlag takes a bool's address: every toggle writes an explicit pointer,
-// so an explicit "off" round-trips through settings.json instead of reading as
-// "unset, therefore the default".
-func advisorFlag(on bool) *bool { return &on }
-
-// advisorBoolRow builds a checkbox row from the resolved value and the knob it
-// writes. getter is a resolver on AdvisorSettings, never a raw pointer: the
-// panel shows the behavior the advisor actually has.
-func advisorBoolRow(label, note string, getter func(setting.AdvisorSettings) bool,
-	set func(*setting.AdvisorSettings, bool)) configRow[setting.AdvisorSettings] {
-	return configRow[setting.AdvisorSettings]{
-		kind:       rowBool,
-		label:      label,
-		note:       note,
-		indent:     2,
-		boolGetter: func(s *setting.AdvisorSettings) bool { return getter(*s) },
-		toggle:     func(s *setting.AdvisorSettings) { set(s, !getter(*s)) },
-	}
-}
 
 // advisorModelEntry is the rowEntry id that opens the model picker.
 const advisorModelEntry = "model"
 
-// advisorRows is the panel body: the three decisions the advisor needs from a
-// person. Turning it on is the first row so the feature switch is never buried;
-// the rest describe what an enabled advisor does.
+// advisorRows is the whole panel: the switch, the model, and the save control.
 var advisorRows = []configRow[setting.AdvisorSettings]{
 	{kind: rowSubHeader, label: "Review"},
-	advisorBoolRow("Advisor", "independent review of the result",
-		setting.AdvisorSettings.Enabled,
-		func(s *setting.AdvisorSettings, on bool) { s.Enable = advisorFlag(on) }),
+	{
+		kind:       rowBool,
+		label:      "Advisor",
+		note:       "one note per turn, when it has something to say",
+		indent:     2,
+		boolGetter: func(s *setting.AdvisorSettings) bool { return s.Enabled() },
+		toggle: func(s *setting.AdvisorSettings) {
+			on := !s.Enabled()
+			s.Enable = &on
+		},
+	},
 	{
 		kind:    rowEntry,
 		label:   "Model",
@@ -224,15 +165,6 @@ var advisorRows = []configRow[setting.AdvisorSettings]{
 		indent:  2,
 		desc:    "who reviews",
 		summary: func(s *setting.AdvisorSettings) string { return advisorModelLabel(s) },
-	},
-	{
-		kind:      rowChoice,
-		label:     "Depth",
-		note:      "fast · standard · deep",
-		indent:    2,
-		choices:   []string{setting.AdvisorModeFast, setting.AdvisorModeStandard, setting.AdvisorModeDeep},
-		getChoice: func(s *setting.AdvisorSettings) string { return s.Mode() },
-		setChoice: func(s *setting.AdvisorSettings, v string) { s.Review.Mode = v },
 	},
 	{kind: rowSpacer},
 	{kind: rowSave, label: "Save"},

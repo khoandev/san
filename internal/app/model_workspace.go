@@ -28,6 +28,7 @@ func (m *model) changeCwd(newCwd string) {
 	// The advisor's read tools and its sidechain header name the working tree,
 	// so they follow the switch instead of pointing at the old one.
 	m.wireAdvisor()
+	m.agentAdvisorSignature = m.advisorSignature()
 	m.services.Hook.SetCwd(newCwd)
 	m.services.Hook.ExecuteAsync(hook.CwdChanged, hook.HookInput{OldCwd: oldCwd, NewCwd: newCwd})
 }

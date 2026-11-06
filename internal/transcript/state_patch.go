@@ -29,9 +29,6 @@ func (p StatePatch) applyTo(state *State) {
 	if p.Plan != nil {
 		state.Plan = p.Plan.Clone()
 	}
-	if p.AdvisorSettings != nil {
-		state.AdvisorSettings = *p.AdvisorSettings
-	}
 }
 
 // changesFrom drops unchanged fields and owns the task payload retained in the cache.
@@ -50,9 +47,6 @@ func (p StatePatch) changesFrom(current State) (*StatePatch, error) {
 	}
 	if p.Group != nil && *p.Group == current.Group {
 		p.Group = nil
-	}
-	if p.AdvisorSettings != nil && *p.AdvisorSettings == current.AdvisorSettings {
-		p.AdvisorSettings = nil
 	}
 	if p.Tasks != nil {
 		// Metadata may contain nested application values; own their durable JSON form.
@@ -87,7 +81,7 @@ func (p StatePatch) changesFrom(current State) (*StatePatch, error) {
 		}
 	}
 	if p.Model == nil && p.Title == nil && p.LastPrompt == nil && p.Mode == nil && p.AutoPilot == nil && p.Group == nil && p.Tasks == nil &&
-		p.Plan == nil && p.AdvisorSettings == nil {
+		p.Plan == nil {
 		return nil, nil
 	}
 	return &p, nil

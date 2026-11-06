@@ -1,9 +1,8 @@
-// The /settings Advisor panel: the live session seed, the scope control, the
-// dirty indicator and the save that hands the config to the app.
+// The /settings Advisor panel: the on/off switch, the model picker, the scope
+// control, the dirty indicator and the save that hands the config to the app.
 //
-// The panel itself never touches the session or the transcript — it writes
-// the user/project file and emits AdvisorConfigSavedMsg. These tests pin that
-// boundary down, so the app-level tests can own the rest.
+// The panel itself never touches the session — it writes the user/project file
+// and emits AdvisorConfigSavedMsg. These tests pin that boundary down.
 package input
 
 import (
@@ -55,42 +54,6 @@ func TestAdvisorTabIsInSettings(t *testing.T) {
 	}
 }
 
-// The shell hands the panel this session's config before it opens, so even a
-// panel reached by switching tabs edits the live pin rather than the file.
-func TestAdvisorPanelTakesTheLiveConfigFromThePopup(t *testing.T) {
-	c := NewSettingsSelector(nil)
-	off := false
-	c.SetAdvisorConfig(setting.AdvisorSettings{Enable: &off})
-	c.Enter(120, 40)
-	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab}) // appearance → permissions
-	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab}) // permissions → advisor
-	p, ok := c.ActivePanel().(*advisorPanel)
-	if !ok {
-		t.Fatalf("active panel = %T, want the advisor panel", c.ActivePanel())
-	}
-	if p.form.snap.Enabled() {
-		t.Fatal("the panel ignored the config the shell pushed in")
-	}
-}
-
-// The panel edits this session's live config — the pin it is running with —
-// not the file it was seeded from.
-func TestAdvisorPanelSeedsFromTheLiveSession(t *testing.T) {
-	on := true
-	settings := setting.New(&setting.Data{Advisor: setting.AdvisorSettings{Enable: &on}})
-	p := newAdvisorPanel(settings)
-	off := false
-	p.SetLive(setting.AdvisorSettings{Enable: &off})
-	p.Enter()
-
-	if p.form.snap.Enabled() {
-		t.Fatal("the panel ignored the session's live config")
-	}
-	if p.Dirty() {
-		t.Fatal("a panel seeded from the live config starts clean")
-	}
-}
-
 // Entering seeds the working copy and the unsaved-edits marker follows it.
 func TestAdvisorPanelToggleMarksDirty(t *testing.T) {
 	p := newTestAdvisorPanel(t)
@@ -115,8 +78,7 @@ func TestAdvisorPanelToggleMarksDirty(t *testing.T) {
 	}
 }
 
-// ←→ cycles the save scope through user, project and this session, wrapping at
-// either end.
+// ←→ cycles the save scope through user and project, wrapping at either end.
 func TestAdvisorPanelCyclesScopes(t *testing.T) {
 	p := newTestAdvisorPanel(t)
 	if p.form.scope != scopeUser {
@@ -127,10 +89,9 @@ func TestAdvisorPanelCyclesScopes(t *testing.T) {
 		want configScope
 	}{
 		{tea.KeyPressMsg{Code: tea.KeyRight}, scopeProject},
-		{tea.KeyPressMsg{Code: tea.KeyRight}, scopeSession},
 		{tea.KeyPressMsg{Code: tea.KeyRight}, scopeUser},   // wrap
-		{tea.KeyPressMsg{Code: tea.KeyLeft}, scopeSession}, // wrap back
-		{tea.KeyPressMsg{Code: tea.KeyLeft}, scopeProject},
+		{tea.KeyPressMsg{Code: tea.KeyLeft}, scopeProject}, // wrap back
+		{tea.KeyPressMsg{Code: tea.KeyLeft}, scopeUser},
 	}
 	for i, step := range steps {
 		p.HandleKey(step.key)
@@ -211,36 +172,8 @@ func TestAdvisorPanelSaveWritesTheProjectFile(t *testing.T) {
 	}
 }
 
-// A session-scope save writes no file: the message carries the pin, the app
-// applies it and the transcript keeps it.
-func TestAdvisorPanelSessionSaveWritesNoFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	p := newTestAdvisorPanel(t)
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeySpace}) // advisor on
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight}) // user → project
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight}) // project → session
-	if p.form.scope != scopeSession {
-		t.Fatalf("scope = %q, want session", p.form.scope)
-	}
-	moveToSave(t, p)
-	cmd, done := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !done || cmd == nil {
-		t.Fatal("saving at session scope should close and emit a message")
-	}
-	msg, ok := cmd().(AdvisorConfigSavedMsg)
-	if !ok || msg.Scope != AdvisorScopeSession || !msg.Config.Enabled() {
-		t.Fatalf("message = %#v, want a session pin with the advisor on", cmd())
-	}
-	if _, err := os.Stat(filepath.Join(home, ".san", "settings.json")); !os.IsNotExist(err) {
-		t.Fatalf("a session save must not write a file (stat err = %v)", err)
-	}
-}
-
-// The panel renders at every width the popup can give it, names its sections,
-// and shows the scope control.
+// The panel renders at every width the popup can give it, and names its two
+// decisions plus the scope control.
 func TestAdvisorSettingsPanelRendersAtEveryWidth(t *testing.T) {
 	p := newTestAdvisorPanel(t)
 	for _, width := range []int{40, 60, 80, 120} {
@@ -253,15 +186,12 @@ func TestAdvisorSettingsPanelRendersAtEveryWidth(t *testing.T) {
 		}
 	}
 	body := p.Render(100, 60)
-	// The tab is three decisions: on/off, the review model, and the depth. The
-	// advanced knobs live in settings.json, and the footer says so.
-	for _, want := range []string{"REVIEW", "Advisor", "MODEL", "Depth", "session model", "settings.json"} {
+	for _, want := range []string{"REVIEW", "Advisor", "MODEL", "session model"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("panel body is missing %q", want)
 		}
 	}
-
-	for _, scope := range []string{"user", "project", "session"} {
+	for _, scope := range []string{"user", "project"} {
 		if !strings.Contains(body, scope) {
 			t.Errorf("panel body is missing scope %q", scope)
 		}
@@ -269,8 +199,7 @@ func TestAdvisorSettingsPanelRendersAtEveryWidth(t *testing.T) {
 }
 
 // Every row stays inside the narrowest card the popup hands a panel: the notes
-// that do not fit are dropped rather than clipped, and the footer wraps instead
-// of running past the edge.
+// that do not fit are dropped rather than clipped.
 func TestAdvisorPanelFitsTheNarrowestCard(t *testing.T) {
 	p := newTestAdvisorPanel(t)
 	for _, width := range []int{40, 60, 120} {
@@ -307,14 +236,14 @@ func TestAdvisorPanelPicksAModel(t *testing.T) {
 	if crumb := p.Breadcrumb(); crumb != "Model › anthropic" {
 		t.Fatalf("breadcrumb = %q, want the provider's models", crumb)
 	}
-	// Anthropic's models are sorted as given: sonnet, then haiku.
+	// Anthropic's models are listed as given: sonnet, then haiku.
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if p.picking {
 		t.Fatal("a completed pick closes the picker")
 	}
-	if got := p.form.snap.Model.Model; got != "anthropic/claude-haiku-4-5" {
+	if got := p.form.snap.Model; got != "anthropic/claude-haiku-4-5" {
 		t.Fatalf("model = %q, want the picked ref", got)
 	}
 	if !p.Dirty() {
@@ -339,7 +268,23 @@ func TestAdvisorPanelModelPickerEscBacksOut(t *testing.T) {
 	if p.picking {
 		t.Fatal("esc on the provider list should close the picker")
 	}
-	if p.form.snap.Model.Model != "" {
-		t.Fatalf("model = %q, want it untouched", p.form.snap.Model.Model)
+	if p.form.snap.Model != "" {
+		t.Fatalf("model = %q, want it untouched", p.form.snap.Model)
+	}
+}
+
+// The planner seeds the panel from the settings file it was built over, which
+// is what an existing config looks like when /settings opens.
+func TestAdvisorPanelSeedsFromTheSettingsFile(t *testing.T) {
+	on := true
+	settings := setting.New(&setting.Data{Advisor: setting.AdvisorSettings{Enable: &on, Model: "openai/gpt-5"}})
+	p := newAdvisorPanel(settings)
+	p.Enter()
+
+	if !p.form.snap.Enabled() || p.form.snap.Model != "openai/gpt-5" {
+		t.Fatalf("panel seeded %+v, want the file's config", p.form.snap)
+	}
+	if p.Dirty() {
+		t.Fatal("a panel seeded from the file starts clean")
 	}
 }

@@ -89,13 +89,6 @@ type Step struct {
 	Attempts     int        `json:"attempts,omitempty"`
 	StartedAt    time.Time  `json:"startedAt,omitempty"`
 	FinishedAt   time.Time  `json:"finishedAt,omitempty"`
-	// AdvisorReviewID names the independent review that inspected this step's
-	// result, and NeedsReview carries the severity it refused. A step can be
-	// StepCompleted — the work was done and reported — and still carry both:
-	// the review changes how the completion reads, not what happened. Empty for
-	// steps no review refused.
-	AdvisorReviewID string `json:"advisorReviewId,omitempty"`
-	NeedsReview     string `json:"needsReview,omitempty"`
 }
 
 // Done reports whether the step needs no more work.
@@ -231,8 +224,6 @@ func (s *Step) Normalize() {
 	if s.Status == "" {
 		s.Status = StepPending
 	}
-	s.AdvisorReviewID = strings.TrimSpace(s.AdvisorReviewID)
-	s.NeedsReview = strings.TrimSpace(s.NeedsReview)
 }
 
 // repairCursor keeps StepIndex on an unfinished step when the plan is still

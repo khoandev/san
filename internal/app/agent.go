@@ -256,11 +256,6 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		agent.ResultPager{Store: owner.Store, SessionID: owner.Session.ID()}.Filter,
 		m.memoryRecall.current.Load,
 	)
-	// The pre-merge review sits in the permission path: a merge-like command is
-	// refused before it runs when the advisor finds a blocking issue. The
-	// resolver is read per call because the advisor is re-wired after this
-	// runtime is built.
-	params.MergeGate = m.mergeGateResolver()
 	return params, nil
 }
 
@@ -425,8 +420,10 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 		// are covered uniformly.
 		if m.selfLearnCapabilities() == m.agentEvolveCaps &&
 			m.disabledToolsSignature() == m.agentDisabledToolsSignature &&
-			m.autoMemory() == m.agentAutoMemory &&
-			m.advisorSignature() == m.agentAdvisorSignature {
+			m.autoMemory() == m.agentAutoMemory {
+			// The advisor is not part of the agent's build, so a settings edit
+			// or an /advisor toggle rewires just it.
+			m.syncAdvisor()
 			return nil, nil
 		}
 		if err := m.StopAgentRuntime(); err != nil {
@@ -642,7 +639,6 @@ func (m *model) ResetAgentRuntime() error {
 	// context and drop its review history, so nothing from the old session is
 	// published or persisted into the new one.
 	m.teardownAdvisor()
-	m.services.Advisor.Store.Reset()
 	m.env.Advisor = setting.AdvisorSettings{}
 	if m.services.Setting != nil {
 		m.env.Advisor = m.services.Setting.Advisor()

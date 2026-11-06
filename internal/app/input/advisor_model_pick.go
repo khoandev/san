@@ -177,11 +177,8 @@ func (p *advisorModelPick) crumb() string {
 // advisorModelLabel is the Model row's value: the pinned ref, or the session
 // model when nothing is pinned.
 func advisorModelLabel(s *setting.AdvisorSettings) string {
-	if s.Model.Model == "" {
+	if s.Model == "" {
 		return sessionModelLabel
 	}
-	if s.Model.ThinkingEffort == "" {
-		return s.Model.Model
-	}
-	return s.Model.Model + " · " + s.Model.ThinkingEffort
+	return s.Model
 }

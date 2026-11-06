@@ -357,40 +357,6 @@ func BenchmarkPlanPanelRender(b *testing.B) {
 	}
 }
 
-// A completion a review refused must not read as a clean one: the step keeps its
-// completion, but the panel marks the row, names the severity and the review, and
-// points at the panel that holds the findings.
-func TestPlanPanelShowsRefusedCompletion(t *testing.T) {
-	p := NewPlanPanel()
-	refused := panelPlan("plan-refused", "Reviewed", "wire the gate", "next")
-	refused.Status = plan.StatusExecuting
-	refused.Steps[0].Status = plan.StepCompleted
-	refused.Steps[0].Result = "wired it"
-	refused.Steps[0].AdvisorReviewID = "review-7"
-	refused.Steps[0].NeedsReview = "P0"
-	refused.StepIndex = 1
-	refused.Paused = true
-	p.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{refused}, ActiveID: refused.ID}, 120, 40)
-
-	view := p.Render()
-	for _, want := range []string{"NEEDS REVIEW", "P0", "review-7", "/advisor", "1 needs review", "Resume"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("panel is missing %q:\n%s", want, view)
-		}
-	}
-	if strings.Contains(view, "✓ 1. wire the gate") {
-		t.Fatalf("a refused completion still reads as a clean one:\n%s", view)
-	}
-
-	// A clean plan says nothing about reviews, so the section never takes room
-	// from an ordinary plan.
-	clean := NewPlanPanel()
-	clean.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{runningStep()}, ActiveID: "plan-run"}, 120, 40)
-	if strings.Contains(clean.Render(), "NEEDS REVIEW") {
-		t.Fatalf("a clean plan rendered the refusal section:\n%s", clean.Render())
-	}
-}
-
 // Execute new plan carries a context choice: keep the planning conversation,
 // summarize it first, or start a new session. The panel owns the choice and
 // sends it with the action; c cycles it while a plan is ready to run.

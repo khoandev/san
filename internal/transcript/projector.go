@@ -96,34 +96,10 @@ func projectRecords(records iter.Seq2[Record, error], resume bool) (*Transcript,
 			if r.Notice != nil {
 				t.Notices = append(t.Notices, *r.Notice)
 			}
-		case AdvisorReviewed:
-			if r.AdvisorReview == nil {
-				return nil, fmt.Errorf("advisor review payload is required")
-			}
-			state, _, err := t.State.Advisor.Append(*r.AdvisorReview)
-			if err != nil {
-				return nil, fmt.Errorf("advisor review: %w", err)
-			}
-			t.State.Advisor = state
-			if t.UpdatedAt.Before(r.Time) {
-				t.UpdatedAt = r.Time
-			}
-		case AdvisorFindingUpdated:
-			if r.AdvisorFinding == nil {
-				return nil, fmt.Errorf("advisor finding payload is required")
-			}
-			update := r.AdvisorFinding
-			state, err := t.State.Advisor.UpdateFinding(update.ReviewID, update.FindingID, update.Status, update.Note, update.UpdatedAt)
-			if err != nil {
-				// A move that names a review the log does not hold is dropped
-				// rather than failing the session: a resume must open the
-				// conversation even when a record went missing.
-				continue
-			}
-			t.State.Advisor = state
-			if t.UpdatedAt.Before(r.Time) {
-				t.UpdatedAt = r.Time
-			}
+		case AdvisorReviewed, AdvisorFindingUpdated:
+			// Legacy records from the gated advisor: retained so an old
+			// session replays, but they carry no current state.
+			continue
 		case SessionCompacted:
 			if t.ID == "" {
 				t.ID = r.SessionID

@@ -158,14 +158,9 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 			}
 			history = append(history, line)
 		}
-		needsReview, reviewID := "", ""
-		if severity, id, reviewRefused := todo.NeedsReview(tracked[info.ID]); reviewRefused {
-			needsReview, reviewID = severity, id
-		}
 		items = append(items, input.TaskViewItem{
 			ID: info.ID, AgentName: owner, Description: info.Description,
 			Subject: info.Description, Status: info.Status, Progress: progress,
-			NeedsReview: needsReview, ReviewID: reviewID,
 			Output: output, Error: info.Error, OutputTruncated: truncated,
 			OutputFile: info.OutputFile, Recorded: recorded[info.ID],
 			CanContinue: canContinueTask(info), Attempt: info.Attempt, SessionID: info.AgentSessionID, Attempts: strings.Join(history, "\n"),

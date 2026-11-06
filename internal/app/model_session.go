@@ -150,9 +150,6 @@ func (m *model) buildSessionRecord() *transcript.Record {
 			// The plan is session state, like the tasks: no file of its own, and
 			// a resume restores the plan, its progress and its panel from here.
 			Plan: new(m.plan.Snapshot()),
-			// The advisor override travels with the session, so a session that
-			// turned the review layer off stays off when it is resumed.
-			AdvisorSettings: new(marshalAdvisor(m.env.Advisor)),
 		}}
 }
 
@@ -228,23 +225,11 @@ func (m *model) restoreHistory(sess *session.History) {
 	// the session produced, and the step the executor stopped on.
 	m.restorePlanState(sess.Plan)
 
-	// The advisor's verdicts and its settings override belong to the
-	// conversation too: restore both so a resumed session shows the reviews it
-	// already ran and keeps the review layer it had.
-	m.services.Advisor.Store.Restore(sess.Advisor)
+	// The advisor is session state only in the sense that /advisor can pin it
+	// for this conversation: a resume starts from the settings file again.
 	m.env.Advisor = setting.AdvisorSettings{}
 	if m.services.Setting != nil {
 		m.env.Advisor = m.services.Setting.Advisor()
-	}
-	if overridden := parseAdvisor(sess.AdvisorSettings); !overridden.IsZero() {
-		m.env.Advisor = overridden
-	}
-	m.services.Advisor.Indicator.Reset()
-	// The badge and the panel read the indicator, so hand the resumed history's
-	// last verdict to it; otherwise a resumed session shows no advisor state at
-	// all until the next review runs.
-	if latest, ok := sess.Advisor.Latest(); ok {
-		m.services.Advisor.Indicator.Adopt(latest)
 	}
 
 	// Session-specific settings never inherit the previous conversation's goal.

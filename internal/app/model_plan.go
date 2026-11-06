@@ -16,7 +16,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"go.uber.org/zap"
 
-	"github.com/genai-io/san/internal/advisor"
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/core"
@@ -189,44 +188,21 @@ func (m *model) onExecuteModeTurn(result core.Result) tea.Cmd {
 		outcome = plan.StepResult{Status: plan.StepBlocked, Reason: "the step ended without a plan-step report"}
 	}
 
-	// A step that claims completion is reviewed before it is recorded, so the
-	// plan never shows a clean completion the advisor then takes back. The
-	// review runs off this goroutine and returns through planStepReviewedMsg,
-	// which finishes the turn exactly as the code below would have.
-	if cmd := m.reviewPlanStep(step, outcome); cmd != nil {
-		return cmd
-	}
-	return m.recordStepOutcome(step, outcome, advisor.Review{}, false)
-}
-
-// onPlanStepReviewed finishes a step turn whose review has returned.
-func (m *model) onPlanStepReviewed(msg planStepReviewedMsg) tea.Cmd {
-	return m.recordStepOutcome(msg.step, msg.outcome, msg.review, msg.found)
+	return m.recordStepOutcome(step, outcome)
 }
 
 // recordStepOutcome records how a step ended and decides what runs next: the
-// next step, or the panel. A verdict the block policy refuses is applied first,
-// so a refused completion pauses the plan instead of walking into the next step.
-func (m *model) recordStepOutcome(step plan.Step, outcome plan.StepResult, review advisor.Review, reviewed bool) tea.Cmd {
+// next step, or the panel.
+func (m *model) recordStepOutcome(step plan.Step, outcome plan.StepResult) tea.Cmd {
 	advanced, completeErr := m.plan.CompleteStep(outcome)
 	if completeErr != nil {
 		m.syncPlanPermissions()
 		return nil
 	}
-	paused := false
-	if reviewed {
-		paused = m.applyStepReview(step, review)
-	}
 	m.syncPlanPermissions()
 	if !advanced {
 		m.showPlanPanel()
 		m.conv.AddNotice(stepOutcomeNotice(outcome))
-		return tea.Batch(m.CommitMessages()...)
-	}
-	if paused {
-		// Nothing advances while a review holds the plan; the person resumes
-		// from the panel once the finding is dealt with.
-		m.persistPlan()
 		return tea.Batch(m.CommitMessages()...)
 	}
 	return func() tea.Msg { return planAdvanceMsg{} }

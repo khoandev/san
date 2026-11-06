@@ -53,7 +53,7 @@ func builtinCommands() []Info {
 		{Name: "search", Description: "Select search engine for web search"},
 		{Name: "settings", Description: "Configure appearance, permissions and other settings"},
 		{Name: "plan", Description: "Plan Mode: plan read-only, then run the approved plan (/plan [prompt])"},
-		{Name: "advisor", Description: "Report the advisor's state, or review the working tree now (/advisor [review|status])"},
+		{Name: "advisor", Description: "Show the advisor's state, or turn it on or off for this session (/advisor [on|off|status])"},
 		{Name: "evolve", Description: "Configure self-learning (skills & memory)"},
 		{Name: "autopilot", Description: "Configure the autopilot copilot (steers, system prompt, mission)"},
 		{Name: "goal", Description: "State a goal and let autopilot drive until it's met (/goal <text>, /goal clear)"},

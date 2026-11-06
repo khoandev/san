@@ -494,7 +494,6 @@ func (p *PlanPanel) renderBody() string {
 	// Risks, decisions and open questions are what a person reads *before*
 	// approving. Once the executor is running they are history; the steps and
 	// the current step are the only things worth the rows.
-	p.refused(&b, focused)
 	if p.canEdit() {
 		p.list(&b, "Open questions", focused.OpenQuestions)
 		p.list(&b, "Risks", focused.Risks)
@@ -602,39 +601,6 @@ func (p *PlanPanel) contextLine() string {
 	return line + "\n\n"
 }
 
-// refused renders completions an independent review refused. The step keeps its
-// completion — the work was done — and this section is where the refusal reads:
-// the severity, the review that found it, and where its findings live.
-func (p *PlanPanel) refused(b *strings.Builder, pl plan.Plan) {
-	refused := refusedSteps(pl)
-	if len(refused) == 0 {
-		return
-	}
-	fmt.Fprintf(b, "%s\n", planSectionStyle.Render("NEEDS REVIEW"))
-	for _, step := range refused {
-		line := fmt.Sprintf("  %s %s %s", planWarnStyle.Render("!"),
-			planWarnStyle.Render(step.NeedsReview),
-			kit.TruncateText(step.Title, max(16, p.innerWidth()-24)))
-		if step.AdvisorReviewID != "" {
-			line += apSummaryStyle.Render(" · " + step.AdvisorReviewID)
-		}
-		line += apSummaryStyle.Render(" · open /advisor")
-		b.WriteString(line + "\n")
-	}
-}
-
-// refusedSteps returns the completed steps whose result a review refused, oldest
-// first.
-func refusedSteps(pl plan.Plan) []plan.Step {
-	var out []plan.Step
-	for _, step := range pl.Steps {
-		if step.NeedsReview != "" {
-			out = append(out, step)
-		}
-	}
-	return out
-}
-
 func (p *PlanPanel) list(b *strings.Builder, label string, items []string) {
 	if len(items) == 0 {
 		return
@@ -659,9 +625,6 @@ func (p *PlanPanel) steps(pl plan.Plan) string {
 	if blocked > 0 {
 		head += fmt.Sprintf(" · %d blocked", blocked)
 	}
-	if refused := len(refusedSteps(pl)); refused > 0 {
-		head += fmt.Sprintf(" · %d needs review", refused)
-	}
 	b.WriteString(planSectionStyle.Render(head))
 	b.WriteString("\n")
 	for i, step := range pl.Steps {
@@ -680,9 +643,6 @@ func (p *PlanPanel) steps(pl plan.Plan) string {
 		if step.Status == plan.StepBlocked && step.BlockReason != "" {
 			line += apSummaryStyle.Render(" — " + kit.TruncateText(step.BlockReason, max(16, p.innerWidth()-lipgloss.Width(line)-6)))
 		}
-		if step.NeedsReview != "" {
-			line += planWarnStyle.Render(" — needs review " + step.NeedsReview)
-		}
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
@@ -695,11 +655,6 @@ func (p *PlanPanel) stepRows() int {
 }
 
 func stepMark(step plan.Step, current bool) (string, lipgloss.Style) {
-	// A refused completion is not a clean one: it gets the warning mark whether
-	// or not it is the step in focus.
-	if step.NeedsReview != "" {
-		return "!", planWarnStyle
-	}
 	if current {
 		switch step.Status {
 		case plan.StepBlocked:
@@ -780,9 +735,6 @@ func statusLine(pl plan.Plan) string {
 	}
 	if pl.AwaitingStepChoice {
 		line += " · waiting for your call on the current step"
-	}
-	if refused := refusedSteps(pl); len(refused) > 0 {
-		line += " · needs review " + refused[0].NeedsReview
 	}
 	return line
 }

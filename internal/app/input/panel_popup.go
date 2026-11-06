@@ -116,18 +116,6 @@ func (c *PanelPopup) applyModelSource() {
 	}
 }
 
-// SetAdvisorConfig hands the Advisor panel this session's live config. The app
-// pushes it before opening /settings: the session may have pinned its own
-// advisor config, and that pin — not the settings file — is what it is running
-// with.
-func (c *PanelPopup) SetAdvisorConfig(cfg setting.AdvisorSettings) {
-	for _, p := range c.panels {
-		if ap, ok := p.(*advisorPanel); ok {
-			ap.SetLive(cfg)
-		}
-	}
-}
-
 // Enter activates the popup, re-focusing whichever panel was last open (the
 // index survives between openings, so /settings reopens where you left it).
 func (c *PanelPopup) Enter(width, height int) {

@@ -442,50 +442,6 @@ func (s *Store) advanceLocked(active *Plan) bool {
 	return false
 }
 
-// MarkStepNeedsReview records that an independent review refused a completed
-// step's result. The step keeps StepCompleted — the work was done and reported —
-// but it no longer reads as a clean completion, and an executing plan pauses so
-// the executor cannot walk past the finding into the next step. Resuming is the
-// human's call.
-func (s *Store) MarkStepNeedsReview(stepID, reviewID, severity string) error {
-	if s == nil {
-		return ErrNoPlan
-	}
-	stepID = strings.TrimSpace(stepID)
-	reviewID = strings.TrimSpace(reviewID)
-	severity = strings.TrimSpace(severity)
-	if stepID == "" || severity == "" {
-		return fmt.Errorf("a step and a severity are required")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	active := s.activeLocked()
-	if active == nil {
-		return ErrNoPlan
-	}
-	for i := range active.Steps {
-		step := &active.Steps[i]
-		if step.ID != stepID {
-			continue
-		}
-		if step.Status != StepCompleted {
-			return fmt.Errorf("step %s is %s, not completed", stepID, step.Status)
-		}
-		step.AdvisorReviewID = reviewID
-		step.NeedsReview = severity
-		if active.Status == StatusExecuting {
-			active.Paused = true
-		}
-		message := "Advisor found " + severity + " in step " + step.Title + "; execution paused"
-		if reviewID != "" {
-			message = "Advisor review " + reviewID + " found " + severity + " in step " + step.Title + "; execution paused"
-		}
-		active.AddLog("step_review", stepID, message)
-		return nil
-	}
-	return fmt.Errorf("no step %s in the active plan", stepID)
-}
-
 // SkipStep skips the current step. It is allowed while a step is blocked or
 // awaiting a choice, and while a step is in progress only after a pause.
 func (s *Store) SkipStep() error {

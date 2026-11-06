@@ -115,14 +115,10 @@ type SlashCommandEnv struct {
 	// and with a prompt it also starts planning that request. The app owns the
 	// plan store and the Execution Panel, so the command only reports back.
 	PlanCommand func(prompt string) (string, tea.Cmd)
-	// AdvisorCommand runs /advisor: it reports the review layer's state, or
-	// starts a review of the working tree. The app owns the review runner, so
-	// the command only reports back.
+	// AdvisorCommand runs /advisor: it reports whether the advisor is on and
+	// which model reviews, or turns it on or off for this session. The app owns
+	// the advisor, so the command only reports back.
 	AdvisorCommand func(args string) (string, tea.Cmd)
-	// AdvisorConfig is this session's live advisor config, handed to the
-	// /settings Advisor panel when it opens. The session may have pinned its
-	// own config, and that pin — not the settings file — is what it runs with.
-	AdvisorConfig func() setting.AdvisorSettings
 }
 
 type SlashCommandController struct {
@@ -186,9 +182,8 @@ func (c *SlashCommandController) handlePlanCommand(_ context.Context, args strin
 	return result, cmd, nil
 }
 
-// handleAdvisorCommand reports the global advisor's state, or asks it to review
-// the working tree now. The callback owns the wording; the browsing panel
-// arrives with the advisor UI step.
+// handleAdvisorCommand reports the advisor's state, or flips it for this
+// session. The callback owns the wording.
 func (c *SlashCommandController) handleAdvisorCommand(_ context.Context, args string) (string, tea.Cmd, error) {
 	if c.env.AdvisorCommand == nil {
 		return "The advisor is unavailable.", nil, nil
@@ -435,11 +430,6 @@ func (c *SlashCommandController) handleResumeCommand(_ context.Context, _ string
 // handleSettingsCommand opens the /settings popup (Appearance, Permissions,
 // Advisor and General). Self-learning lives in its own /evolve popup.
 func (c *SlashCommandController) handleSettingsCommand(_ context.Context, _ string) (string, tea.Cmd, error) {
-	// The Advisor panel edits the session's live config rather than the file
-	// it was seeded from, so push it in before Enter() reads it.
-	if c.env.AdvisorConfig != nil {
-		c.env.Input.Settings.SetAdvisorConfig(c.env.AdvisorConfig())
-	}
 	c.env.Input.Settings.Enter(c.env.Width, c.env.Height)
 	return "", nil, nil
 }

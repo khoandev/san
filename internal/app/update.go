@@ -85,7 +85,6 @@ func (m *model) overlayPanels() []overlayPanel {
 		&m.userInput.Autopilot,
 		&m.userInput.Evolve,
 		&m.userInput.Plan,
-		&m.userInput.Advisor,
 		&m.userInput.Transcript,
 		&m.userInput.Tasks,
 	}
@@ -230,14 +229,10 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case input.PlanActionMsg:
 		return m, m.handlePlanAction(msg)
-	case input.AdvisorActionMsg:
-		return m, m.handleAdvisorAction(msg)
 	case input.PlanEditSavedMsg:
 		return m, m.applyPlanEdit(msg.Plan)
 	case planAdvanceMsg:
 		return m, m.planNextStep()
-	case planStepReviewedMsg:
-		return m, m.onPlanStepReviewed(msg)
 	case input.TaskStopMsg:
 		return m, m.stopViewedTask(msg)
 	case input.TaskContinueMsg:
@@ -375,9 +370,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case input.AdvisorConfigSavedMsg:
-		// The panel wrote the user/project file (or handed over the session pin);
-		// the app owns the rest — the live config, the transcript record and the
-		// runner that has to pick the new values up.
+		// The panel wrote the user/project file; the app owns the live config and
+		// the rewiring a changed one forces.
 		return m, m.handleAdvisorConfigSaved(msg)
 	case input.ThemeSavedMsg:
 		// The panel already applied (kit.InitTheme) and persisted the theme;
@@ -634,10 +628,6 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.onRecapReady(msg)
 	case selfLearnStartedMsg:
 		return m, m.onSelfLearnStarted()
-	case advisorChangedMsg:
-		return m, m.onAdvisorChanged()
-	case advisorTaskMsg:
-		return m, m.onAdvisorTask(msg.info)
 	case selflearnTickMsg:
 		return m, m.handleSelflearnTick()
 	}

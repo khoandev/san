@@ -586,7 +586,6 @@ func (m model) renderModeStatus() string {
 		GroupHold:         m.groupHolds(),
 		GroupWaiting:      len(m.grp.announced),
 		GroupApproval:     m.membersAwaitingApproval(),
-		Advisor:           m.advisorBadge(),
 	})
 }
 
