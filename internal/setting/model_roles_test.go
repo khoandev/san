@@ -288,6 +288,265 @@ func TestModelRoleValidation(t *testing.T) {
 	}
 }
 
+// TestMergeModelRoleEffortsPerKey pins the layering rule for efforts: the two
+// maps merge independently, so a project may set the depth of the roles it
+// cares about without erasing the user's bindings or the user's efforts.
+func TestMergeModelRoleEffortsPerKey(t *testing.T) {
+	base := NewData()
+	base.ModelRoles = map[string]string{"smol": "user-smol"}
+	base.ModelRoleEfforts = map[string]string{"smol": "low", "plan": "high"}
+	overlay := NewData()
+	overlay.ModelRoleEfforts = map[string]string{"smol": "xhigh", "task": "low"}
+
+	merged := mergeSettings(base, overlay)
+	want := map[string]string{"smol": "xhigh", "plan": "high", "task": "low"}
+	if len(merged.ModelRoleEfforts) != len(want) {
+		t.Fatalf("modelRoleEfforts = %v, want %v", merged.ModelRoleEfforts, want)
+	}
+	for name, effort := range want {
+		if got := merged.ModelRoleEfforts[name]; got != effort {
+			t.Fatalf("modelRoleEfforts[%q] = %q, want %q (all: %v)", name, got, effort, merged.ModelRoleEfforts)
+		}
+	}
+	// An effort overlay says nothing about which model answers.
+	if ref := merged.ModelRoles["smol"]; ref != "user-smol" {
+		t.Fatalf("effort merge disturbed modelRoles: %q", ref)
+	}
+}
+
+// TestSettingsModelRoleEffortsAccessors covers the read paths: the accessor
+// hands out a copy, lookups fold case, and nil settings read as no bindings.
+func TestSettingsModelRoleEffortsAccessors(t *testing.T) {
+	d := NewData()
+	d.ModelRoleEfforts = map[string]string{"slow": "high", "Plan": " XHigh "}
+	s := New(d)
+
+	efforts := s.ModelRoleEfforts()
+	if efforts["slow"] != "high" || efforts["Plan"] != " XHigh " {
+		t.Fatalf("ModelRoleEfforts() = %v", efforts)
+	}
+	efforts["slow"] = "changed"
+	if s.ModelRoleEffort("slow") != "high" {
+		t.Fatal("ModelRoleEfforts() shares storage with live settings")
+	}
+	if effort := s.ModelRoleEffort("plan"); effort != "XHigh" {
+		t.Fatalf("ModelRoleEffort folded lookup = %q, want trimmed XHigh", effort)
+	}
+	if effort := s.ModelRoleEffort("  PLAN "); effort != "XHigh" {
+		t.Fatalf("ModelRoleEffort with padding = %q", effort)
+	}
+	if effort := s.ModelRoleEffort("unbound"); effort != "" {
+		t.Fatalf("unassigned effort = %q, want empty", effort)
+	}
+	if New(nil).ModelRoleEffort("slow") != "" || New(nil).ModelRoleEfforts() != nil {
+		t.Fatal("nil settings must read as no effort bindings")
+	}
+}
+
+// TestSetModelRoleEffortPersistsAndPreservesOtherSettings guards the save path:
+// the effort lands beside the model binding, unrelated settings survive, and an
+// effort can be bound for a role that inherits its model.
+func TestSetModelRoleEffortPersistsAndPreservesOtherSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	file := userSettingsFile(home)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := `{"model":"claude-x","theme":"dark","modelRoles":{"plan":"openai/gpt-5"}}`
+	if err := os.WriteFile(file, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A role with no model binding of its own still gets a depth.
+	if err := SetModelRoleEffort("PLAN", " High ", ScopeUser); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	d := readData(t, file)
+	if d.Model != "claude-x" || d.Theme != "dark" || d.ModelRoles["plan"] != "openai/gpt-5" {
+		t.Fatalf("unrelated settings clobbered: %+v", d)
+	}
+	if d.ModelRoleEfforts["plan"] != "high" {
+		t.Fatalf("modelRoleEfforts = %v, want canonical lowercase key and label", d.ModelRoleEfforts)
+	}
+
+	// Rebinding replaces the label instead of adding a second spelling.
+	if err := SetModelRoleEffort("plan", "xhigh", ScopeUser); err != nil {
+		t.Fatalf("rebind: %v", err)
+	}
+	if got := readData(t, file).ModelRoleEfforts; len(got) != 1 || got["plan"] != "xhigh" {
+		t.Fatalf("after rebind modelRoleEfforts = %v", got)
+	}
+
+	// "default" and "" both mean "use the model's own rung" and clear the key.
+	if err := SetModelRoleEffort("plan", ModelEffortDefaultRef, ScopeUser); err != nil {
+		t.Fatalf("default: %v", err)
+	}
+	if got := readData(t, file).ModelRoleEfforts; len(got) != 0 {
+		t.Fatalf("default did not clear the effort: %v", got)
+	}
+	if err := SetModelRoleEffort("plan", "low", ScopeUser); err != nil {
+		t.Fatalf("set again: %v", err)
+	}
+	if err := SetModelRoleEffort("plan", "  ", ScopeUser); err != nil {
+		t.Fatalf("empty clears: %v", err)
+	}
+	if got := readData(t, file).ModelRoleEfforts; len(got) != 0 {
+		t.Fatalf("empty effort did not clear the binding: %v", got)
+	}
+	if got := readData(t, file).ModelRoles["plan"]; got != "openai/gpt-5" {
+		t.Fatalf("clearing an effort disturbed the model binding: %q", got)
+	}
+}
+
+// TestClearModelRoleClearsEffort pins the coupling: an effort outliving its
+// role would apply to whatever model the role inherits next.
+func TestClearModelRoleClearsEffort(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := SetModelRole("reviewer", "anthropic/claude-opus-4-7", ScopeUser); err != nil {
+		t.Fatalf("set role: %v", err)
+	}
+	if err := SetModelRoleEffort("reviewer", "high", ScopeUser); err != nil {
+		t.Fatalf("set effort: %v", err)
+	}
+	if err := ClearModelRole("reviewer", ScopeUser); err != nil {
+		t.Fatalf("clear role: %v", err)
+	}
+	d := readData(t, userSettingsFile(home))
+	if _, ok := d.ModelRoles["reviewer"]; ok {
+		t.Fatalf("role survived: %v", d.ModelRoles)
+	}
+	if _, ok := d.ModelRoleEfforts["reviewer"]; ok {
+		t.Fatalf("effort survived the role it belonged to: %v", d.ModelRoleEfforts)
+	}
+}
+
+// TestModelRoleEffortValidation rejects a label that cannot be a provider
+// effort before anything reaches disk, and leaves the file byte-identical.
+func TestModelRoleEffortValidation(t *testing.T) {
+	for _, effort := range []string{"", "  ", "very high", "HIGH!", "high\nlow", "x/y"} {
+		if _, err := ModelRoleEffortName(effort); err == nil {
+			t.Errorf("ModelRoleEffortName(%q) accepted an invalid label", effort)
+		}
+	}
+	// Surrounding padding is folded, not rejected: a hand-edited " XHigh " is
+	// the same rung as "xhigh".
+	for effort, want := range map[string]string{"low": "low", " XHigh ": "xhigh", "max-2": "max-2"} {
+		if got, err := ModelRoleEffortName(effort); err != nil || got != want {
+			t.Errorf("ModelRoleEffortName(%q) = %q, %v", effort, got, err)
+		}
+	}
+	if err := ValidateModelRoleEffort("smol", "high"); err != nil {
+		t.Errorf("ValidateModelRoleEffort rejected a valid binding: %v", err)
+	}
+	if err := ValidateModelRoleEffort("Bad Name", "high"); err == nil {
+		t.Error("ValidateModelRoleEffort accepted an invalid role name")
+	}
+	if err := ValidateModelRoleEffort("smol", "high!"); err == nil {
+		t.Error("ValidateModelRoleEffort accepted an invalid label")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	file := userSettingsFile(home)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := `{"modelRoles":{"smol":"kept"}}`
+	if err := os.WriteFile(file, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetModelRoleEffort("smol", "very high", ScopeUser); err == nil {
+		t.Fatal("SetModelRoleEffort accepted an invalid label")
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != before {
+		t.Fatalf("a rejected effort touched the file: %s", data)
+	}
+}
+
+// TestModelRoleEffortsAtReadsOneScope mirrors the model-binding read: the
+// project's own efforts, canonicalized, and none inherited from the user file.
+func TestModelRoleEffortsAtReadsOneScope(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(work)
+
+	userFile := userSettingsFile(home)
+	if err := os.MkdirAll(filepath.Dir(userFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userFile, []byte(`{"modelRoleEfforts":{"smol":"low"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectFile := filepath.Join(work, ".san", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectFile, []byte(`{"modelRoleEfforts":{"Slow":"High","plan":"xhigh","Bad Name":"low"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	project := ModelRoleEffortsAt(work, ScopeProject)
+	if len(project) != 2 || project["slow"] != "high" || project["plan"] != "xhigh" {
+		t.Fatalf("project efforts = %v, want the file's bindings keyed canonically", project)
+	}
+	if _, inherited := project["smol"]; inherited {
+		t.Fatalf("project efforts include the user's smol: %v", project)
+	}
+	if user := ModelRoleEffortsAt(work, ScopeUser); len(user) != 1 || user["smol"] != "low" {
+		t.Fatalf("user efforts = %v", user)
+	}
+	if efforts := ModelRoleEffortsAt(t.TempDir(), ScopeProject); len(efforts) != 0 {
+		t.Fatalf("empty project efforts = %v", efforts)
+	}
+}
+
+// TestModelRoleEffortsJSONCompat pins backwards compatibility: a file written
+// before efforts existed loads unchanged, and a file with no efforts encodes
+// without an empty block.
+func TestModelRoleEffortsJSONCompat(t *testing.T) {
+	var d Data
+	if err := json.Unmarshal([]byte(`{"modelRoles":{"smol":"openai/gpt-5-mini"}}`), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.ModelRoles["smol"] != "openai/gpt-5-mini" || len(d.ModelRoleEfforts) != 0 {
+		t.Fatalf("legacy file decoded as modelRoles=%v efforts=%v", d.ModelRoles, d.ModelRoleEfforts)
+	}
+	if d.ModelRoleEffort("smol") != "" {
+		t.Fatal("legacy file grew an effort")
+	}
+
+	if err := json.Unmarshal([]byte(`{"modelRoleEfforts":{"smol":"low"}}`), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.ModelRoleEffort("smol") != "low" {
+		t.Fatalf("efforts did not decode: %v", d.ModelRoleEfforts)
+	}
+	if d.Clone().ModelRoleEffort("smol") != "low" {
+		t.Fatal("clone lost modelRoleEfforts")
+	}
+	out, err := json.Marshal(&Data{ModelRoleEfforts: map[string]string{"smol": "low"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != `{"modelRoleEfforts":{"smol":"low"}}` {
+		t.Fatalf("encoded as %s", out)
+	}
+	if out, err := json.Marshal(&Data{ModelRoles: map[string]string{"smol": "inherit"}}); err != nil || string(out) != `{"modelRoles":{"smol":"inherit"}}` {
+		t.Fatalf("a modelRoles-only file encoded as %s, %v", out, err)
+	}
+}
+
 // TestModelRolesJSONRoundTrip keeps the on-disk spelling stable: hand-written
 // settings.json is the supported way to bind roles outside a panel.
 func TestModelRolesJSONRoundTrip(t *testing.T) {

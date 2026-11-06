@@ -65,13 +65,21 @@ type Data struct {
 	// an "@role", "vendor/model" or bare model id, and "inherit" or absent
 	// means the role follows the session model. Read via Settings.ModelRoles;
 	// only llm decides what a reference resolves to.
-	ModelRoles     map[string]string `json:"modelRoles,omitempty"`
-	Hooks          map[string][]Hook `json:"hooks,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	EnabledPlugins map[string]bool   `json:"enabledPlugins,omitempty"`
-	DisabledTools  map[string]bool   `json:"disabledTools,omitempty"`
-	Theme          string            `json:"theme,omitempty"`
-	SearchProvider string            `json:"searchProvider,omitempty"`
+	ModelRoles map[string]string `json:"modelRoles,omitempty"`
+	// ModelRoleEfforts binds a reasoning effort to a routing role, so a role
+	// answers at the depth its work needs without changing the session's own
+	// thinking effort. Keys are role names, canonicalized the same way as
+	// ModelRoles; a value is a provider-native effort label ("low", "high",
+	// "xhigh"). It is validated against the model the role resolves to, not
+	// here — an unknown label falls back to that model's default. Read via
+	// Settings.ModelRoleEfforts; only llm decides what an effort means.
+	ModelRoleEfforts map[string]string `json:"modelRoleEfforts,omitempty"`
+	Hooks            map[string][]Hook `json:"hooks,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	EnabledPlugins   map[string]bool   `json:"enabledPlugins,omitempty"`
+	DisabledTools    map[string]bool   `json:"disabledTools,omitempty"`
+	Theme            string            `json:"theme,omitempty"`
+	SearchProvider   string            `json:"searchProvider,omitempty"`
 	// AllowBypass gates Bypass Permissions mode. Opt-out: nil/absent means
 	// allowed (bypass is in the Shift+Tab cycle by default); set false to
 	// lock it out. Read via Settings.AllowBypass().
@@ -866,11 +874,12 @@ func (m OperationMode) NextWithBypass(enabled bool) OperationMode {
 
 func NewData() *Data {
 	return &Data{
-		Hooks:          make(map[string][]Hook),
-		Env:            make(map[string]string),
-		EnabledPlugins: make(map[string]bool),
-		DisabledTools:  make(map[string]bool),
-		ModelRoles:     make(map[string]string),
+		Hooks:            make(map[string][]Hook),
+		Env:              make(map[string]string),
+		EnabledPlugins:   make(map[string]bool),
+		DisabledTools:    make(map[string]bool),
+		ModelRoles:       make(map[string]string),
+		ModelRoleEfforts: make(map[string]string),
 	}
 }
 
@@ -944,10 +953,12 @@ func (s *Data) Clone() *Data {
 	empty := NewData() // the maps are never nil on a clone
 	dst.Env, dst.EnabledPlugins = empty.Env, empty.EnabledPlugins
 	dst.DisabledTools, dst.ModelRoles, dst.Hooks = empty.DisabledTools, empty.ModelRoles, empty.Hooks
+	dst.ModelRoleEfforts = empty.ModelRoleEfforts
 	maps.Copy(dst.Env, s.Env)
 	maps.Copy(dst.EnabledPlugins, s.EnabledPlugins)
 	maps.Copy(dst.DisabledTools, s.DisabledTools)
 	maps.Copy(dst.ModelRoles, s.ModelRoles)
+	maps.Copy(dst.ModelRoleEfforts, s.ModelRoleEfforts)
 	for event, hooks := range s.Hooks {
 		clonedHooks := make([]Hook, len(hooks))
 		for i, hook := range hooks {
@@ -992,6 +1003,28 @@ func (s *Data) ModelRole(name string) string {
 	for key, ref := range s.ModelRoles {
 		if strings.ToLower(strings.TrimSpace(key)) == name {
 			return strings.TrimSpace(ref)
+		}
+	}
+	return ""
+}
+
+// ModelRoleEffort returns the reasoning effort bound to the role name in this
+// Data, or "" when the role follows the model's own default. Lookup folds case
+// exactly like ModelRole, so a hand-edited "Slow" still answers for "slow".
+func (s *Data) ModelRoleEffort(name string) string {
+	if s == nil {
+		return ""
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	if effort, ok := s.ModelRoleEfforts[name]; ok {
+		return strings.TrimSpace(effort)
+	}
+	for key, effort := range s.ModelRoleEfforts {
+		if strings.ToLower(strings.TrimSpace(key)) == name {
+			return strings.TrimSpace(effort)
 		}
 	}
 	return ""

@@ -61,7 +61,7 @@ func (s *acpSession) configureAgents() {
 	// s.permissions holds the loaded settings for the session's CWD.
 	e.SetRoleResolver(roleResolverFor(func() llm.RoleBindings {
 		if s.permissions == nil || s.permissions.settings == nil {
-			return nil
+			return llm.RoleBindings{}
 		}
 		return llm.Bindings(s.permissions.settings.ModelRoles)
 	}, llm.Default().Store(), s.runtimeBuildParams.Provider, s.runtimeBuildParams.ModelID))

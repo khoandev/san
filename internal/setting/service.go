@@ -177,6 +177,29 @@ func (s *Settings) ModelRole(name string) string {
 	return s.data.ModelRole(name)
 }
 
+// ModelRoleEfforts returns a copy of the role→effort bindings, so a resolver
+// can hold them without reaching into live settings. A role with no binding
+// has no key and answers at its model's own default.
+func (s *Settings) ModelRoleEfforts() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data == nil || len(s.data.ModelRoleEfforts) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(s.data.ModelRoleEfforts))
+	maps.Copy(out, s.data.ModelRoleEfforts)
+	return out
+}
+
+// ModelRoleEffort returns the reasoning effort bound to the role name, or ""
+// when the role answers at its model's default. See Data.ModelRoleEffort for
+// the case-folding lookup.
+func (s *Settings) ModelRoleEffort(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.ModelRoleEffort(name)
+}
+
 func (s *Settings) SearchProvider() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

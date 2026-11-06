@@ -404,7 +404,9 @@ func SetModelRole(name, ref string, scope Scope) error {
 
 // ClearModelRole removes one role's binding at scope, returning it to the
 // session model. Other bindings and other settings in the file are untouched;
-// clearing a role that is not bound is not an error.
+// clearing a role that is not bound is not an error. The role's effort goes
+// with it: an effort without a model of its own would silently apply to
+// whatever the role inherits next.
 func ClearModelRole(name string, scope Scope) error {
 	key, err := ModelRoleName(name)
 	if err != nil {
@@ -414,6 +416,94 @@ func ClearModelRole(name string, scope Scope) error {
 		for existing := range d.ModelRoles {
 			if strings.EqualFold(strings.TrimSpace(existing), key) {
 				delete(d.ModelRoles, existing)
+			}
+		}
+		for existing := range d.ModelRoleEfforts {
+			if strings.EqualFold(strings.TrimSpace(existing), key) {
+				delete(d.ModelRoleEfforts, existing)
+			}
+		}
+	})
+}
+
+// ModelRoleEffortName normalizes an effort label for modelRoleEfforts. Labels
+// are provider-native ("low", "high", "xhigh") and case is folded, so a
+// hand-edited "High" still means high. An unknown-but-well-formed label is
+// kept: a vendor that introduces a rung must work without a san release, and
+// the resolver validates it against the model it is sent to.
+func ModelRoleEffortName(effort string) (string, error) {
+	canonical := strings.ToLower(strings.TrimSpace(effort))
+	if canonical == "" {
+		return "", fmt.Errorf("invalid effort %q: use a provider effort label such as low, medium or high", effort)
+	}
+	for _, r := range canonical {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-':
+		default:
+			return "", fmt.Errorf("invalid effort %q: use lowercase letters, digits and hyphens", effort)
+		}
+	}
+	return canonical, nil
+}
+
+// ValidateModelRoleEffort checks one effort binding: the role name and the
+// label. The label is validated by shape only — the rungs a model offers come
+// from the live catalog, and the resolver falls back to that model's default
+// when the label is not on its ladder.
+func ValidateModelRoleEffort(name, effort string) error {
+	if _, err := ModelRoleName(name); err != nil {
+		return err
+	}
+	_, err := ModelRoleEffortName(effort)
+	return err
+}
+
+// SetModelRoleEffort binds one role to a reasoning effort at scope, keeping
+// every other binding in the file. The role does not need a model binding of
+// its own: an inherited role may still ask for a different depth. An effort of
+// "" or a label equal to "default" clears the binding, which is how the UI
+// says "use the model's own default".
+func SetModelRoleEffort(name, effort string, scope Scope) error {
+	effort = strings.TrimSpace(effort)
+	if effort == "" || strings.EqualFold(effort, ModelEffortDefaultRef) {
+		return ClearModelRoleEffort(name, scope)
+	}
+	if err := ValidateModelRoleEffort(name, effort); err != nil {
+		return err
+	}
+	key, _ := ModelRoleName(name)
+	canonical, _ := ModelRoleEffortName(effort)
+	return updateSettingsFile(scope, func(d *Data) {
+		if d.ModelRoleEfforts == nil {
+			d.ModelRoleEfforts = make(map[string]string)
+		}
+		for existing := range d.ModelRoleEfforts {
+			if strings.EqualFold(strings.TrimSpace(existing), key) {
+				delete(d.ModelRoleEfforts, existing)
+			}
+		}
+		d.ModelRoleEfforts[key] = canonical
+	})
+}
+
+// ModelEffortDefaultRef is the effort spelling the pickers offer for "no
+// binding": the role answers at whatever rung the model itself defaults to.
+const ModelEffortDefaultRef = "default"
+
+// ClearModelRoleEffort removes one role's effort binding at scope, returning
+// it to the model's own default. Clearing a role that has no effort bound is
+// not an error, and the role's model binding is left untouched.
+func ClearModelRoleEffort(name string, scope Scope) error {
+	key, err := ModelRoleName(name)
+	if err != nil {
+		return err
+	}
+	return updateSettingsFile(scope, func(d *Data) {
+		for existing := range d.ModelRoleEfforts {
+			if strings.EqualFold(strings.TrimSpace(existing), key) {
+				delete(d.ModelRoleEfforts, existing)
 			}
 		}
 	})
@@ -649,6 +739,39 @@ func ModelRolesAt(cwd string, scope Scope) map[string]string {
 		}
 	}
 	return roles
+}
+
+// ModelRoleEffortsAt returns the role→effort bindings in a single settings
+// file, not the merged view — the mirror of ModelRolesAt, so the /models Roles
+// tab can mark a row whose depth comes from the project scope. Names and labels
+// are canonicalized; an entry that cannot name a role is skipped rather than
+// failing the whole read.
+func ModelRoleEffortsAt(cwd string, scope Scope) map[string]string {
+	loader := NewLoader()
+	if cwd != "" {
+		loader = NewLoaderForCwd(cwd)
+	}
+	dir := loader.dir(scope)
+	if dir == "" {
+		return nil
+	}
+	s, err := loader.LoadFile(filepath.Join(dir, "settings.json"))
+	if err != nil || s == nil || len(s.ModelRoleEfforts) == 0 {
+		return nil
+	}
+	efforts := make(map[string]string, len(s.ModelRoleEfforts))
+	for name, effort := range s.ModelRoleEfforts {
+		key, err := ModelRoleName(name)
+		if err != nil {
+			continue
+		}
+		label, err := ModelRoleEffortName(effort)
+		if err != nil {
+			continue
+		}
+		efforts[key] = label
+	}
+	return efforts
 }
 
 // LoadTheme returns the configured theme string, or "" if none is set.

@@ -20,6 +20,9 @@ func mergeSettings(base, overlay *Data) *Data {
 	// may bind the roles it cares about and leave the rest following the user's
 	// file, and a role either file assigns keeps its assignment.
 	result.ModelRoles = mergeMaps(base.ModelRoles, overlay.ModelRoles)
+	// Efforts merge per key for the same reason: a project may pin the depth
+	// of the roles it cares about and leave the rest to the user's file.
+	result.ModelRoleEfforts = mergeMaps(base.ModelRoleEfforts, overlay.ModelRoleEfforts)
 	result.Theme = coalesce(overlay.Theme, base.Theme)
 	result.Hooks = mergeHooks(base.Hooks, overlay.Hooks)
 	result.Env = mergeMaps(base.Env, overlay.Env)

@@ -282,11 +282,11 @@ func (m *model) sessionModelInfo() *llm.CurrentModelInfo {
 	return info
 }
 
-// modelRoleBindings is the live modelRoles map, or nil when settings are not
+// modelRoleBindings is the live modelRoles map, or empty when settings are not
 // wired (a bare test model) so an unassigned role simply inherits.
 func (m *model) modelRoleBindings() llm.RoleBindings {
 	if m.services.Setting == nil {
-		return nil
+		return llm.RoleBindings{}
 	}
 	return llm.Bindings(m.services.Setting.ModelRoles())
 }
