@@ -75,13 +75,14 @@ func initInfrastructure() error {
 	// Phase 5: hooks — depends on setting, session, llm, plugin
 	hookSettings := setting.Default().Snapshot()
 	plugin.MergePluginHooksIntoSettings(hookSettings)
+	hookProvider, hookModel := hookModelFor(hookSettings, llm.Default().Provider(), llm.Default().ModelID())
 	hook.Initialize(hook.Options{
 		Settings:       hookSettings,
 		SessionID:      appSessionID,
 		CWD:            appCwd,
 		TranscriptPath: appSessionStore.TranscriptPath(appSessionID),
-		Completer:      buildHookCompleter(llm.Default().Provider()),
-		ModelID:        llm.Default().ModelID(),
+		Completer:      buildHookCompleter(hookProvider),
+		ModelID:        hookModel,
 		EnvProvider:    plugin.PluginEnv,
 	})
 

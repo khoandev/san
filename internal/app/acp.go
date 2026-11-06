@@ -194,7 +194,8 @@ func (h *acpHost) open(ctx context.Context, req protocol.NewSessionRequest, resu
 	s.hooks = hook.NewEngine(settings, opened.ID(), req.CWD, opened.TranscriptPath())
 	s.hooks.SetAuditCallback(opened.RecordHookAudit)
 	s.hooks.SetEnvProvider(func(ctx context.Context) []string { return plugin.PluginEnv(plugin.WithRegistry(ctx, plugins)) })
-	s.hooks.SetLLMCompleter(buildHookCompleter(h.provider), modelID)
+	hookProvider, hookModel := hookModelFor(settings, h.provider, modelID)
+	s.hooks.SetLLMCompleter(buildHookCompleter(hookProvider), hookModel)
 	audit := func(rec transcript.Record) { _ = opened.Append(context.Background(), rec) }
 	s.permissions = &acpPermissions{SessionPermissions: setting.NewSessionPermissions(), settings: settings, audit: audit}
 	s.permissions.AddWorkingDirectory(req.CWD)

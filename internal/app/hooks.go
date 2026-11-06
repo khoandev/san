@@ -18,6 +18,7 @@ import (
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/plugin"
 	"github.com/genai-io/san/internal/session"
+	"github.com/genai-io/san/internal/setting"
 )
 
 func (m *model) fireStopFailureHook(lastAssistantContent string, err error) {
@@ -106,7 +107,49 @@ func (m *model) checkPromptHook(ctx context.Context, prompt string) (bool, strin
 func (m *model) switchProvider(p llm.Provider) {
 	m.env.LLMProvider = p
 	m.services.LLM.SetProvider(p)
-	m.services.Hook.SetLLMCompleter(buildHookCompleter(p), m.env.GetModelID())
+	m.wireHookCompleter()
+}
+
+// wireHookCompleter points prompt and agent hooks at the smol role. A hook
+// completion is a one-shot utility call, repeated for every event and invisible
+// to the conversation — exactly what a cheap role exists for. An unassigned
+// role, an unconnected vendor or settings that are not wired all leave the
+// session provider and model in charge.
+func (m *model) wireHookCompleter() {
+	provider, modelID := m.resolveRoleModel(llm.RoleSmol)
+	if provider == nil {
+		provider = m.env.LLMProvider
+	}
+	if modelID == "" {
+		modelID = m.env.GetModelID()
+	}
+	m.services.Hook.SetLLMCompleter(buildHookCompleter(provider), modelID)
+}
+
+// resolveRoleModelOver answers role from a settings snapshot and a provider
+// store, for the headless runtimes (hook init, ACP sessions) that hold a
+// *setting.Data rather than the TUI's live services. An unassigned role or an
+// unresolvable binding falls back to the caller's session model, so hook
+// completion never fails because a role is stale.
+func resolveRoleModelOver(roles llm.RoleBindings, store *llm.Store, role llm.ModelRole, fallback llm.Provider, fallbackModel string) (llm.Provider, string) {
+	target := llm.NewStoreRoleResolver(store).Resolve(context.Background(), roles, string(role), fallback, fallbackModel)
+	return target.Provider, target.ModelID
+}
+
+// hookModelFor resolves the model hooks complete on for a settings snapshot,
+// falling back to the given session model. The store comes from the default
+// connection: a headless runtime that never initialized one simply cannot route
+// a vendor-qualified binding and falls back.
+func hookModelFor(settings *setting.Data, fallback llm.Provider, fallbackModel string) (llm.Provider, string) {
+	var roles llm.RoleBindings
+	if settings != nil {
+		roles = llm.Bindings(settings.ModelRoles)
+	}
+	var store *llm.Store
+	if conn := llm.Default(); conn != nil {
+		store = conn.Store()
+	}
+	return resolveRoleModelOver(roles, store, llm.RoleSmol, fallback, fallbackModel)
 }
 
 func (m *model) refreshMemoryContext(cwd, loadReason string) {

@@ -27,10 +27,11 @@ carry its own `AGENTS.md`, and the file nearest the working directory wins.
 - `internal/app`: Bubble Tea TUI shell, model composition, event routing.
 - `internal/core`: stable agent, message, tool, and system-prompt contracts.
 - `internal/agent`: agent construction and session-facing runtime setup.
-- `internal/llm`: model provider registry, clients, cost and logging helpers.
+- `internal/llm`: model provider registry, clients, model roles (`roles.go`: catalog + resolver), cost and logging helpers.
 - `internal/tool`: built-in tool registry, schemas, adapters, and executors.
 - `internal/session`: transcript persistence, projection, metadata, resume.
 - `internal/task`, `internal/subagent`, `internal/cron`: background work and orchestration.
+- `internal/subagent/agents`: bundled agent definitions, embedded in the binary and overridden by a same-named user or project file.
 - `internal/command`, `internal/skill`, `internal/plugin`, `internal/mcp`, `internal/hook`: extension surfaces.
 - `internal/setting`, `internal/persona`: configuration and persona overlays.
 - `internal/log`, `internal/secret`, `internal/filecache`, `internal/markdown`, `internal/confdir`: infrastructure helpers.

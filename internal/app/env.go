@@ -26,6 +26,11 @@ type env struct {
 	// ── Provider (mutable — changes via SwitchProvider) ─────────
 	LLMProvider  llm.Provider
 	CurrentModel *llm.CurrentModelInfo
+	// PlanModel is the model Plan Mode actually runs on, when the plan role
+	// points somewhere other than CurrentModel. It is display-only: the session
+	// model, its persisted choice and the thinking effort stay CurrentModel's.
+	// Set and cleared by the app as Plan Mode turns on and off.
+	PlanModel *llm.CurrentModelInfo
 	// InputTokens / OutputTokens track the latest infer call only.
 	// They back the bottom-right context display, so they reflect the most
 	// recent prompt/output size rather than a turn or session aggregate.
@@ -165,11 +170,24 @@ func (m *env) GetModelID() string {
 // GetModelDisplayName returns a human-readable display name for the current
 // model by looking it up in the store's cached model list. Falls back to the
 // raw model ID if no display name is found.
+//
+// While Plan Mode runs on the plan role's model, the name is that model's with
+// a "· plan" suffix: the status line must not claim a model the runtime is not
+// using. The session model and every persisted choice are untouched.
 func (m *env) GetModelDisplayName() string {
+	if p := m.PlanModel; p != nil && p.ModelID != "" {
+		return m.modelDisplayName(p.ModelID) + " · plan"
+	}
 	id := m.GetModelID()
 	if id == "" {
 		return "no model selected"
 	}
+	return m.modelDisplayName(id)
+}
+
+// modelDisplayName is the store's name for one model id, or the id itself when
+// the store has no entry (no provider connected, or a model it has never seen).
+func (m *env) modelDisplayName(id string) string {
 	if m.store == nil {
 		return id
 	}

@@ -58,7 +58,14 @@ type Data struct {
 	Permissions PermissionSettings `json:"permissions,omitzero"`
 	Model       string             `json:"model,omitempty"`
 	// SubagentModel selects the default worker model; empty or "inherit" uses the parent.
-	SubagentModel  string            `json:"subagentModel,omitempty"`
+	SubagentModel string `json:"subagentModel,omitempty"`
+	// ModelRoles assigns a model reference to a routing role: the name a
+	// definition uses when it wants "the cheap model" without naming one.
+	// Keys are role names (lowercase letters, digits and hyphens); a value is
+	// an "@role", "vendor/model" or bare model id, and "inherit" or absent
+	// means the role follows the session model. Read via Settings.ModelRoles;
+	// only llm decides what a reference resolves to.
+	ModelRoles     map[string]string `json:"modelRoles,omitempty"`
 	Hooks          map[string][]Hook `json:"hooks,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	EnabledPlugins map[string]bool   `json:"enabledPlugins,omitempty"`
@@ -863,6 +870,7 @@ func NewData() *Data {
 		Env:            make(map[string]string),
 		EnabledPlugins: make(map[string]bool),
 		DisabledTools:  make(map[string]bool),
+		ModelRoles:     make(map[string]string),
 	}
 }
 
@@ -934,10 +942,12 @@ func (s *Data) Clone() *Data {
 	dst.BashPreviewLines = clonePtr(s.BashPreviewLines)
 	dst.AgentPreviewLines = clonePtr(s.AgentPreviewLines)
 	empty := NewData() // the maps are never nil on a clone
-	dst.Env, dst.EnabledPlugins, dst.DisabledTools, dst.Hooks = empty.Env, empty.EnabledPlugins, empty.DisabledTools, empty.Hooks
+	dst.Env, dst.EnabledPlugins = empty.Env, empty.EnabledPlugins
+	dst.DisabledTools, dst.ModelRoles, dst.Hooks = empty.DisabledTools, empty.ModelRoles, empty.Hooks
 	maps.Copy(dst.Env, s.Env)
 	maps.Copy(dst.EnabledPlugins, s.EnabledPlugins)
 	maps.Copy(dst.DisabledTools, s.DisabledTools)
+	maps.Copy(dst.ModelRoles, s.ModelRoles)
 	for event, hooks := range s.Hooks {
 		clonedHooks := make([]Hook, len(hooks))
 		for i, hook := range hooks {
@@ -962,4 +972,48 @@ func clonePtr[T any](p *T) *T {
 	}
 	v := *p
 	return &v
+}
+
+// ModelRole returns the reference bound to the role name in this Data, or ""
+// when the role is unassigned and follows the session model. Lookup folds case,
+// so a hand-edited "Slow" still fills "slow" — the same reading llm.RoleBindings
+// takes of the map.
+func (s *Data) ModelRole(name string) string {
+	if s == nil {
+		return ""
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	if ref, ok := s.ModelRoles[name]; ok {
+		return strings.TrimSpace(ref)
+	}
+	for key, ref := range s.ModelRoles {
+		if strings.ToLower(strings.TrimSpace(key)) == name {
+			return strings.TrimSpace(ref)
+		}
+	}
+	return ""
+}
+
+// ValidModelRoleName reports whether name may key modelRoles: lowercase
+// letters, digits and hyphens, starting with a letter. It mirrors
+// llm.IsRoleName — setting cannot import llm — so the two must accept the
+// same names; a role name is never a model id, which keeps the two
+// namespaces from colliding.
+func ValidModelRoleName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		case i > 0 && r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }

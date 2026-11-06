@@ -2,12 +2,14 @@ package input
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/genai-io/san/internal/app/kit"
+	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/subagent"
 )
@@ -25,7 +27,7 @@ const (
 type agentItem struct {
 	Name           string
 	Description    string
-	Model          string
+	Model          string // the model reference as configured ("@slow", "inherit")
 	PermissionMode string
 	Tools          string
 	Summary        string // compact label for the default worker
@@ -33,6 +35,13 @@ type agentItem struct {
 	PluginName     string // populated when Source == "plugin" or name has "ns:" prefix
 	Enabled        bool
 	BuiltinPreview bool // default worker description, not a toggleable definition
+
+	// EffectiveModel is the model that will answer this definition's work, and
+	// InheritedModel reports that it is the session model because the reference
+	// resolved to nothing. Both are filled from the injected AgentModelSource;
+	// empty means the list does not know, and the row shows Model as written.
+	EffectiveModel string
+	InheritedModel bool
 }
 
 // AgentToggleMsg is sent when an agent's enabled state is toggled.
@@ -41,13 +50,34 @@ type AgentToggleMsg struct {
 	Enabled   bool
 }
 
+// AgentModelSource tells the agent list which model each definition will run
+// on. The selector never reads settings or the provider store: the app owns
+// both and hands the answers in, so the list cannot drift from what the
+// executor will actually use.
+type AgentModelSource struct {
+	// Model resolves a model reference ("@slow", "vendor/model", "inherit") to
+	// the model that will answer, reporting whether the session model answered
+	// instead.
+	Model func(ref string) (string, bool)
+	// Worker returns the default worker's model reference: the subagentModel
+	// setting when set, otherwise the task role's binding. "" is the session
+	// model, which is what an unnamed worker inherits.
+	Worker func() string
+}
+
 // AgentSelector holds the state for the agent selector overlay. The tab/filter/
 // keypress/frame mechanics live in the embedded tabbedList; this type owns
 // agent loading, the row layout, and the enable/disable action.
 type AgentSelector struct {
 	registry *subagent.Registry
+	models   AgentModelSource
 	list     tabbedList[agentItem]
 }
+
+// SetModelSource injects the model resolver the list shows with. It is set
+// while the app is built, because the session model and the role bindings it
+// resolves against both change while the app runs.
+func (s *AgentSelector) SetModelSource(src AgentModelSource) { s.models = src }
 
 func NewAgentSelector(reg *subagent.Registry) AgentSelector {
 	return AgentSelector{
@@ -62,10 +92,12 @@ func NewAgentSelector(reg *subagent.Registry) AgentSelector {
 			preferred:   []int{int(agentTabProject), int(agentTabUser), int(agentTabBuiltin)},
 			noun:        "agents",
 			placeholder: "Type to filter agents...",
-			hints:       []string{"↑/↓ navigate", "Enter toggle configured agents", "←/→/Tab switch tab", "Esc cancel"},
+			hints:       []string{"↑/↓ navigate", "Enter enable/disable", "←/→/Tab switch tab", "Esc cancel"},
 			matchesTab:  agentMatchesTab,
-			searchKeys:  func(a agentItem) []string { return []string{a.Name, a.Description, a.PermissionMode, a.Summary} },
-			nav:         kit.ListNav{MaxVisible: 10},
+			searchKeys: func(a agentItem) []string {
+				return []string{a.Name, a.Description, a.PermissionMode, a.Summary, a.Model}
+			},
+			nav: kit.ListNav{MaxVisible: 10},
 		},
 	}
 }
@@ -79,7 +111,11 @@ func (s *AgentSelector) EnterSelect(width, height int) error {
 	}
 
 	agents := make([]agentItem, 0, len(configs)+1)
-	agents = append(agents, builtinAgentItems()...)
+	agents = append(agents, s.builtinAgentItems()...)
+	// One row per definition. The registry is keyed by name, so this only keeps
+	// a registry definition from colliding with the one row that is not a
+	// definition: the default worker's.
+	seen := map[string]bool{"built-in/agent": true}
 	for _, c := range configs {
 		cfg := subagent.ToAgentConfigInfo(c)
 		lowerName := strings.ToLower(cfg.Name)
@@ -88,13 +124,18 @@ func (s *AgentSelector) EnterSelect(width, height int) error {
 			pluginName = cfg.Name[:idx]
 		}
 		source := cfg.Source
+		key := source + "/" + lowerName
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		// Built-in and user agents keep their disabled state in user scope,
 		// project agents in project scope.
 		scope := setting.ScopeProject
 		if source == "user" || source == "built-in" {
 			scope = setting.ScopeUser
 		}
-		agents = append(agents, agentItem{
+		item := agentItem{
 			Name:           cfg.Name,
 			Description:    cfg.Description,
 			Model:          cfg.Model,
@@ -103,31 +144,126 @@ func (s *AgentSelector) EnterSelect(width, height int) error {
 			Source:         source,
 			PluginName:     pluginName,
 			Enabled:        !disabledByScope[scope][lowerName],
-		})
+		}
+		s.resolveModel(&item)
+		agents = append(agents, item)
 	}
 
+	sortAgentItems(agents)
 	s.list.load(agents, width, height)
 	return nil
 }
 
-// builtinAgentItems describes the sole default worker, not a registered definition.
-func builtinAgentItems() []agentItem {
-	return []agentItem{{
-		Name: "Agent", Summary: "inherits session permissions; model comes from configuration",
-		Model: "inherit", Source: "built-in", Enabled: true, BuiltinPreview: true,
-	}}
+// builtinAgentItems describes the sole default worker, not a registered
+// definition: it is what the Agent tool runs when no specialist is named, so it
+// has no toggle and its model follows the task role unless subagentModel
+// overrides it.
+func (s *AgentSelector) builtinAgentItems() []agentItem {
+	item := agentItem{
+		Name:           "Agent",
+		Summary:        "inherits session permissions; model follows the task role",
+		Source:         "built-in",
+		Enabled:        true,
+		BuiltinPreview: true,
+	}
+	if s.models.Worker != nil {
+		item.Model = strings.TrimSpace(s.models.Worker())
+	}
+	s.resolveModel(&item)
+	return []agentItem{item}
 }
 
+// sortAgentItems keeps the list stable and readable: the default worker's row
+// first, then names in order. The registry hands definitions out in map order,
+// which would otherwise shuffle rows on every open.
+func sortAgentItems(items []agentItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].BuiltinPreview != items[j].BuiltinPreview {
+			return items[i].BuiltinPreview
+		}
+		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+	})
+}
+
+// resolveModel records the model a definition will actually run on. Without an
+// injected source the reference is shown as written, which is the most the list
+// can say on its own.
+func (s *AgentSelector) resolveModel(item *agentItem) {
+	if s.models.Model == nil {
+		return
+	}
+	ref := strings.TrimSpace(item.Model)
+	if ref == "" {
+		// An empty model is the session model by definition; asking about
+		// "inherit" is how a row learns which model that is.
+		ref = llm.ModelInherit
+	}
+	model, inherited := s.models.Model(ref)
+	if model == "" {
+		return
+	}
+	item.EffectiveModel, item.InheritedModel = model, inherited
+}
+
+// modelLabel is the row cell for a definition's model: the configured
+// reference, and for a role the model it resolves to — so "@slow" reads as a
+// model rather than a slot name.
+func (a agentItem) modelLabel() string {
+	ref := strings.TrimSpace(a.Model)
+	if _, isRole := llm.ParseRoleAlias(ref); !isRole {
+		return ref
+	}
+	switch {
+	case a.InheritedModel:
+		return ref + " → session model"
+	case a.EffectiveModel != "":
+		return ref + " → " + a.EffectiveModel
+	}
+	return ref
+}
+
+// workerLabel names the model the default worker runs on. The worker inherits
+// the session model when nothing configures it, so that is what it says.
+func (a agentItem) workerLabel() string {
+	if a.EffectiveModel != "" {
+		if a.InheritedModel {
+			return "session model (" + a.EffectiveModel + ")"
+		}
+		return a.EffectiveModel
+	}
+	if ref := strings.TrimSpace(a.Model); ref != "" {
+		return ref
+	}
+	return "session model"
+}
+
+// modelNote completes the model cell on the selected row's detail line: a role
+// that fell back to the session model names the model it fell back to.
+func (a agentItem) modelNote() string {
+	if a.EffectiveModel == "" || strings.Contains(a.modelLabel(), a.EffectiveModel) {
+		return ""
+	}
+	return a.EffectiveModel
+}
+
+// formatAgentPermMode names a definition's permission mode in the eight columns
+// the row gives it. The stored spellings are long ("acceptEdits",
+// "bypassPermissions"), so they are folded to the words a user picks between
+// rather than truncated mid-word.
 func formatAgentPermMode(mode string) string {
-	switch mode {
-	case "explore":
+	switch subagent.NormalizePermissionMode(mode) {
+	case subagent.PermissionExplore:
 		return "explore"
-	case "edit":
+	case subagent.PermissionAcceptEdits, subagent.PermissionAuto:
 		return "edit"
-	case "default", "":
+	case subagent.PermissionBypass:
+		return "bypass"
+	case subagent.PermissionDontAsk:
+		return "dont-ask"
+	case subagent.PermissionDefault:
 		return "default"
 	default:
-		return mode
+		return string(subagent.NormalizePermissionMode(mode))
 	}
 }
 
@@ -206,15 +342,23 @@ func (s *AgentSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 		sb.WriteString("\n")
 	}
 
-	// Compute name column width based on visible items so the model/mode
-	// columns align nicely while still adapting to long names.
-	maxNameLen := 12
+	// Compute the name and model column widths from the visible items so the
+	// mode and tool columns align while still adapting to long names.
+	maxNameLen, maxModelLen := 12, 14
 	for i := startIdx; i < endIdx; i++ {
 		if w := lipgloss.Width(s.list.filtered[i].Name); w > maxNameLen {
 			maxNameLen = w
 		}
+		if w := lipgloss.Width(s.list.filtered[i].modelLabel()); w > maxModelLen {
+			maxModelLen = w
+		}
 	}
 	maxNameLen = min(maxNameLen, 28)
+	// A role row carries two facts — the role and the model it resolved to — so
+	// the column grows for it, but never past what leaves the tool column
+	// legible.
+	maxModelLen = min(maxModelLen, 30)
+	maxModelLen = min(maxModelLen, max(14, panel.ContentWidth()-4-(2+1+1+maxNameLen+2+2+8+2+8)))
 
 	descStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
 	badge := kit.BadgeStyle()
@@ -242,15 +386,17 @@ func (s *AgentSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 
 		var line string
 		if a.BuiltinPreview {
-			preview := a.Summary
+			// The default worker is a description, not a definition: the row
+			// says what it inherits, and which model it lands on.
+			preview := a.Summary + "  ·  " + a.workerLabel()
 			if a.Description != "" {
 				preview += "  " + a.Description
 			}
 			previewWidth := max(8, panel.ContentWidth()-4-(2+1+1+maxNameLen+2)-4)
 			line = fmt.Sprintf("%s %s  %s", statusStyle.Render(statusIcon), paddedName, descStyle.Render(kit.TruncateText(preview, previewWidth)))
 		} else {
-			model := kit.TruncateText(a.Model, 14)
-			paddedModel := model + strings.Repeat(" ", max(0, 14-lipgloss.Width(model)))
+			model := kit.TruncateText(a.modelLabel(), maxModelLen)
+			paddedModel := model + strings.Repeat(" ", max(0, maxModelLen-lipgloss.Width(model)))
 
 			mode := kit.TruncateText(a.PermissionMode, 8)
 			paddedMode := mode + strings.Repeat(" ", max(0, 8-lipgloss.Width(mode)))
@@ -264,7 +410,7 @@ func (s *AgentSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 			}
 
 			// Leave the remaining width for the configured tool list.
-			rowFixed := 2 + 1 + 1 + maxNameLen + 2 + 14 + 2 + 8 + 2
+			rowFixed := 2 + 1 + 1 + maxNameLen + 2 + maxModelLen + 2 + 8 + 2
 			if badgeText != "" {
 				rowFixed += 1 + len(badgeText)
 			}
@@ -292,13 +438,26 @@ func (s *AgentSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 		sb.WriteString("\n")
 
 		// Description sub-line aligned under the agent name (4 cols in:
-		// 2 cursor + 1 icon + 1 space).
-		if i == s.list.nav.Selected && !a.BuiltinPreview && a.Description != "" {
+		// 2 cursor + 1 icon + 1 space). A role row that fell back to the
+		// session model names that model here, where there is room for it.
+		if i == s.list.nav.Selected && !a.BuiltinPreview && (a.Description != "" || a.modelNote() != "") {
+			// The model note comes first: a long description would otherwise
+			// push it past the line and truncate it away.
+			detail := ""
+			if note := a.modelNote(); note != "" {
+				detail = "session model: " + note
+			}
+			if a.Description != "" {
+				if detail != "" {
+					detail += "  ·  "
+				}
+				detail += a.Description
+			}
 			subStyle := lipgloss.NewStyle().
 				Foreground(kit.CurrentTheme.Muted).
 				PaddingLeft(4)
 			descLineWidth := max(10, panel.ContentWidth()-8)
-			sb.WriteString(subStyle.Render(kit.TruncateText(a.Description, descLineWidth)))
+			sb.WriteString(subStyle.Render(kit.TruncateText(detail, descLineWidth)))
 			sb.WriteString("\n")
 		}
 

@@ -53,6 +53,8 @@ func (m *model) enterPlanMode() {
 	m.plan.EnterPlanMode()
 	m.syncPlanPermissions()
 	m.persistPlan()
+	m.syncPlanModelDisplay()
+	m.syncPlanModelRuntime()
 }
 
 // leavePlanMode returns to ordinary chat. An executing plan is paused rather
@@ -64,6 +66,8 @@ func (m *model) leavePlanMode() {
 	m.plan.ExitPlanMode()
 	m.syncPlanPermissions()
 	m.persistPlan()
+	m.syncPlanModelDisplay()
+	m.syncPlanModelRuntime()
 }
 
 // syncPlanPermissions keeps the tool gate in step with the plan mode. Plan Mode
@@ -500,6 +504,10 @@ func (m *model) refreshPlanPanel() {
 func (m *model) restorePlanState(state plan.State) {
 	m.plan.Restore(state)
 	m.syncPlanPermissions()
+	// A session resumed mid-plan continues on the plan role's model, and the
+	// status line has to name it from the first frame. The runtime is always
+	// fresh here, so the next turn simply builds with it.
+	m.syncPlanModelDisplay()
 	if m.plan.Mode() == plan.ModeChat && state.ActiveID == "" {
 		m.userInput.Plan.Close()
 		return
@@ -514,6 +522,7 @@ func (m *model) resetPlanState() {
 	m.pendingPlanExecID = ""
 	m.plan.Reset()
 	m.syncPlanPermissions()
+	m.syncPlanModelDisplay()
 	m.userInput.Plan.Close()
 }
 

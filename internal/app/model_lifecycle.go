@@ -58,6 +58,13 @@ func newModel(opts setting.RunOptions) (*model, error) {
 	// The /settings Advisor tab picks its review model from the same connected
 	// providers, so both pickers answer the same list.
 	m.userInput.Settings.SetModelSource(m.connectedModelRefs)
+	// /agents shows which model each definition will run: the bundled ones name
+	// a role, so the list resolves it through the same bindings the executor
+	// reads instead of echoing "@slow" back at the user.
+	m.userInput.Agent.SetModelSource(input.AgentModelSource{
+		Model:  m.agentModelForRef,
+		Worker: m.workerModel,
+	})
 	if err := m.applyRunOptions(opts); err != nil {
 		return nil, err
 	}

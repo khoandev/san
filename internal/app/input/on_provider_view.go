@@ -26,13 +26,22 @@ func (s *ProviderSelector) Render() string {
 	sb.WriteString(panel.SeparatorLine())
 	sb.WriteString("\n")
 
-	// Tab header
-	sb.WriteString(s.renderTabs())
+	// Tab header. Assign mode replaces it with a banner, so the borrowed model
+	// list cannot be mistaken for the Models tab.
+	if s.assigning() {
+		sb.WriteString(s.renderAssignBanner())
+	} else {
+		sb.WriteString(s.renderTabs())
+	}
 	sb.WriteString("\n\n")
 
 	// Search box
 	sb.WriteString(s.renderSearchBox())
 	sb.WriteString("\n\n")
+	if s.roleNotice != "" && !s.assigning() {
+		sb.WriteString(s.renderRoleNotice())
+		sb.WriteString("\n\n")
+	}
 
 	var body strings.Builder
 	if len(s.visibleItems) == 0 {
@@ -58,8 +67,11 @@ func (s *ProviderSelector) panel() kit.Panel { return kit.Panel{Width: s.width, 
 
 // emptyFilterMsg returns the "no matches" text for the current tab.
 func (s *ProviderSelector) emptyFilterMsg() string {
-	if s.activeTab == providerTabModels {
+	switch s.activeTab {
+	case providerTabModels:
 		return kit.DimStyle().PaddingLeft(2).Render("No models match the filter")
+	case providerTabRoles:
+		return kit.DimStyle().PaddingLeft(2).Render("No roles match the filter")
 	}
 	return kit.DimStyle().PaddingLeft(2).Render("No providers match the filter")
 }
@@ -86,6 +98,8 @@ func (s *ProviderSelector) renderItemList(sb *strings.Builder) {
 			sb.WriteString(s.renderProviderRow(item, isSelected, i))
 		case providerItemAuthMethod:
 			sb.WriteString(s.renderAuthMethod(item, isSelected, i))
+		case providerItemRole:
+			sb.WriteString(s.renderRoleRow(item, isSelected))
 		}
 		sb.WriteString("\n")
 
@@ -137,6 +151,7 @@ func (s *ProviderSelector) renderTabs() string {
 	}{
 		{"Models", providerTabModels},
 		{"Providers", providerTabProviders},
+		{"Roles", providerTabRoles},
 	}
 
 	var parts []string
@@ -163,10 +178,15 @@ func (s *ProviderSelector) renderSearchBox() string {
 		text = fmt.Sprintf(" %s▏ (%d/%d)", s.searchQuery, filteredCount, totalModels)
 	} else if s.searchQuery != "" {
 		text = " " + s.searchQuery + "▏"
+	} else if s.assigning() {
+		text = " Type to filter models..."
 	} else {
-		if s.activeTab == providerTabProviders {
+		switch s.activeTab {
+		case providerTabProviders:
 			text = " Type to filter providers..."
-		} else {
+		case providerTabRoles:
+			text = " Type to filter roles..."
+		default:
 			text = " Type to filter models..."
 		}
 	}
@@ -447,11 +467,18 @@ func (s *ProviderSelector) renderHints() string {
 		return prompt + kit.DimStyle().Render(" · Esc cancel")
 	}
 
+	if s.assigning() {
+		return kit.DimStyle().Render("↑/↓ navigate · Enter assign model for " + s.assignRole + " · Esc back to Roles")
+	}
+
 	var parts []string
 	parts = append(parts, "↑/↓ navigate")
-	if s.activeTab == providerTabProviders {
+	switch s.activeTab {
+	case providerTabProviders:
 		parts = append(parts, "Ctrl+E edit", "Ctrl+D remove", "Enter connect/refresh")
-	} else {
+	case providerTabRoles:
+		parts = append(parts, "Enter assign", "Ctrl+D clear")
+	default:
 		parts = append(parts, "Space mark · Enter confirm")
 	}
 	parts = append(parts, "←/→/Tab switch", "Esc cancel")

@@ -1,6 +1,8 @@
 package subagent
 
 import (
+	"embed"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +15,17 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
+
+// bundledAgents holds the default agent definitions compiled into the binary, so
+// a fresh install has a usable set before the user writes one. They are the
+// lowest priority source: any file under ~/.san/agents, .san/agents or a plugin
+// with the same name replaces one, and agents.json can switch one off.
+//
+//go:embed agents/*.md
+var bundledAgents embed.FS
+
+// bundledAgentDir is the folder name inside bundledAgents.
+const bundledAgentDir = "agents"
 
 // PluginAgentPath represents a plugin agent path with namespace metadata.
 type PluginAgentPath struct {
@@ -82,6 +95,11 @@ func LoadAgents(cwd string) {
 
 func (r *Registry) loadAgents(cwd string, plugins []PluginAgentPath) {
 	homeDir, _ := os.UserHomeDir()
+
+	// Bundled definitions first: Register overwrites by name, so loading them
+	// ahead of every file source makes them the fallback a user definition or a
+	// plugin agent overrides.
+	r.loadBundled()
 
 	priorityOrdered := []agentSearchPath{
 		{path: filepath.Join(confdir.Dir(cwd), "agents")},
@@ -157,13 +175,15 @@ func (r *Registry) loadFile(filePath string, namespace string) {
 
 // frontmatterAliases are alternate key spellings accepted in agent
 // frontmatter: `tools` is Claude Code's key, the hyphenated forms are the
-// spellings docs/guides/writing-a-subagent.md documents. Canonical keys on
+// spellings docs/guides/writing-a-subagent.md documents, and `permissionMode`
+// is what a hand-written or exported definition tends to use. Canonical keys on
 // AgentConfig win when both are present.
 type frontmatterAliases struct {
-	Tools          ToolList       `yaml:"tools"`
-	AllowedTools   ToolList       `yaml:"allowed-tools"`
-	PermissionMode PermissionMode `yaml:"permission-mode"`
-	MaxSteps       int            `yaml:"max_steps"`
+	Tools               ToolList       `yaml:"tools"`
+	AllowedTools        ToolList       `yaml:"allowed-tools"`
+	PermissionMode      PermissionMode `yaml:"permission-mode"`
+	PermissionModeCamel PermissionMode `yaml:"permissionMode"`
+	MaxSteps            int            `yaml:"max_steps"`
 }
 
 func (a frontmatterAliases) applyTo(config *AgentConfig) {
@@ -174,20 +194,74 @@ func (a frontmatterAliases) applyTo(config *AgentConfig) {
 			config.AllowTools = a.Tools
 		}
 	}
-	if config.PermissionMode == "" && a.PermissionMode != "" {
-		config.PermissionMode = a.PermissionMode
+	if config.PermissionMode == "" {
+		if a.PermissionMode != "" {
+			config.PermissionMode = a.PermissionMode
+		} else if a.PermissionModeCamel != "" {
+			config.PermissionMode = a.PermissionModeCamel
+		}
 	}
 	if config.MaxSteps <= 0 && a.MaxSteps > 0 {
 		config.MaxSteps = a.MaxSteps
 	}
 }
 
-// parseAgentFile parses an AGENT.md file with YAML frontmatter.
+// parseAgentFile parses an AGENT.md file with YAML frontmatter. The body stays
+// on disk: SourceFile records it and GetSystemPrompt loads it on first use, so a
+// definition whose charter is never needed costs nothing.
 func parseAgentFile(filePath string) (*AgentConfig, error) {
 	frontmatter, _, err := markdown.ParseFrontmatterFile(filePath)
 	if err != nil {
 		return nil, err
 	}
+	config, err := parseAgentFrontmatter(frontmatter, strings.TrimSuffix(filepath.Base(filePath), ".md"))
+	if err != nil || config == nil {
+		return config, err
+	}
+
+	config.SourceFile = filePath
+	if config.Source == "" {
+		homeDir, _ := os.UserHomeDir()
+		switch {
+		case strings.HasPrefix(filePath, filepath.Join(confdir.Dir(homeDir), "agents")),
+			strings.HasPrefix(filePath, filepath.Join(homeDir, ".claude", "agents")):
+			config.Source = "user"
+		default:
+			config.Source = "project"
+		}
+	}
+
+	return config, nil
+}
+
+// parseAgentBytes parses an agent definition that lives in the binary rather
+// than on disk. The body IS the charter, and there is no file to read later, so
+// it is set here and sealed: systemPromptOnce is spent up front, which means a
+// later SourceFile assignment can never replace the embedded prompt.
+func parseAgentBytes(fileName string, data []byte) (*AgentConfig, error) {
+	frontmatter, body, err := markdown.ParseFrontmatter(data)
+	if err != nil {
+		return nil, err
+	}
+	config, err := parseAgentFrontmatter(frontmatter, strings.TrimSuffix(fileName, ".md"))
+	if err != nil || config == nil {
+		return config, err
+	}
+
+	config.SystemPrompt = body
+	config.systemPromptOnce.Do(func() {})
+	config.Source = "built-in"
+
+	return config, nil
+}
+
+// parseAgentFrontmatter builds an AgentConfig from an agent file's YAML
+// frontmatter, applying the documented aliases and the built-in defaults.
+// fallbackName names the definition when the frontmatter omits a name: the
+// file's base name on disk, or the embedded file's name. An empty frontmatter
+// is not an error — it is a markdown file that is not an agent definition, and
+// nil is returned so the caller skips it.
+func parseAgentFrontmatter(frontmatter, fallbackName string) (*AgentConfig, error) {
 	if frontmatter == "" {
 		return nil, nil
 	}
@@ -204,7 +278,7 @@ func parseAgentFile(filePath string) (*AgentConfig, error) {
 	config.PermissionMode = NormalizePermissionMode(string(config.PermissionMode))
 
 	if config.Name == "" {
-		config.Name = strings.TrimSuffix(filepath.Base(filePath), ".md")
+		config.Name = fallbackName
 	}
 	if config.Model == "" {
 		config.Model = "inherit"
@@ -216,21 +290,38 @@ func parseAgentFile(filePath string) (*AgentConfig, error) {
 		config.PermissionMode = PermissionDefault
 	}
 
-	// Body is lazily loaded via GetSystemPrompt()
-	config.SourceFile = filePath
+	return &config, nil
+}
 
-	if config.Source == "" {
-		homeDir, _ := os.UserHomeDir()
-		switch {
-		case strings.HasPrefix(filePath, filepath.Join(confdir.Dir(homeDir), "agents")),
-			strings.HasPrefix(filePath, filepath.Join(homeDir, ".claude", "agents")):
-			config.Source = "user"
-		default:
-			config.Source = "project"
+// loadBundled registers the embedded agent definitions. It runs before every
+// file source in loadAgents, so a same-named file or plugin agent overrides one;
+// agents.json still decides whether a bundled agent is enabled.
+func (r *Registry) loadBundled() {
+	entries, err := fs.ReadDir(bundledAgents, bundledAgentDir)
+	if err != nil {
+		log.Logger().Warn("bundled agent definitions unavailable", zap.Error(err))
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		path := bundledAgentDir + "/" + entry.Name()
+		data, err := bundledAgents.ReadFile(path)
+		if err != nil {
+			log.Logger().Debug("Failed to read bundled agent definition", zap.String("path", path), zap.Error(err))
+			continue
+		}
+		config, err := parseAgentBytes(entry.Name(), data)
+		if err != nil {
+			log.Logger().Warn("Failed to parse bundled agent definition",
+				zap.String("path", path), zap.Error(err))
+			continue
+		}
+		if config != nil {
+			r.Register(config)
 		}
 	}
-
-	return &config, nil
 }
 
 // LoadAgentSystemPrompt loads just the system prompt (body) from an agent file.

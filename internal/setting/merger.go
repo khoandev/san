@@ -16,6 +16,10 @@ func mergeSettings(base, overlay *Data) *Data {
 	result.Permissions = mergePermissions(base.Permissions, overlay.Permissions)
 	result.Model = coalesce(overlay.Model, base.Model)
 	result.SubagentModel = coalesce(overlay.SubagentModel, base.SubagentModel)
+	// Role bindings merge per key, the way env and the tool maps do: a project
+	// may bind the roles it cares about and leave the rest following the user's
+	// file, and a role either file assigns keeps its assignment.
+	result.ModelRoles = mergeMaps(base.ModelRoles, overlay.ModelRoles)
 	result.Theme = coalesce(overlay.Theme, base.Theme)
 	result.Hooks = mergeHooks(base.Hooks, overlay.Hooks)
 	result.Env = mergeMaps(base.Env, overlay.Env)

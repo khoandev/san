@@ -3,6 +3,23 @@
 All notable changes to San are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Model roles: `modelRoles` in settings is a routing table from a kind of work to a model — `smol` (the permission and autopilot judges, hook completions, the self-learning review), `slow` (the advisor), `task` (the Agent tool's default worker), `plan` (Plan Mode), `designer` — with custom role names accepted. An unassigned role, an alias chain that loops, or a binding whose vendor is not connected falls back to the session model, so incomplete configuration never fails a turn.
+- `/models` gains a Roles tab: pick a role, assign a model from the same list the Models tab shows, Ctrl+D clears it, and the row names the work the role answers and whether the binding comes from project settings.
+- Agent definitions carry a role reference (`model: "@slow"`) instead of a model id, resolved through the same `modelRoles` table, so an agent keeps its definition while the model behind it moves.
+- Five bundled agents ship inside san — `explore`, `task`, `reviewer`, `librarian`, `designer` — with prompts embedded in the binary, real tools only (Read, Write, Edit, Bash, WebFetch, WebSearch, Skill, SendMessage) and no write access for the read-only ones. A same-named file in `~/.san/agents` or `.san/agents` overrides one; `agents.json` disables one.
+- `/agents` lists the bundled set under Built-in and shows the model each definition will actually run on, naming the session model when a role resolved to it.
+- Plan Mode can run on its own model through the `plan` role without moving the session model; the status line says so (`<model> · plan`) and an idle runtime is rebuilt for the switch, while a resumed planning session keeps the choice.
+
+### Changed
+- Work that used to be pinned to a model now asks a role: the judges and hook completions use `smol`, the advisor uses `slow`, the default worker uses `task`. An explicit setting for that consumer (`autoPilot.model`, `advisor.model`, `subagentModel`) still wins.
+
+### Migration
+- Replace `model:` values in personal agent files that name a role (`smol`, `task`, `plan`, `advisor`, …) with `@role`, or leave the field out to inherit the session model. Use `mode`, not `permissionMode`, and name only tools san has: `grep`, `find`, `lsp` and `git` are not among them.
+- Agent files that only existed to stand in for a role are unnecessary now: assign the model in `/models` → Roles and delete the file. The old personal files were moved to `~/.san/agents.bak-2026-11-06/` with a note explaining why.
+
 ## [v1.25.1] - 2026-11-06
 
 ### Added

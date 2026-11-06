@@ -322,6 +322,104 @@ func updateSettingsFile(scope Scope, mutate func(*Data)) error {
 }
 
 // UpdateSelfLearnAt persists the L1 self-learning config at the requested
+// ModelRoleName normalizes and validates a role name for modelRoles. Names are
+// one namespace, not two spellings of one namespace, so the returned name is
+// lowercase; a name that cannot be a role is an error the caller shows inline
+// rather than a silent binding that never resolves.
+func ModelRoleName(name string) (string, error) {
+	canonical := strings.ToLower(strings.TrimSpace(name))
+	if !ValidModelRoleName(canonical) {
+		return "", fmt.Errorf("invalid role name %q: use lowercase letters, digits and hyphens, starting with a letter", name)
+	}
+	return canonical, nil
+}
+
+// ValidateModelRole checks one binding: the role name and its model reference.
+// The reference is validated as non-empty only — whether "@slow" or
+// "vendor/model" resolves depends on the connected providers, and an
+// unresolvable reference falls back to the session model rather than failing.
+func ValidateModelRole(name, ref string) error {
+	if _, err := ModelRoleName(name); err != nil {
+		return err
+	}
+	if strings.TrimSpace(ref) == "" {
+		return fmt.Errorf("role %q: a model reference is required (use %q for the session model)", name, ModelInheritRef)
+	}
+	return nil
+}
+
+// ModelInheritRef is the reference that means "the session model", the same
+// spelling a subagent's model field uses. Empty means the same on read; the
+// setter requires one of the two spellings so clearing a role is explicit.
+const ModelInheritRef = "inherit"
+
+// UpdateModelRolesAt replaces the whole modelRoles block in scope's settings
+// file, leaving every other setting in the file untouched. It replaces rather
+// than merges so unbinding a role (a key removed from the map) actually
+// persists at this level; cross-level layering still merges per key on Load, so
+// a project may bind some roles and inherit the user's for the rest. Names are
+// canonicalized to lowercase and every entry is validated before anything
+// touches disk.
+func UpdateModelRolesAt(roles map[string]string, scope Scope) error {
+	canonical := make(map[string]string, len(roles))
+	for name, ref := range roles {
+		if err := ValidateModelRole(name, ref); err != nil {
+			return err
+		}
+		key, _ := ModelRoleName(name)
+		canonical[key] = strings.TrimSpace(ref)
+	}
+	return updateSettingsFile(scope, func(d *Data) {
+		d.ModelRoles = canonical
+	})
+}
+
+// SetModelRole binds one role to a model reference at scope, keeping every
+// other binding in the file. A reference that is empty or "inherit" is stored
+// as "inherit": the role follows the session model again, and the explicit
+// spelling says so in the file instead of leaving a bare key.
+func SetModelRole(name, ref string, scope Scope) error {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		ref = ModelInheritRef
+	}
+	if err := ValidateModelRole(name, ref); err != nil {
+		return err
+	}
+	key, _ := ModelRoleName(name)
+	return updateSettingsFile(scope, func(d *Data) {
+		if d.ModelRoles == nil {
+			d.ModelRoles = make(map[string]string)
+		}
+		// Drop any hand-edited key that names the same role in another case, so
+		// the file keeps one entry per role.
+		for existing := range d.ModelRoles {
+			if strings.EqualFold(strings.TrimSpace(existing), key) {
+				delete(d.ModelRoles, existing)
+			}
+		}
+		d.ModelRoles[key] = ref
+	})
+}
+
+// ClearModelRole removes one role's binding at scope, returning it to the
+// session model. Other bindings and other settings in the file are untouched;
+// clearing a role that is not bound is not an error.
+func ClearModelRole(name string, scope Scope) error {
+	key, err := ModelRoleName(name)
+	if err != nil {
+		return err
+	}
+	return updateSettingsFile(scope, func(d *Data) {
+		for existing := range d.ModelRoles {
+			if strings.EqualFold(strings.TrimSpace(existing), key) {
+				delete(d.ModelRoles, existing)
+			}
+		}
+	})
+}
+
+// UpdateSelfLearnAt persists the L1 self-learning config at the requested
 // settings level, syncing the Evolve tool toggle with the enabled capabilities.
 // Returns Validate's error verbatim if the new config is illegal (§3.1) so the
 // caller can surface it inline before touching disk.
@@ -526,6 +624,31 @@ func PersonaAt(cwd string, scope Scope) string {
 		return ""
 	}
 	return s.Persona
+}
+
+// ModelRolesAt returns the role bindings in a single settings file, not the
+// merged view. The /models Roles tab uses it to mark a row whose assignment
+// comes from the project scope, which outranks the user's own.
+func ModelRolesAt(cwd string, scope Scope) map[string]string {
+	loader := NewLoader()
+	if cwd != "" {
+		loader = NewLoaderForCwd(cwd)
+	}
+	dir := loader.dir(scope)
+	if dir == "" {
+		return nil
+	}
+	s, err := loader.LoadFile(filepath.Join(dir, "settings.json"))
+	if err != nil || s == nil || len(s.ModelRoles) == 0 {
+		return nil
+	}
+	roles := make(map[string]string, len(s.ModelRoles))
+	for name, ref := range s.ModelRoles {
+		if key, err := ModelRoleName(name); err == nil {
+			roles[key] = strings.TrimSpace(ref)
+		}
+	}
+	return roles
 }
 
 // LoadTheme returns the configured theme string, or "" if none is set.

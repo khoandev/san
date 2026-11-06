@@ -78,7 +78,9 @@ func (a *ExecutorAdapter) ResolveAgentSelection(name string) (tool.AgentConfigIn
 		return tool.AgentConfigInfo{}, nil, false
 	}
 	info := ToAgentConfigInfo(config)
-	info.Model = a.Executor.configuredModel(config, name)
+	// Resolved, not raw: an "@role" model is shown as the model that will
+	// actually answer, so approval names a model rather than a slot.
+	info.Model = a.Executor.effectiveModelName(config, name)
 	if strings.TrimSpace(name) == "" || config.displayOnly {
 		info.PermissionMode = string(a.Executor.currentParentPermissionMode())
 	}

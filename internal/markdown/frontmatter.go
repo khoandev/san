@@ -14,6 +14,15 @@ func ParseFrontmatterFile(path string) (frontmatter, body string, err error) {
 	if err != nil {
 		return "", "", err
 	}
+	return ParseFrontmatter(data)
+}
+
+// ParseFrontmatter splits an in-memory markdown document into its YAML
+// frontmatter and its body, with the same rules as ParseFrontmatterFile. It
+// exists for documents that are not on disk — embedded agent definitions,
+// generated prompts — so both paths cannot disagree about where the delimiter
+// is or how a CRLF file is normalised.
+func ParseFrontmatter(data []byte) (frontmatter, body string, err error) {
 	src := strings.ReplaceAll(string(data), "\r\n", "\n")
 	first, rest, _ := strings.Cut(src, "\n")
 	if strings.TrimSpace(first) != "---" {

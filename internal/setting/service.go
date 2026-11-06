@@ -8,6 +8,7 @@
 package setting
 
 import (
+	"maps"
 	"strings"
 	"sync"
 
@@ -151,6 +152,29 @@ func (s *Settings) SubagentModel() string {
 		return ""
 	}
 	return s.data.SubagentModel
+}
+
+// ModelRoles returns a copy of the role→model-reference bindings, so a
+// resolver can hold them without reaching into live settings. An unassigned
+// role has no key.
+func (s *Settings) ModelRoles() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data == nil || len(s.data.ModelRoles) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(s.data.ModelRoles))
+	maps.Copy(out, s.data.ModelRoles)
+	return out
+}
+
+// ModelRole returns the reference bound to the role name, or "" when the role
+// is unassigned and follows the session model. See Data.ModelRole for the
+// case-folding lookup.
+func (s *Settings) ModelRole(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.ModelRole(name)
 }
 
 func (s *Settings) SearchProvider() string {

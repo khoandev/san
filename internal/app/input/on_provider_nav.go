@@ -45,10 +45,17 @@ func (s *ProviderSelector) MoveDown() {
 }
 
 func (s *ProviderSelector) switchTab(t providerTab) {
+	// Assign mode borrows the Models list, so any tab switch is also a way out
+	// of it; the write never happened, which is what leaving means.
+	s.assignRole = ""
 	if t == s.activeTab {
 		return
 	}
 	s.activeTab = t
+	if t == providerTabRoles {
+		s.refreshRoleInfo()
+	}
+	s.roleNotice = ""
 	s.resetNavigation()
 	s.resetModelSearch()
 	s.resetConnectionResult()
@@ -59,8 +66,10 @@ func (s *ProviderSelector) switchTab(t providerTab) {
 	s.rebuildVisibleItems()
 }
 
-func (s *ProviderSelector) NextTab() { s.switchTab((s.activeTab + 1) % 2) }
-func (s *ProviderSelector) PrevTab() { s.switchTab((s.activeTab + 1 + 2) % 2) }
+func (s *ProviderSelector) NextTab() { s.switchTab((s.activeTab + 1) % providerTabCount) }
+func (s *ProviderSelector) PrevTab() {
+	s.switchTab((s.activeTab + providerTabCount - 1) % providerTabCount)
+}
 
 func (s *ProviderSelector) GoBack() bool {
 	if s.customFormActive {
@@ -167,6 +176,11 @@ func (s *ProviderSelector) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 		if s.clearModelSearch() {
 			return nil
 		}
+		if s.assigning() {
+			// Esc is "I did not choose": drop the assign and write nothing.
+			s.finishAssign()
+			return nil
+		}
 		if s.GoBack() {
 			return nil
 		}
@@ -178,7 +192,7 @@ func (s *ProviderSelector) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 		return nil
 
 	case "space":
-		if s.activeTab == providerTabModels && !s.searchFocused {
+		if (s.activeTab == providerTabModels || s.assigning()) && !s.searchFocused {
 			return s.toggleModel()
 		}
 		s.appendModelSearch(" ")
@@ -188,7 +202,7 @@ func (s *ProviderSelector) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 		return s.handleCredentialEdit()
 
 	case "ctrl+d":
-		return s.handleCredentialRemove()
+		return s.handleRemove()
 
 	default:
 		// Typed text capture: every printable rune is search input. Navigation
@@ -223,11 +237,18 @@ func (s *ProviderSelector) Select() tea.Cmd {
 	item := s.visibleItems[s.selectedIdx]
 	switch item.Kind {
 	case providerItemModel:
+		// In assign mode the model list is a picker for a role, not the
+		// session's model: it writes the role instead of switching providers.
+		if s.assigning() {
+			return s.assignModel(item.Model)
+		}
 		return s.selectModel(item.Model)
 	case providerItemProvider:
 		return s.selectProvider(item)
 	case providerItemAuthMethod:
 		return s.selectAuthMethod(item)
+	case providerItemRole:
+		return s.selectRole(item)
 	default:
 		return nil
 	}

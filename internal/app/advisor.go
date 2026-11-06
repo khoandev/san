@@ -145,18 +145,14 @@ func (m *model) teardownAdvisor() {
 	m.services.Advisor = nil
 }
 
-// resolveAdvisorModel picks the review provider and model: the configured
-// "vendor/model" ref when it resolves, the session model otherwise. A nil
-// provider means nothing is connected and no review can run.
+// resolveAdvisorModel picks the review provider and model: the advisor's own
+// model when the user set one, otherwise the slow role's binding, otherwise the
+// session model. The advisor is what the slow role exists for — a thorough
+// review where the extra latency is acceptable. A nil provider means nothing is
+// connected and no review can run.
 func (m *model) resolveAdvisorModel(cfg setting.AdvisorSettings) (llm.Provider, string) {
-	if cfg.Model != "" && m.services.LLM != nil {
-		return m.resolveReviewerModel(cfg.Model)
-	}
-	provider, info := m.resolveReviewer("")
-	if info == nil {
-		return provider, ""
-	}
-	return provider, info.ModelID
+	target := m.resolveRoleWithOverride(llm.RoleSlow, cfg.Model)
+	return target.Provider, target.ModelID
 }
 
 // advisorSignature is a stable fingerprint of everything that changes what a

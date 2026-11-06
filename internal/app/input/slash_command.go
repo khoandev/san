@@ -556,6 +556,9 @@ func (c *SlashCommandController) handleSearchCommand(_ context.Context, _ string
 }
 
 func (c *SlashCommandController) handleModelCommand(ctx context.Context, _ string) (string, tea.Cmd, error) {
+	// The Roles tab reads and writes live settings, so the surface is rebound on
+	// every open — settings may have been reloaded since the last one.
+	c.env.Input.Provider.Selector.SetRoleSource(c.roleSource())
 	cmd, err := c.env.Input.Provider.Selector.Enter(ctx, c.env.Width, c.env.Height)
 	if err != nil {
 		return "", nil, err

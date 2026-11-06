@@ -7,6 +7,7 @@ import (
 	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/core/system"
+	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/plugin"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/skill"
@@ -56,6 +57,14 @@ func (s *acpSession) configureAgents() {
 	for _, file := range system.LoadMemoryFiles(s.runtimeBuildParams.CWD) {
 		instructions = append(instructions, file.Content)
 	}
+	// A definition's "@role" model resolves through this session's modelRoles.
+	// s.permissions holds the loaded settings for the session's CWD.
+	e.SetRoleResolver(roleResolverFor(func() llm.RoleBindings {
+		if s.permissions == nil || s.permissions.settings == nil {
+			return nil
+		}
+		return llm.Bindings(s.permissions.settings.ModelRoles)
+	}, llm.Default().Store(), s.runtimeBuildParams.Provider, s.runtimeBuildParams.ModelID))
 	e.SetProjectInstructions(strings.Join(instructions, "\n\n"))
 	e.SetSessionStore(s.nativeSession.Store, s.runtimeBuildParams.SessionID)
 	e.SetDisabledTools(s.runtimeBuildParams.DisabledTools)

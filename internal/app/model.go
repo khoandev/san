@@ -189,6 +189,12 @@ type model struct {
 	// toggle, a settings edit or a model switch takes effect on the next turn.
 	agentAdvisorSignature string
 
+	// agentPlanModel is the planModelSignature() the live agent was built with:
+	// "" when the session model answers, otherwise the model Plan Mode runs on.
+	// Entering or leaving Plan Mode on an idle runtime stops it, and this catches
+	// a toggle that happened mid-turn at the next turn start.
+	agentPlanModel string
+
 	// turnOpenedBy is the message that started the running turn; messages
 	// that enter mid-turn belong to it.
 	turnOpenedBy string

@@ -30,6 +30,7 @@ import (
 	"github.com/genai-io/san/internal/log"
 	"github.com/genai-io/san/internal/mcp"
 	"github.com/genai-io/san/internal/persona"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/reminder"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/subagent"
@@ -164,7 +165,18 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 	}
 	params := m.promptParams()
 
-	maxTokens := kit.GetMaxOutput(m.services.LLM.Store(), m.env.CurrentModel, setting.DefaultMaxTokens)
+	// Plan Mode can run on the plan role's model without the session's own model
+	// changing: provider, model id, output cap and thinking effort all follow
+	// whichever model answers this turn.
+	modelInfo, provider, modelID := m.env.CurrentModel, m.env.LLMProvider, m.env.GetModelID()
+	effort := m.env.EffectiveThinkingEffort()
+	if target, ok := m.planModelTarget(); ok {
+		modelInfo = m.roleModelInfo(target)
+		provider, modelID = target.Provider, target.ModelID
+		effort = llm.ResolveThinkingEffortForModel(target.Provider, m.services.LLM.Store(), modelInfo, m.env.ThinkingEffort)
+	}
+
+	maxTokens := kit.GetMaxOutput(m.services.LLM.Store(), modelInfo, setting.DefaultMaxTokens)
 	rec, err := m.openCurrentSession()
 	if err != nil {
 		return params, err
@@ -195,10 +207,10 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		m.services.Setting.StreamIdleTimeout(),
 	)
 
-	params.Provider = m.env.LLMProvider
-	params.ModelID = m.env.GetModelID()
+	params.Provider = provider
+	params.ModelID = modelID
 	params.MaxTokens = maxTokens
-	params.ThinkingEffort = m.env.EffectiveThinkingEffort()
+	params.ThinkingEffort = effort
 	params.FileCache = m.env.FileCache
 	params.CWDFunc = func() string { return m.autopilot.Load().cwd }
 
@@ -259,34 +271,223 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 	return params, nil
 }
 
-// resolveReviewerModel picks the provider and model for the auto-review judge.
+// sessionModelInfo is the session's own provider and model: the fallback every
+// role resolution returns to, so a piece of work never fails because a role is
+// unassigned or points at a vendor this session has not connected.
+func (m *model) sessionModelInfo() *llm.CurrentModelInfo {
+	info := &llm.CurrentModelInfo{ModelID: m.env.GetModelID()}
+	if m.env.CurrentModel != nil {
+		info.Provider, info.AuthMethod = m.env.CurrentModel.Provider, m.env.CurrentModel.AuthMethod
+	}
+	return info
+}
+
+// modelRoleBindings is the live modelRoles map, or nil when settings are not
+// wired (a bare test model) so an unassigned role simply inherits.
+func (m *model) modelRoleBindings() llm.RoleBindings {
+	if m.services.Setting == nil {
+		return nil
+	}
+	return llm.Bindings(m.services.Setting.ModelRoles())
+}
+
+// agentModelForRef resolves an agent definition's model reference for the
+// /agents list: the model that will answer its work, and whether the session
+// model answered instead. A role goes through the same bindings the executor
+// reads, so the list cannot advertise a model the run will not use.
+func (m *model) agentModelForRef(ref string) (string, bool) {
+	resolver := llm.NewStoreRoleResolver(m.llmStore())
+	var target llm.RoleTarget
+	if role, isRole := llm.ParseRoleAlias(ref); isRole {
+		target = resolver.Resolve(context.Background(), m.modelRoleBindings(), role, m.env.LLMProvider, m.env.GetModelID())
+	} else {
+		target = resolver.ResolveRef(context.Background(), ref, m.env.LLMProvider, m.env.GetModelID())
+	}
+	return target.ModelID, target.Inherited
+}
+
+// resolveRole answers the provider and model for one model role. The role's
+// modelRoles binding decides; an unassigned role, an "@role" chain that loops,
+// or a binding whose vendor is not connected all fall back to the session
+// model. This is the one place the app turns a role name into a model.
+func (m *model) resolveRole(role llm.ModelRole) llm.RoleTarget {
+	store := m.llmStore()
+	return llm.NewStoreRoleResolver(store).Resolve(
+		context.Background(), m.modelRoleBindings(), string(role),
+		m.env.LLMProvider, m.env.GetModelID(),
+	)
+}
+
+// resolveRoleModel answers just the provider and model id for role — the shape
+// callers that hand a client or a judge a model need.
+func (m *model) resolveRoleModel(role llm.ModelRole) (llm.Provider, string) {
+	target := m.resolveRole(role)
+	return target.Provider, target.ModelID
+}
+
+// resolveRoleWithOverride answers role unless the caller's own setting names a
+// model, in which case that reference wins. The precedence is the same
+// everywhere it is used: an explicit setting (autoPilot.model, advisor.model,
+// subagentModel) > the role's binding > the session model.
+func (m *model) resolveRoleWithOverride(role llm.ModelRole, override string) llm.RoleTarget {
+	override = strings.TrimSpace(override)
+	if override == "" {
+		return m.resolveRole(role)
+	}
+	return llm.NewStoreRoleResolver(m.llmStore()).ResolveRef(
+		context.Background(), override, m.env.LLMProvider, m.env.GetModelID(),
+	)
+}
+
+// llmStore is the provider store, or nil when nothing is connected. A nil store
+// only costs vendor-qualified references their routing; it never fails a turn.
+func (m *model) llmStore() *llm.Store {
+	if m.services.LLM == nil {
+		return nil
+	}
+	return m.services.LLM.Store()
+}
+
+// roleModelInfo turns a resolved target into the CurrentModelInfo the
+// thinking-effort helpers key on. A vendor-qualified resolution carries that
+// vendor; a bare id or the session fallback carries the session's provider.
+func (m *model) roleModelInfo(target llm.RoleTarget) *llm.CurrentModelInfo {
+	info := m.sessionModelInfo()
+	info.ModelID = target.ModelID
+	if vendor, _, ok := llm.ParseVendorModel(target.Ref); ok {
+		info.Provider, info.AuthMethod = vendor, ""
+	}
+	return info
+}
+
+// planModelTarget is the model Plan Mode runs on, reported only when it differs
+// from the session model. False — the session model answers — when Plan Mode is
+// off, the plan store or settings are not wired, the plan role is unassigned, or
+// its reference resolves back to the session model (an "@role" chain that loops,
+// a vendor this session has not connected). Plan Mode never fails a turn over an
+// unassigned role; it just runs where the conversation already runs.
+func (m *model) planModelTarget() (llm.RoleTarget, bool) {
+	if m.plan == nil || m.plan.Mode() != plan.ModePlan || m.services.Setting == nil {
+		return llm.RoleTarget{}, false
+	}
+	if strings.TrimSpace(m.services.Setting.ModelRole(string(llm.RolePlan))) == "" {
+		return llm.RoleTarget{}, false
+	}
+	target := m.resolveRole(llm.RolePlan)
+	if target.Inherited || target.ModelID == "" {
+		return llm.RoleTarget{}, false
+	}
+	if target.ModelID == m.env.GetModelID() && providerName(target.Provider) == providerName(m.env.LLMProvider) {
+		return llm.RoleTarget{}, false
+	}
+	return target, true
+}
+
+// planModelSignature fingerprints the model Plan Mode runs on: "" when the
+// session model answers. ensureAgentRuntime compares it against the live agent's
+// build, the same way it compares the toolset signatures beside it.
+func (m *model) planModelSignature() string {
+	target, ok := m.planModelTarget()
+	if !ok {
+		return ""
+	}
+	return providerName(target.Provider) + "/" + target.ModelID
+}
+
+// syncPlanModelDisplay points the status line at the model Plan Mode runs on, so
+// the name it shows never lies about the model answering. Display only: nothing
+// here touches the session model, its persisted choice, or the runtime.
+func (m *model) syncPlanModelDisplay() {
+	target, ok := m.planModelTarget()
+	if !ok {
+		m.env.PlanModel = nil
+		return
+	}
+	m.env.PlanModel = m.roleModelInfo(target)
+}
+
+// syncPlanModelRuntime rebuilds the agent for a plan-role change on the next
+// turn: an idle runtime is stopped so ensureAgentRuntime builds with the new
+// model. A turn in flight keeps the model it started on — stopping it would
+// discard its work — and the build-time signature check below catches the switch
+// when that turn ends.
+func (m *model) syncPlanModelRuntime() {
+	if m.services.Agent == nil || !m.services.Agent.Active() || m.conv.Stream.Active {
+		return
+	}
+	if m.planModelSignature() == m.agentPlanModel {
+		return
+	}
+	if err := m.StopAgentRuntime(); err != nil {
+		log.Logger().Warn("plan-mode model switch could not stop the runtime", zap.Error(err))
+	}
+}
+
+// providerName is a provider's identity for comparisons; "" for no provider.
+func providerName(p llm.Provider) string {
+	if p == nil {
+		return ""
+	}
+	return p.Name()
+}
+
+// resolveReviewerModel picks the provider and model for the auto-review judge:
+// the caller's ref (autoPilot.model) when set, otherwise the smol role,
+// otherwise the session model.
 func (m *model) resolveReviewerModel(ref string) (llm.Provider, string) {
 	p, info := m.resolveReviewer(ref)
 	return p, info.ModelID
 }
 
-// resolveReviewer resolves a judge model ref to its provider and model. A
-// "vendor/model" ref (e.g. "anthropic/claude-haiku-4-5") routes to that
-// connected provider; a bare id stays on the session provider; empty uses the
-// session model. An unresolvable vendor falls back to the session model. The
-// info names whichever provider was actually picked, for capability lookups.
+// resolveReviewer resolves a judge model ref to its provider and model, the
+// auto-review/smol path. The info names whichever provider was actually picked,
+// for capability lookups.
 func (m *model) resolveReviewer(ref string) (llm.Provider, *llm.CurrentModelInfo) {
-	session := &llm.CurrentModelInfo{ModelID: m.env.GetModelID()}
-	if m.env.CurrentModel != nil {
-		session.Provider, session.AuthMethod = m.env.CurrentModel.Provider, m.env.CurrentModel.AuthMethod
+	target := m.resolveRoleWithOverride(llm.RoleSmol, ref)
+	return target.Provider, m.roleModelInfo(target)
+}
+
+// workerModel is the model the Agent tool's default worker runs on: the
+// subagentModel setting when the user set one (including an explicit "inherit"),
+// otherwise the task role's binding, otherwise "" — which leaves the executor
+// inheriting the parent's model. The binding is returned as a reference, not a
+// resolved model id, so the executor still routes a "vendor/model" binding to
+// that vendor.
+func (m *model) workerModel() string {
+	if m.services.Setting == nil {
+		return ""
 	}
-	if ref == "" {
-		return m.env.LLMProvider, session
+	return effectiveWorkerModel(m.services.Setting.SubagentModel(), m.services.Setting.ModelRole(string(llm.RoleTask)))
+}
+
+// effectiveWorkerModel is workerModel's precedence rule, shared with the
+// headless runner, which holds a *setting.Data rather than a TUI model.
+func effectiveWorkerModel(subagentModel, taskRole string) string {
+	if override := strings.TrimSpace(subagentModel); override != "" {
+		return override
 	}
-	if vendor, id, ok := llm.ParseVendorModel(ref); ok {
-		if p, err := llm.NewProviderPool(m.services.LLM.Store()).Resolve(context.Background(), vendor); err == nil {
-			return p, &llm.CurrentModelInfo{ModelID: id, Provider: vendor}
+	return strings.TrimSpace(taskRole)
+}
+
+// roleResolverFor is the "@role" resolver an agent executor receives, so a
+// definition can hold a role ("@slow") and the user can move the model behind
+// it. bindings is called per resolution rather than captured, because a
+// settings reload must reach an executor that is already running. The bool
+// reports an assigned role; an unassigned one, an alias chain that loops or a
+// binding whose vendor is not connected leaves the session model to answer.
+func roleResolverFor(bindings func() llm.RoleBindings, store *llm.Store, provider llm.Provider, modelID string) func(role string) (llm.Provider, string, bool) {
+	resolver := llm.NewStoreRoleResolver(store)
+	return func(role string) (llm.Provider, string, bool) {
+		var roles llm.RoleBindings
+		if bindings != nil {
+			roles = bindings()
 		}
-		log.Logger().Warn("auto-review model vendor unavailable; using session model", zap.String("model", ref))
-		return m.env.LLMProvider, session
+		target := resolver.Resolve(context.Background(), roles, role, provider, modelID)
+		if target.Inherited {
+			return provider, modelID, false
+		}
+		return target.Provider, target.ModelID, true
 	}
-	session.ModelID = ref
-	return m.env.LLMProvider, session
 }
 
 // autopilotModelEfforts lists the reasoning rungs a "vendor/model" ref offers,
@@ -411,16 +612,21 @@ func (m *model) disabledToolsSignature() string {
 
 // ensureAgentRuntime starts the agent with its retained native conversation.
 func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
+	// Plan Mode's model is chosen per turn, so the status line has to follow the
+	// mode even when the runtime is reused as-is.
+	m.syncPlanModelDisplay()
 	if m.services.Agent.Active() {
-		// The toolset is fixed at agent-build time. If the enabled Evolve
-		// capabilities or the disabled-tool set drifted since the build (a
-		// /evolve save, a /tool toggle, an external settings edit), stop the
-		// stale session and fall through to rebuild with the current toolset —
-		// the one choke point every turn passes through, so all drift sources
-		// are covered uniformly.
+		// The toolset and the model are fixed at agent-build time. If the
+		// enabled Evolve capabilities, the disabled-tool set or the model Plan
+		// Mode runs on drifted since the build (a /evolve save, a /tool toggle,
+		// a plan-role assignment, an external settings edit), stop the stale
+		// session and fall through to rebuild with the current one — the single
+		// choke point every turn passes through, so all drift sources are
+		// covered uniformly.
 		if m.selfLearnCapabilities() == m.agentEvolveCaps &&
 			m.disabledToolsSignature() == m.agentDisabledToolsSignature &&
-			m.autoMemory() == m.agentAutoMemory {
+			m.autoMemory() == m.agentAutoMemory &&
+			m.planModelSignature() == m.agentPlanModel {
 			// The advisor is not part of the agent's build, so a settings edit
 			// or an /advisor toggle rewires just it.
 			m.syncAdvisor()
@@ -451,6 +657,7 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 	// Record what the toolset was built with, for the drift check above.
 	m.agentEvolveCaps = m.selfLearnCapabilities()
 	m.agentDisabledToolsSignature = m.disabledToolsSignature()
+	m.agentPlanModel = m.planModelSignature()
 	if m.services.Reminder.Prepared() && params.AutoMemory != m.agentAutoMemory {
 		// The index reminder was prepared once, naming the old stores.
 		m.services.Reminder.RequeueSystemReminders()
@@ -530,8 +737,11 @@ func (m *model) startMemoryRecall(query string) {
 	if !m.services.Reminder.Prepared() || m.memoryRecall.surfaced == nil {
 		m.memoryRecall.surfaced = map[string]bool{} // a new conversation has seen none
 	}
-	provider, info := m.resolveReviewer("")
-	r := agent.Recaller{Provider: provider, Model: info.ModelID, Effort: agent.LowestEffort(provider, m.services.LLM.Store(), info)}
+	// The pick is deliberately not a role: it runs at the model's lowest rung
+	// beside the turn, and the plan routes only smol work (judges, hooks, the
+	// self-learning review) through modelRoles.
+	info := m.sessionModelInfo()
+	r := agent.Recaller{Provider: m.env.LLMProvider, Model: info.ModelID, Effort: agent.LowestEffort(m.env.LLMProvider, m.llmStore(), info)}
 	m.memoryRecall.current.Swap(r.Start(m.agentAutoMemory, query, maps.Clone(m.memoryRecall.surfaced))).Stop()
 }
 
@@ -697,8 +907,9 @@ func (m *model) ReconfigureAgentTool() {
 
 	executor := subagent.NewExecutor(m.env.LLMProvider, m.env.CWD, m.env.GetModelID(), m.services.Hook)
 	executor.SetInteractions(m.conv.AgentToUI)
-	executor.SetDefaultModel(m.services.Setting.SubagentModel())
+	executor.SetDefaultModel(m.workerModel())
 	executor.SetResolver(llm.NewProviderPool(m.services.LLM.Store()))
+	executor.SetRoleResolver(roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID()))
 	perms := m.env.SessionPermissions
 	executor.SetParentPermissionMode(func() subagent.PermissionMode {
 		return subagent.InheritedPermissionMode(perms.CurrentMode())

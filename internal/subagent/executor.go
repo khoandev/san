@@ -42,6 +42,7 @@ type Executor struct {
 	provider                   llm.Provider
 	registry                   *Registry
 	resolver                   ProviderResolver // resolves "vendor/model" overrides; nil = same-provider only
+	roleResolver               RoleResolver     // resolves "@role" models; nil = the parent model answers
 	cwd                        string
 	parentModelID              string // Parent conversation's model ID (used when inheriting)
 	defaultModel               string // Configured model for the default worker; empty inherits.
@@ -139,6 +140,21 @@ func (e *Executor) SetProjectInstructions(instructions string) {
 // reusing the parent's provider. Unavailable routes fall back to the parent.
 func (e *Executor) SetResolver(r ProviderResolver) {
 	e.resolver = r
+}
+
+// RoleResolver turns a role name into the provider and model that answer the
+// work, reporting whether the role is assigned. It is a func rather than an
+// interface because the host owns role bindings: the executor must not learn
+// how settings are stored, only what the role currently resolves to.
+type RoleResolver func(role string) (llm.Provider, string, bool)
+
+// SetRoleResolver enables "@role" model references in agent definitions, so a
+// definition can name the kind of work ("@slow") while the user decides which
+// model answers it. An unassigned role, a nil resolver, or a reference that
+// cannot be resolved keeps the parent model: incomplete configuration must
+// never fail a run.
+func (e *Executor) SetRoleResolver(r RoleResolver) {
+	e.roleResolver = r
 }
 
 // SetSkillsDirectory provides the skills directory section so subagents
@@ -818,14 +834,31 @@ func (e *Executor) fireSubagentStop(req tool.AgentExecRequest, agentHookID, agen
 //
 // An explicit "vendor/model" override routes to that vendor through the
 // resolver only when a linked provider can be resolved. Otherwise it falls
-// back to the parent conversation. Every other form — an alias, a bare model
-// id, or "inherit" — stays on the parent's provider, preserving prior behavior.
+// back to the parent conversation. An "@role" reference asks the host's role
+// resolver, so the definition names the kind of work and the user names the
+// model; an unassigned role falls back to the parent. Every other form — an
+// alias, a bare model id, or "inherit" — stays on the parent's provider,
+// preserving prior behavior.
 func (e *Executor) resolveModel(ctx context.Context, requestModel, configModel string) (llm.Provider, string, error) {
 	ref := strings.TrimSpace(requestModel)
 	if ref == "" {
 		ref = strings.TrimSpace(configModel)
 	}
 	if ref == "" || ref == "inherit" {
+		return e.provider, e.parentModelID, nil
+	}
+	// A role reference ("@smol") names a routing slot, not a model, so it never
+	// reaches a provider as a model name. An unassigned role, or one whose
+	// binding does not resolve, inherits the parent model.
+	if role, ok := llm.ParseRoleAlias(ref); ok {
+		if provider, modelID, assigned := e.resolveRole(role); assigned {
+			return provider, modelID, nil
+		}
+		return e.provider, e.parentModelID, nil
+	}
+	// Something that only looks like an alias ("@", "@Slow Role") is a typo:
+	// sending it as a model id would fail the run, so the parent model answers.
+	if strings.HasPrefix(ref, "@") {
 		return e.provider, e.parentModelID, nil
 	}
 	if vendor, modelID, ok := llm.ParseVendorModel(ref); ok {
@@ -841,6 +874,40 @@ func (e *Executor) resolveModel(ctx context.Context, requestModel, configModel s
 	// A bare id or alias stays on the parent provider; a model it lacks fails
 	// the first request and retries on the parent model.
 	return e.provider, resolveModelAlias(ref), nil
+}
+
+// resolveRole asks the host's role resolver for the provider and model assigned
+// to role. It reports false whenever the parent model should answer instead:
+// no resolver, an unassigned role, or a binding that resolved to nothing.
+func (e *Executor) resolveRole(role string) (llm.Provider, string, bool) {
+	// "@default" is the session's own model. The model picker owns that choice,
+	// so an agent definition cannot route interactive work elsewhere by naming
+	// the default role.
+	if role == string(llm.RoleDefault) || e.roleResolver == nil {
+		return nil, "", false
+	}
+	provider, modelID, ok := e.roleResolver(role)
+	if !ok || provider == nil || modelID == "" {
+		return nil, "", false
+	}
+	return provider, modelID, true
+}
+
+// effectiveModelName is the model shown before a run is approved: a role
+// reference is resolved to the model that will actually answer, so the user
+// approves a model rather than a slot name. Every other form keeps its
+// configured spelling, including ""/"inherit", which the caller renders as the
+// parent model.
+func (e *Executor) effectiveModelName(config *AgentConfig, name string) string {
+	ref := e.configuredModel(config, name)
+	role, ok := llm.ParseRoleAlias(ref)
+	if !ok {
+		return ref
+	}
+	if _, modelID, assigned := e.resolveRole(role); assigned {
+		return modelID
+	}
+	return e.parentModelID
 }
 
 func shouldRetryWithParentModel(err error, modelID, parentModelID string) bool {

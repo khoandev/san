@@ -103,6 +103,17 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 	parentSessionID := m.sessionID()
 	sessionStore := m.services.SessionStore
 
+	// The review is short, bounded, and repeated every turn, so it is the
+	// cheapest work the app does: it follows the smol role when the user bound
+	// one. Resolved here, on the UI goroutine, rather than inside the fork — the
+	// closure runs on a background goroutine and must not read live env state.
+	// An unassigned role keeps the session model, and with it the prefix-cache
+	// parity the fork relies on.
+	reviewProvider, reviewModel := m.resolveRoleModel(llm.RoleSmol)
+	if reviewProvider == nil {
+		reviewProvider, reviewModel = params.Provider, params.ModelID
+	}
+
 	// The write observer feeds the live spinner-tail and the post-pass recap.
 	// It runs on the fork goroutine and checks `live` so a write landing after
 	// teardown drops silently instead of racing on UI state.
@@ -145,15 +156,19 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 		m.services.SelfLearn.Indicator.BeginReview()
 		m.publishSelfLearnStarted()
 
-		client := llm.NewClient(params.Provider, params.ModelID, params.MaxTokens)
-		client.SetThinkingEffort(params.ThinkingEffort)
+		client := llm.NewClient(reviewProvider, reviewModel, params.MaxTokens)
+		if reviewModel == params.ModelID {
+			// The rung belongs to the session model; a different smol model has
+			// its own ladder, so passing it through could name a rung it lacks.
+			client.SetThinkingEffort(params.ThinkingEffort)
+		}
 		// Sidechain writer: each L1 fork gets its OWN session ID
 		// (formatted "<parent>.selflearn-review.<unix>") so
 		// `san --resume <fork-id>` replays exactly that review's LLM
 		// calls in isolation. The recap row surfaces this fork ID.
 		var forkOnEvent func(core.Event)
 		var forkSessionID string
-		rec, err := sessionStore.Create(session.CreateOptions{AgentID: "selflearn-review", Provider: params.Provider.Name(), Model: params.ModelID, MaxTokens: params.MaxTokens, ParentSessionID: parentSessionID, Sidechain: true})
+		rec, err := sessionStore.Create(session.CreateOptions{AgentID: "selflearn-review", Provider: reviewProvider.Name(), Model: reviewModel, MaxTokens: params.MaxTokens, ParentSessionID: parentSessionID, Sidechain: true})
 		if err != nil {
 			log.Logger().Warn("could not open self-learning session", zap.Error(err))
 			return

@@ -25,6 +25,9 @@ func (s *ProviderSelector) Enter(ctx context.Context, width, height int) (tea.Cm
 	s.closeCredentialForm()
 	s.closeCustomForm()
 	s.closeOllamaForm()
+	s.assignRole = ""
+	s.roleNotice = ""
+	s.refreshRoleInfo()
 	s.active = true
 	s.activeTab = providerTabModels
 	s.width = width
@@ -258,11 +261,15 @@ func (s *ProviderSelector) sortConnectedProviders(current *llm.CurrentModelInfo)
 func (s *ProviderSelector) rebuildVisibleItems() {
 	s.visibleItems = nil
 
-	switch s.activeTab {
-	case providerTabModels:
+	switch {
+	case s.assigning(), s.activeTab == providerTabModels:
+		// Assign mode reuses the model list, so both states build the same
+		// rows; only the banner and what Enter does differ.
 		s.rebuildModelsTab()
-	case providerTabProviders:
+	case s.activeTab == providerTabProviders:
 		s.rebuildProvidersTab()
+	case s.activeTab == providerTabRoles:
+		s.rebuildRolesTab()
 	}
 
 	s.clampSelection()
@@ -489,6 +496,9 @@ func (s *ProviderSelector) Cancel() {
 	s.allModels = nil
 	s.filteredModels = nil
 	s.visibleItems = nil
+	s.roleInfo = ModelRoleInfo{}
+	s.roleNotice = ""
+	s.assignRole = ""
 	s.expandedProviderIdx = -1
 	s.closeCredentialForm()
 	s.closeCustomForm()

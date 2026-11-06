@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/transcript"
 	"github.com/genai-io/sdk-go/pkg/acp"
 	"github.com/genai-io/sdk-go/pkg/acp/protocol"
@@ -72,7 +73,16 @@ func (h *acpHost) setConfig(ctx context.Context, request protocol.SetSessionConf
 			return protocol.SetSessionConfigOptionResponse{}, err
 		}
 		s.runtimeBuildParams.ModelID = id
-		s.hooks.SetLLMCompleter(buildHookCompleter(s.runtimeBuildParams.Provider), id)
+		var hookRoles llm.RoleBindings
+		if s.permissions != nil && s.permissions.settings != nil {
+			hookRoles = llm.Bindings(s.permissions.settings.ModelRoles)
+		}
+		var hookStore *llm.Store
+		if conn := llm.Default(); conn != nil {
+			hookStore = conn.Store()
+		}
+		hookProvider, hookModel := resolveRoleModelOver(hookRoles, hookStore, llm.RoleSmol, s.runtimeBuildParams.Provider, id)
+		s.hooks.SetLLMCompleter(buildHookCompleter(hookProvider), hookModel)
 	}
 	return protocol.SetSessionConfigOptionResponse{ConfigOptions: s.configOptions()}, nil
 }

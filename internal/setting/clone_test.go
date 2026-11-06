@@ -16,6 +16,7 @@ func TestCloneCopiesEveryField(t *testing.T) {
 		Permissions:             PermissionSettings{DefaultMode: "plan", Allow: []string{"Read"}, Deny: []string{"Bash(rm:*)"}, Ask: []string{"Write"}},
 		Model:                   "claude-opus-4-7",
 		SubagentModel:           "inherit",
+		ModelRoles:              map[string]string{"smol": "anthropic/claude-haiku-4-5"},
 		Hooks:                   map[string][]Hook{"PreToolUse": {{Matcher: "Bash", Hooks: []HookCmd{{Type: "command", Command: "true"}}}}},
 		Env:                     map[string]string{"K": "v"},
 		EnabledPlugins:          map[string]bool{"p": true},
@@ -55,10 +56,12 @@ func TestCloneCopiesEveryField(t *testing.T) {
 	*dst.BashPreviewLines = 9
 	dst.Permissions.Allow[0] = "changed"
 	dst.Env["K"] = "changed"
+	dst.ModelRoles["smol"] = "changed"
 	*dst.Advisor.Enable = false
 	dst.Hooks["PreToolUse"][0].Hooks[0].Command = "changed"
 	if *src.BashPreviewLines != 3 || src.Permissions.Allow[0] != "Read" || src.Env["K"] != "v" ||
 		src.Hooks["PreToolUse"][0].Hooks[0].Command != "true" ||
+		src.ModelRoles["smol"] != "anthropic/claude-haiku-4-5" ||
 		!src.Advisor.Enabled() {
 		t.Fatal("Clone shares storage with its source")
 	}

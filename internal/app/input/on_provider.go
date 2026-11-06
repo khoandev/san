@@ -24,7 +24,11 @@ type providerTab int
 const (
 	providerTabModels    providerTab = iota // model selection tab
 	providerTabProviders                    // provider management tab
+	providerTabRoles                        // model role assignment tab
 )
+
+// providerTabCount is how many tabs NextTab/PrevTab cycle through.
+const providerTabCount = 3
 
 // providerItemKind represents a row type in the visible-items list.
 type providerItemKind int
@@ -34,6 +38,7 @@ const (
 	providerItemModel                                  // selectable model row (Models tab)
 	providerItemProvider                               // provider row (Providers tab)
 	providerItemAuthMethod                             // expanded auth-method sub-row (Providers tab)
+	providerItemRole                                   // selectable role row (Roles tab)
 )
 
 // providerListItem is a single row in the flattened visible-items list.
@@ -42,6 +47,7 @@ type providerListItem struct {
 	Model       *providerModelItem
 	Provider    *providerProviderItem
 	AuthMethod  *providerAuthMethodItem
+	Role        *providerRoleItem
 	ProviderIdx int // index into allProviders
 }
 
@@ -178,6 +184,15 @@ type ProviderSelector struct {
 	// spinnerTick advances on each providerConnectingTickMsg; it is the live
 	// dot's frame while a connect/refresh is in flight.
 	spinnerTick int
+
+	// Roles tab: the injected settings surface, the snapshot it last read, the
+	// last write error, and the role whose model is being picked. Assign mode
+	// borrows the Models list, so a non-empty assignRole means the tab bar is
+	// replaced by a banner naming that role.
+	roleSource RoleSource
+	roleInfo   ModelRoleInfo
+	roleNotice string
+	assignRole string
 }
 
 // NewProviderSelector creates a new provider selector ProviderSelector.
@@ -223,6 +238,18 @@ type providerLoginPromptMsg struct {
 // providerModelsLoadedMsg is sent when async model loading completes.
 type providerModelsLoadedMsg struct {
 	Models []providerModelItem
+}
+
+// providerRoleAssignedMsg reports a role's new model reference, written at user
+// scope by the tab's injected setter.
+type providerRoleAssignedMsg struct {
+	Role string
+	Ref  string
+}
+
+// providerRoleClearedMsg reports that a role returned to the session model.
+type providerRoleClearedMsg struct {
+	Role string
 }
 
 // providerStatusDisplayInfo contains display information for a provider status.
@@ -303,6 +330,12 @@ func UpdateProvider(deps OverlayDeps, state *ProviderState, msg tea.Msg) (tea.Cm
 		if deps.ReloadModelStore != nil {
 			deps.ReloadModelStore()
 		}
+		return nil, true
+	case providerRoleAssignedMsg:
+		state.Selector.handleRoleWrite(msg.Role, msg.Ref, true)
+		return nil, true
+	case providerRoleClearedMsg:
+		state.Selector.handleRoleWrite(msg.Role, "", false)
 		return nil, true
 	case kit.StatusExpiredMsg:
 		if msg.Token == state.statusToken {

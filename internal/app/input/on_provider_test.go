@@ -752,10 +752,29 @@ func TestTabSwitchesBetweenTabs(t *testing.T) {
 		t.Fatal("Providers tab should show provider items")
 	}
 
-	// Press Tab again to go back to Models
+	// Press Tab again to reach the Roles tab
 	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.activeTab != providerTabRoles {
+		t.Fatal("Tab should switch to Roles tab")
+	}
+	var roleRows int
+	for _, item := range m.visibleItems {
+		if item.Kind == providerItemRole {
+			roleRows++
+		}
+	}
+	if roleRows == 0 {
+		t.Fatal("Roles tab should show role items")
+	}
+
+	// Shift+Tab walks back through Providers to Models, closing the cycle.
+	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.activeTab != providerTabProviders {
+		t.Fatal("Shift+Tab should return to Providers tab")
+	}
+	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if m.activeTab != providerTabModels {
-		t.Fatal("Tab should switch back to Models tab")
+		t.Fatal("Shift+Tab should return to Models tab")
 	}
 }
 
