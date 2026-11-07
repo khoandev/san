@@ -156,3 +156,286 @@ func splitArgs(s string) []string {
 	}
 	return out
 }
+
+// TestReadOnlyGhCommand covers the gh CLI read-only classifier.
+//
+// gh api is the most common planning command (querying GitHub API), so it gets
+// the most thorough coverage. The other subcommands use the sub-action guard.
+func TestReadOnlyGhCommand(t *testing.T) {
+	readOnly := []string{
+		// The command that triggered this change.
+		"gh api repos/ekmas/neobrutalism-components/contents/apps/web/registry.json --jq '.name'",
+		"gh api repos/ekmas/neobrutalism-components/git/trees/main?recursive=1 --jq '.tree[].path'",
+		// gh api with explicit GET is still read-only.
+		"gh api repos/owner/repo/issues --method GET",
+		"gh api /repos/owner/repo --jq '.description'",
+		// Listing and viewing are read-only.
+		"gh repo view owner/repo",
+		"gh repo list owner",
+		"gh pr list",
+		"gh pr view 42",
+		"gh pr status",
+		"gh pr diff 42",
+		"gh pr checks 42",
+		"gh issue list",
+		"gh issue view 1",
+		"gh issue status",
+		"gh release list",
+		"gh release view v1.0.0",
+		"gh run list",
+		"gh run view 123",
+		"gh workflow list",
+		"gh workflow view deploy.yml",
+		"gh search repos neobrutalism",
+		"gh search issues --label bug",
+		"gh auth status",
+		"gh auth token",
+		"gh version",
+		"gh help",
+		"gh variable list",
+	}
+	for _, cmd := range readOnly {
+		args := parseGhArgs(cmd)
+		if !isReadOnlyGhCommand(args) {
+			t.Errorf("isReadOnlyGhCommand(%q) = false, want true", cmd)
+		}
+	}
+	// End-to-end via IsReadOnlyBashCommand (the entry point Plan Mode uses).
+	e2eReadOnly := []string{
+		"gh api repos/owner/repo/issues --jq '.[].title' 2>&1 | head -5",
+		"gh api repos/owner/repo/git/trees/main?recursive=1 --jq '.tree[].path' | grep -i registry | head -40",
+		"gh repo view owner/repo",
+		"gh pr list | head -20",
+		"gh issue list --label bug",
+	}
+	for _, cmd := range e2eReadOnly {
+		if !IsReadOnlyBashCommand(cmd) {
+			t.Errorf("IsReadOnlyBashCommand(%q) = false, want true", cmd)
+		}
+	}
+
+	notReadOnly := []string{
+		// Write methods on gh api.
+		"gh api --method POST /repos/owner/repo/issues",
+		"gh api /repos/owner/repo/issues -X POST",
+		"gh api --method PATCH /repos/owner/repo/issues/1",
+		"gh api --method DELETE /repos/owner/repo/issues/1",
+		"gh api /graphql --input query.graphql",
+		// Write sub-actions.
+		"gh issue create",
+		"gh issue edit 1",
+		"gh issue close 1",
+		"gh issue comment 1",
+		"gh pr merge 42",
+		"gh pr review 42",
+		"gh pr ready 42",
+		"gh release upload",
+		"gh repo archive",
+		"gh repo fork",
+		"gh run rerun 123",
+		"gh run cancel 123",
+		"gh workflow run deploy.yml",
+		"gh workflow enable deploy.yml",
+		"gh variable set MY_VAR",
+		"gh variable delete MY_VAR",
+		"gh auth login",
+		"gh auth logout",
+		// Unknown subcommands are refused.
+		"gh codespace create",
+		"gh gist create",
+	}
+	for _, cmd := range notReadOnly {
+		args := parseGhArgs(cmd)
+		if isReadOnlyGhCommand(args) {
+			t.Errorf("isReadOnlyGhCommand(%q) = true, want false", cmd)
+		}
+	}
+}
+
+// parseGhArgs mimics what IsReadOnlyBashCommand does: strip the leading "gh"
+// and split on spaces so the unit test can call isReadOnlyGhCommand directly.
+func parseGhArgs(cmd string) []string {
+	args := splitArgs(cmd)
+	if len(args) > 0 && args[0] == "gh" {
+		return args[1:]
+	}
+	return args
+}
+
+// TestReadOnlyCommonCommands verifies that frequently used inspection commands
+// (curl, wget, brew, npm/yarn/pnpm, pip, tar, unzip, docker, kubectl, and
+// the flat-list additions) are allowed in Plan Mode when used as readers and
+// rejected when used as writers.
+func TestReadOnlyCommonCommands(t *testing.T) {
+	readOnly := []string{
+		// flat-list additions
+		"awk '{print $1}' go.mod",
+		"awk -F: '{print $2}' /etc/hosts",
+		"man git",
+		"less go.mod",
+		"more README.md",
+		"ps aux",
+		"ps -ef",
+		"pgrep san",
+		"lsof -i :8080",
+		"env",
+		"locale",
+		"arch",
+		"sw_vers",
+		"uptime",
+		"cal",
+		"bc",
+		"expr 1 + 1",
+		"type go",
+		"zcat archive.gz",
+		"ping -c 1 google.com",
+		"traceroute google.com",
+		"nslookup google.com",
+		"dig google.com",
+		"host google.com",
+		"whois google.com",
+		"netstat -an",
+		"ss -tlnp",
+		"ifconfig",
+		"ip addr",
+		"open README.md",
+		"pbpaste",
+		// curl (GET-only reads)
+		"curl https://api.github.com/repos/owner/repo",
+		"curl -s https://registry.npmjs.org/react/latest",
+		"curl -H 'Accept: application/json' https://api.example.com/v1/users",
+		"curl -o - https://example.com/data.json",
+		"curl --output - https://example.com/data.json",
+		"curl -X GET https://api.example.com",
+		"curl --request GET https://api.example.com",
+		"curl -sL https://example.com | head -20",
+		// wget (stdout only)
+		"wget -q -O - https://example.com/data.json",
+		"wget --quiet --output-document=- https://api.example.com",
+		// brew (inspect only)
+		"brew list",
+		"brew info go",
+		"brew search neovim",
+		"brew deps go",
+		"brew outdated",
+		"brew --version",
+		"brew doctor",
+		"brew config",
+		// npm / yarn / pnpm / bun (list/info only)
+		"npm list",
+		"npm info react",
+		"npm view lodash version",
+		"npm outdated",
+		"npm --version",
+		"yarn list",
+		"yarn info react",
+		"yarn outdated",
+		"yarn --version",
+		"pnpm list",
+		"pnpm info react",
+		"pnpm --version",
+		"bun --version",
+		// pip / pip3 (inspect only)
+		"pip list",
+		"pip show requests",
+		"pip freeze",
+		"pip --version",
+		"pip3 list",
+		"pip3 show numpy",
+		// tar (list only)
+		"tar -tf archive.tar.gz",
+		"tar -tvf archive.tar",
+		"tar --list -f archive.tar.gz",
+		// unzip (list only)
+		"unzip -l archive.zip",
+		"unzip -v archive.zip",
+		// docker (inspect only)
+		"docker ps",
+		"docker ps -a",
+		"docker images",
+		"docker inspect mycontainer",
+		"docker logs mycontainer",
+		"docker version",
+		"docker info",
+		"docker container ls",
+		"docker image ls",
+		"docker network ls",
+		"docker system df",
+		// kubectl (read only)
+		"kubectl get pods",
+		"kubectl get pods -n kube-system",
+		"kubectl describe pod mypod",
+		"kubectl logs mypod",
+		"kubectl version",
+		"kubectl api-resources",
+		"kubectl config view",
+		"kubectl config current-context",
+		"kubectl auth can-i create pods",
+		"k get pods",
+	}
+	for _, cmd := range readOnly {
+		if !IsReadOnlyBashCommand(cmd) {
+			t.Errorf("IsReadOnlyBashCommand(%q) = false, want true", cmd)
+		}
+	}
+
+	notReadOnly := []string{
+		// curl writes
+		"curl -X POST https://api.example.com/items",
+		"curl --request PUT https://api.example.com/items/1",
+		"curl --data-raw 'body' https://api.example.com",
+		"curl -F 'file=@upload.txt' https://api.example.com",
+		"curl -T myfile.txt https://api.example.com/upload",
+		"curl --json '{}' https://api.example.com",
+		"curl -o output.html https://example.com",
+		"curl -O https://example.com/file.zip",
+		// wget writes
+		"wget https://example.com/file.zip",
+		"wget -O output.html https://example.com",
+		"wget -P /tmp https://example.com/file.zip",
+		"wget -o wget.log https://example.com",
+		"wget -r https://example.com",
+		// brew writes
+		"brew install go",
+		"brew uninstall node",
+		"brew upgrade",
+		"brew update",
+		"brew tap homebrew/cask",
+		// npm writes
+		"npm install react",
+		"npm uninstall lodash",
+		"npm run build",
+		"npm publish",
+		"npm config set registry https://registry.npmjs.org",
+		// pip writes
+		"pip install requests",
+		"pip uninstall requests",
+		// tar writes
+		"tar -czf archive.tar.gz .",
+		"tar -xzf archive.tar.gz",
+		"tar -rf archive.tar newfile.txt",
+		// unzip writes (extract)
+		"unzip archive.zip",
+		"unzip archive.zip -d /tmp",
+		// docker writes
+		"docker run ubuntu",
+		"docker exec mycontainer bash",
+		"docker rm mycontainer",
+		"docker build .",
+		"docker pull ubuntu",
+		"docker network rm mynetwork",
+		"docker system prune",
+		// kubectl writes
+		"kubectl apply -f deployment.yaml",
+		"kubectl delete pod mypod",
+		"kubectl create deployment myapp --image=nginx",
+		"kubectl config set-context myctx",
+		"kubectl config use-context myctx",
+		"kubectl auth reconcile -f rbac.yaml",
+	}
+	for _, cmd := range notReadOnly {
+		if IsReadOnlyBashCommand(cmd) {
+			t.Errorf("IsReadOnlyBashCommand(%q) = true, want false", cmd)
+		}
+	}
+}
