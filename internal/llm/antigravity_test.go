@@ -513,6 +513,52 @@ func TestAntigravitySyntheticProjectID(t *testing.T) {
 	}
 }
 
+func TestAntigravityParametersJsonSchemaStripping(t *testing.T) {
+	// SDK-go sends functionDeclarations with parametersJsonSchema
+	rawTools := []any{
+		map[string]any{
+			"functionDeclarations": []any{
+				map[string]any{
+					"name":        "read_file",
+					"description": "Read file",
+					"parametersJsonSchema": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"path": map[string]any{"type": "string"},
+						},
+						"required": []any{"path"},
+					},
+				},
+			},
+		},
+	}
+
+	cleanedTools := cleanToolsForAntigravity(rawTools, false).([]any)
+	fdGroup := cleanedTools[0].(map[string]any)["functionDeclarations"].([]any)
+	decl := fdGroup[0].(map[string]any)
+
+	// parametersJsonSchema MUST be stripped
+	if _, exists := decl["parametersJsonSchema"]; exists {
+		t.Error("parametersJsonSchema was not stripped")
+	}
+	if _, exists := decl["parameters_json_schema"]; exists {
+		t.Error("parameters_json_schema was not stripped")
+	}
+
+	// parameters MUST be populated from parametersJsonSchema
+	params, ok := decl["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters missing or not map: %v", decl["parameters"])
+	}
+	if params["type"] != "OBJECT" {
+		t.Errorf("parameters.type = %v, want OBJECT", params["type"])
+	}
+	props := params["properties"].(map[string]any)
+	if props["path"] == nil {
+		t.Error("parameters.properties.path is missing")
+	}
+}
+
 func TestAntigravityModelIDResolution(t *testing.T) {
 	tests := []struct {
 		input string

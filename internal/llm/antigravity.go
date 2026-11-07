@@ -1051,6 +1051,12 @@ func cleanFunctionDeclaration(fd map[string]any, isClaude bool) map[string]any {
 
 	rawParams := fd["parameters"]
 	if rawParams == nil {
+		rawParams = fd["parametersJsonSchema"]
+	}
+	if rawParams == nil {
+		rawParams = fd["parameters_json_schema"]
+	}
+	if rawParams == nil {
 		rawParams = fd["input_schema"]
 	}
 	if rawParams == nil {
@@ -1059,7 +1065,7 @@ func cleanFunctionDeclaration(fd map[string]any, isClaude bool) map[string]any {
 
 	if pMap, ok := rawParams.(map[string]any); ok {
 		out["parameters"] = cleanJSONSchemaForAntigravity(pMap, isClaude)
-	} else {
+	} else if isClaude {
 		// Provide placeholder for empty schema
 		out["parameters"] = map[string]any{
 			"type": "object",
@@ -1071,10 +1077,16 @@ func cleanFunctionDeclaration(fd map[string]any, isClaude bool) map[string]any {
 			},
 			"required": []any{"_placeholder"},
 		}
+	} else {
+		out["parameters"] = map[string]any{
+			"type": "OBJECT",
+		}
 	}
 
 	delete(out, "input_schema")
 	delete(out, "inputSchema")
+	delete(out, "parametersJsonSchema")
+	delete(out, "parameters_json_schema")
 	return out
 }
 
