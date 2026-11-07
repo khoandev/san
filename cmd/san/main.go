@@ -57,6 +57,8 @@ func init() {
 	rootCmd.SetHelpCommand(helpCmd)
 	rootCmd.AddCommand(mcpCmd)
 	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(logoutCmd)
 }
 
 func main() {

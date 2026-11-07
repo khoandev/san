@@ -50,6 +50,9 @@ const (
 	// API key — e.g. an OpenAI ChatGPT plan. Deliberately provider-agnostic, so
 	// other subscription logins reuse it.
 	AuthSubscription AuthMethod = "subscription"
+
+	// AuthAntigravity is interactive OAuth login via Google Antigravity.
+	AuthAntigravity AuthMethod = "antigravity"
 )
 
 // Meta is what the registry knows about one provider/auth-method pair: what it

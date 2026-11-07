@@ -103,6 +103,11 @@ var vendorEntries = []vendorEntry{
 		vendorID: "google",
 	},
 	{
+		meta:      Meta{Provider: Google, AuthMethod: AuthAntigravity, DisplayName: "Antigravity (OAuth)"},
+		vendorID:  antigravityVendor,
+		configure: configureAntigravity,
+	},
+	{
 		meta: Meta{
 			Provider: Google, AuthMethod: AuthVertex, DisplayName: "Vertex AI",
 			EnvVars:         []string{"GOOGLE_CLOUD_PROJECT"},
@@ -245,6 +250,9 @@ func findVendor(id string) (catalog.Vendor, bool) {
 	}
 	if id == opencodeVendorID {
 		return openCodeZenVendor(), true
+	}
+	if id == antigravityVendor {
+		return antigravityCatalogVendor(), true
 	}
 	return catalog.Vendor{}, false
 }

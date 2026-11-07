@@ -30,6 +30,8 @@ func storeKey(vendorID string) (string, bool) {
 		return "GITHUB_COPILOT_AUTH", true
 	case codexVendor:
 		return "OPENAI_CHATGPT_AUTH", true
+	case antigravityVendor:
+		return antigravitySecretKey, true
 	}
 	return "", false
 }

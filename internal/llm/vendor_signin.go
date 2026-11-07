@@ -100,6 +100,7 @@ func registerAuthenticators() {
 	for vendorID, meta := range signIns {
 		RegisterAuthenticator(meta.Provider, meta.AuthMethod, authenticator{vendorID: vendorID})
 	}
+	RegisterAuthenticator(Google, AuthAntigravity, antigravityAuthenticator{})
 }
 
 // TODO(sdk-go): Copilot's per-turn headers are protocol knowledge; move them to sdk-go's Copilot transport.

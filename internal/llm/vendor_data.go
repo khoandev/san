@@ -259,7 +259,11 @@ type vendorModels struct {
 }
 
 func newVendorModels(vendor catalog.Vendor) vendorModels {
-	return vendorModels{vendor: vendor, lineup: loadedModelData()[vendor.ID]}
+	lineup := loadedModelData()[vendor.ID]
+	if len(lineup.Models) == 0 && vendor.ID == antigravityVendor {
+		lineup = loadedModelData()["google"]
+	}
+	return vendorModels{vendor: vendor, lineup: lineup}
 }
 
 // model resolves one ID, listed in the data or not.
