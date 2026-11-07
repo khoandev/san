@@ -459,6 +459,126 @@ func skipSedTranslate(program string, i int) (int, bool) {
 	return skipSedDelimited(program, next, delim)
 }
 
+// --- gh --------------------------------------------------------------------
+
+// readOnlyGhSubcommands are the gh subcommands that only read from GitHub's
+// API or the local git state. They never write, create, delete, or trigger
+// workflow runs.
+//
+// "api" is included here but is gated further: only GET requests (the default
+// method when --method is absent) are read-only. Any call with --method POST,
+// PATCH, PUT, or DELETE is a write.
+var readOnlyGhSubcommands = map[string]bool{
+	"api":      true, // further gated by --method below
+	"auth":     true, // "auth status" and "auth token" are read-only
+	"browse":   true, // opens a URL in the browser; no write effect
+	"help":     true,
+	"issue":    true, // sub-actions: list, view, status
+	"pr":       true, // sub-actions: list, view, checks, diff, status
+	"release":  true, // sub-actions: list, view, download (read-only)
+	"repo":     true, // sub-actions: view, list, clone (clone writes disk but
+	//                // only the repo copy, same as git clone; kept here because
+	//                // it is the standard investigation flow)
+	"run":      true, // sub-actions: list, view, download
+	"search":   true,
+	"variable": true, // sub-action: list (get/set/delete are writes, gated below)
+	"version":  true,
+	"workflow": true, // sub-actions: list, view
+}
+
+// readOnlyGhWriteSubActions are sub-actions that write even under a normally
+// read-only gh subcommand. The check only looks at the first positional word
+// after the subcommand, which is always the sub-action when present.
+var readOnlyGhWriteSubActions = map[string]bool{
+	// issue sub-actions that write
+	"create": true, "edit": true, "close": true, "reopen": true,
+	"transfer": true, "pin": true, "unpin": true, "lock": true, "unlock": true,
+	"comment": true,
+	// pr sub-actions that write
+	"merge": true, "review": true, "ready": true, "draft": true,
+	// release sub-actions that write
+	"upload": true,
+	// repo sub-actions that write
+	"archive": true, "rename": true, "fork": true, "sync": true, "deploy-key": true,
+	"set-default": true,
+	// run sub-actions that write
+	"rerun": true, "cancel": true, "watch": true,
+	// workflow sub-actions that write
+	"run": true, "enable": true, "disable": true,
+	// variable sub-actions that write
+	"set": true, "delete": true,
+	// auth sub-actions that write (login writes credentials)
+	"login": true, "logout": true, "refresh": true, "setup-git": true,
+}
+
+// ghWriteMethodFlags are --method values that make gh api a write call.
+var ghWriteMethodFlags = map[string]bool{
+	"POST": true, "PATCH": true, "PUT": true, "DELETE": true,
+	"post": true, "patch": true, "put": true, "delete": true,
+}
+
+// isReadOnlyGhCommand reports whether a gh invocation is provably read-only.
+// It admits only the subcommands listed in readOnlyGhSubcommands and further
+// rejects any sub-action in readOnlyGhWriteSubActions. For "gh api" it also
+// rejects any explicit --method that is not GET.
+func isReadOnlyGhCommand(args []string) bool {
+	// Find the first non-flag argument: that is the subcommand.
+	subIdx := -1
+	for i, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			subIdx = i
+			break
+		}
+		// Skip --flag value pairs so the value is not misread as the sub.
+		if strings.HasPrefix(arg, "--") && !strings.Contains(arg, "=") {
+			i++ // the next token is the value; advance past it in next iteration
+			_ = i
+		}
+	}
+	if subIdx < 0 {
+		return false // bare "gh" with only flags: no sub-action to classify
+	}
+	sub := args[subIdx]
+	if !readOnlyGhSubcommands[sub] {
+		return false
+	}
+
+	// For "gh api", reject any explicit write method.
+	if sub == "api" {
+		for i, arg := range args {
+			switch {
+			case arg == "--method" || arg == "-X":
+				// next token is the method value
+				if i+1 < len(args) && ghWriteMethodFlags[args[i+1]] {
+					return false
+				}
+			case strings.HasPrefix(arg, "--method="):
+				if ghWriteMethodFlags[strings.TrimPrefix(arg, "--method=")] {
+					return false
+				}
+			case strings.HasPrefix(arg, "-X") && len(arg) > 2:
+				if ghWriteMethodFlags[arg[2:]] {
+					return false
+				}
+			case arg == "--input" || strings.HasPrefix(arg, "--input="):
+				// --input pipes a file body, implying a write call
+				return false
+			}
+		}
+		return true
+	}
+
+	// For all other subcommands, reject write sub-actions.
+	rest := args[subIdx+1:]
+	for _, arg := range rest {
+		if !strings.HasPrefix(arg, "-") {
+			// First positional after the subcommand is the sub-action.
+			return !readOnlyGhWriteSubActions[arg]
+		}
+	}
+	return true
+}
+
 // --- go --------------------------------------------------------------------
 
 // readOnlyGoSubcommands are the go subcommands that only report: they print
@@ -482,6 +602,418 @@ func isReadOnlyGoCommand(args []string) bool {
 	for _, arg := range args[sub+1:] {
 		if arg == "-w" || arg == "-u" || strings.HasPrefix(arg, "--write") || strings.HasPrefix(arg, "--unset") {
 			return false
+		}
+	}
+	return true
+}
+
+// --- curl ------------------------------------------------------------------
+
+// curlWriteFlags are flags that cause curl to send a request body, implying
+// a write (POST, PUT, PATCH, etc.). Matched by exact name or prefix so the
+// attached-value form (--data=foo, --json={}) is caught too.
+var curlWriteFlags = []string{
+	"-d", "--data",
+	"--data-raw", "--data-binary", "--data-ascii", "--data-urlencode",
+	"-F", "--form", "--form-string",
+	"-T", "--upload-file",
+	"--json",
+}
+
+// curlWriteMethods are HTTP verbs that modify server state.
+var curlWriteMethods = map[string]bool{
+	"POST": true, "PUT": true, "PATCH": true, "DELETE": true,
+	"post": true, "put": true, "patch": true, "delete": true,
+}
+
+// isReadOnlyCurlCommand reports whether a curl invocation is provably
+// read-only: no write-method flag, no request-body flag, and no output to a
+// file (stdout/stderr are fine). The absence of an explicit -X means GET,
+// which is the safe default.
+func isReadOnlyCurlCommand(args []string) bool {
+	for i, arg := range args {
+		// Body/upload flags.
+		for _, wf := range curlWriteFlags {
+			if arg == wf || strings.HasPrefix(arg, wf+"=") {
+				return false
+			}
+		}
+		// -X METHOD / --request METHOD.
+		if arg == "-X" || arg == "--request" {
+			if i+1 < len(args) && curlWriteMethods[args[i+1]] {
+				return false
+			}
+		}
+		if strings.HasPrefix(arg, "-X") && len(arg) > 2 {
+			if curlWriteMethods[arg[2:]] {
+				return false
+			}
+		}
+		if strings.HasPrefix(arg, "--request=") {
+			if curlWriteMethods[strings.TrimPrefix(arg, "--request=")] {
+				return false
+			}
+		}
+		// -o FILE saves to disk; -o - streams to stdout (safe).
+		if arg == "-o" || arg == "--output" {
+			if i+1 < len(args) {
+				out := args[i+1]
+				if out != "-" && out != "/dev/stdout" && out != "/dev/stderr" {
+					return false
+				}
+			}
+		}
+		if strings.HasPrefix(arg, "--output=") {
+			out := strings.TrimPrefix(arg, "--output=")
+			if out != "-" && out != "/dev/stdout" {
+				return false
+			}
+		}
+		// --create-dirs, --remote-name (-O) always write to disk.
+		if arg == "--create-dirs" || arg == "-O" || arg == "--remote-name" ||
+			arg == "--remote-name-all" {
+			return false
+		}
+	}
+	return true
+}
+
+// --- wget ------------------------------------------------------------------
+
+// isReadOnlyWgetCommand reports whether a wget invocation only streams to
+// stdout. wget's default is to save to disk, so this gate requires -O - (or
+// --output-document=-) to be present and rejects any flag that writes
+// elsewhere.
+func isReadOnlyWgetCommand(args []string) bool {
+	stdoutOut := false
+	for i, arg := range args {
+		switch {
+		// -O - / --output-document=- streams to stdout.
+		case arg == "-O" || arg == "--output-document":
+			if i+1 < len(args) {
+				out := args[i+1]
+				if out == "-" || out == "/dev/stdout" {
+					stdoutOut = true
+				} else {
+					return false // writing to a named file
+				}
+			}
+		case strings.HasPrefix(arg, "--output-document="):
+			out := strings.TrimPrefix(arg, "--output-document=")
+			if out == "-" || out == "/dev/stdout" {
+				stdoutOut = true
+			} else {
+				return false
+			}
+		// Log file writes.
+		case arg == "-o" || arg == "--output-file",
+			arg == "-a" || arg == "--append-output":
+			return false
+		// Directory prefix: saves fetched file under the prefix.
+		case arg == "-P" || arg == "--directory-prefix",
+			strings.HasPrefix(arg, "--directory-prefix="):
+			return false
+		// Cookie jar writes.
+		case arg == "--save-cookies", strings.HasPrefix(arg, "--save-cookies="):
+			return false
+		// Mirror / recursive download: always writes multiple files.
+		case arg == "-m" || arg == "--mirror",
+			arg == "-r" || arg == "--recursive":
+			return false
+		// -N (timestamping) can overwrite if the server file is newer.
+		case arg == "-N" || arg == "--timestamping":
+			return false
+		}
+	}
+	// Without -O -, wget saves to disk by default: not read-only.
+	return stdoutOut
+}
+
+// --- brew ------------------------------------------------------------------
+
+// readOnlyBrewSubcommands are Homebrew commands that only inspect state and
+// never install, upgrade, or modify formulae or the filesystem.
+var readOnlyBrewSubcommands = map[string]bool{
+	"list": true, "ls": true,
+	"info": true, "abv": true,
+	"search": true,
+	"deps": true, "uses": true,
+	"outdated": true,
+	"leaves": true,
+	"missing": true,
+	"cat": true,     // prints the formula file
+	"log": true,     // git log of the formula
+	"audit": true,   // lints a formula (read-only)
+	"home": true,    // opens the project page in a browser
+	"help": true,
+	"--version": true, "-v": true,
+	"shellenv": true,
+	"config": true,
+	"environment": true,
+	"doctor": true, // checks the system; no writes
+	"bundle": true, // used for Brewfile export (read), gated below
+	"formulae": true,
+	"casks": true,
+	"commands": true,
+	"completions": true,
+	"tap-info": true,
+}
+
+// isReadOnlyBrewCommand reports whether a brew invocation is read-only.
+func isReadOnlyBrewCommand(args []string) bool {
+	// A bare version flag is always read-only.
+	for _, arg := range args {
+		if arg == "--version" || arg == "-v" {
+			return true
+		}
+	}
+	// Find the first non-flag word: that is the subcommand.
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			return readOnlyBrewSubcommands[arg]
+		}
+	}
+	return false
+}
+
+// --- npm / yarn / pnpm / bun -----------------------------------------------
+
+// readOnlyNodeSubcommands are package-manager subcommands that only report
+// state and never install, build, or run code.
+var readOnlyNodeSubcommands = map[string]bool{
+	// Listing and inspection.
+	"list": true, "ls": true, "ll": true, "la": true,
+	"info": true, "view": true, "show": true,
+	"search": true, "find": true,
+	// Dependency analysis.
+	"outdated": true,
+	"audit": true,
+	"why": true, "explain": true,
+	// Documentation helpers (open in browser; no write).
+	"docs": true, "repo": true, "home": true, "bugs": true,
+	// Meta.
+	"help": true, "version": true,
+	"root": true, "prefix": true, "bin": true,
+	"config": true, // "npm config get" is read-only; set/delete are writes,
+	//               // but those need a second positional we do not check here.
+	//               // The common read usage (npm config list, npm config get X)
+	//               // is covered; a user who does "npm config set" gets blocked
+	//               // by the sub-action guard in the caller.
+	"pack": true,  // creates a tarball in cwd; treat as read (no install)
+}
+
+// readOnlyNodeWriteSubActions blocks write sub-actions under otherwise
+// read-only subcommands (e.g. "npm config set", "npm config delete").
+var readOnlyNodeWriteSubActions = map[string]bool{
+	"set": true, "delete": true, "rm": true, "del": true,
+	"edit": true, "fix": true,
+}
+
+// isReadOnlyNodePackageCommand reports whether an npm/yarn/pnpm/bun
+// invocation only reads package state.
+func isReadOnlyNodePackageCommand(args []string) bool {
+	// Accept bare "--version" / "-v" before any subcommand.
+	subIdx := -1
+	for i, arg := range args {
+		if arg == "--version" || arg == "-v" || arg == "-V" {
+			return true
+		}
+		if !strings.HasPrefix(arg, "-") {
+			subIdx = i
+			break
+		}
+	}
+	if subIdx < 0 {
+		return false
+	}
+	sub := args[subIdx]
+	if !readOnlyNodeSubcommands[sub] {
+		return false
+	}
+	// Guard write sub-actions (e.g. npm config set, npm config delete).
+	rest := args[subIdx+1:]
+	for _, arg := range rest {
+		if !strings.HasPrefix(arg, "-") {
+			return !readOnlyNodeWriteSubActions[arg]
+		}
+	}
+	return true
+}
+
+// --- pip / pip3 ------------------------------------------------------------
+
+// readOnlyPipSubcommands are pip commands that never install or modify
+// packages.
+var readOnlyPipSubcommands = map[string]bool{
+	"list": true, "show": true, "freeze": true,
+	"search": true, "check": true, "help": true,
+	"index": true, // "pip index versions pkg"
+	"inspect": true,
+	"--version": true, "-V": true,
+}
+
+// isReadOnlyPipCommand reports whether a pip invocation is read-only.
+func isReadOnlyPipCommand(args []string) bool {
+	for _, arg := range args {
+		if arg == "--version" || arg == "-V" {
+			return true
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return readOnlyPipSubcommands[arg]
+		}
+	}
+	return false
+}
+
+// --- tar -------------------------------------------------------------------
+
+// isReadOnlyTarCommand reports whether a tar invocation only lists an archive
+// (the -t / --list flag) without extracting or creating anything.
+func isReadOnlyTarCommand(args []string) bool {
+	for _, arg := range args {
+		if arg == "--list" {
+			return true
+		}
+		// Short flag bundle: -tvf, -tzf, etc. — safe if 't' is present and no
+		// creation ('c') or extract ('x') flag appears.
+		if len(arg) > 1 && arg[0] == '-' && arg[1] != '-' {
+			flags := arg[1:]
+			if strings.ContainsRune(flags, 't') &&
+				!strings.ContainsRune(flags, 'c') &&
+				!strings.ContainsRune(flags, 'x') &&
+				!strings.ContainsRune(flags, 'r') &&
+				!strings.ContainsRune(flags, 'u') {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// --- unzip -----------------------------------------------------------------
+
+// isReadOnlyUnzipCommand reports whether an unzip invocation only lists
+// archive contents without extracting.
+func isReadOnlyUnzipCommand(args []string) bool {
+	for _, arg := range args {
+		switch arg {
+		case "-l", "-v", "-z", "-Z":
+			return true
+		}
+	}
+	return false
+}
+
+// --- docker ----------------------------------------------------------------
+
+// readOnlyDockerSubcommands are Docker CLI commands that only inspect running
+// containers or images. The sub-action guard below rejects writes inside
+// otherwise safe subcommands (e.g. "docker network rm").
+var readOnlyDockerSubcommands = map[string]bool{
+	"ps": true, "images": true, "inspect": true,
+	"logs": true, "stats": true, "top": true,
+	"port": true, "diff": true, "history": true,
+	"info": true, "version": true, "search": true,
+	"help": true,
+	// Sub-object commands: classified further by their sub-action.
+	"container": true, "image": true,
+	"network": true, "volume": true,
+	"system": true, "compose": true,
+}
+
+// readOnlyDockerWriteSubActions blocks write sub-actions even under normally
+// read-only docker subcommands.
+var readOnlyDockerWriteSubActions = map[string]bool{
+	"create": true, "rm": true, "remove": true, "prune": true,
+	"start": true, "stop": true, "restart": true, "kill": true,
+	"run": true, "exec": true, "attach": true,
+	"pull": true, "push": true, "build": true, "tag": true,
+	"rmi": true, "save": true, "load": true, "import": true, "export": true,
+	"connect": true, "disconnect": true,
+	"deploy": true, "up": true, "down": true,
+	"cp": true, "rename": true, "pause": true, "unpause": true, "update": true,
+}
+
+// isReadOnlyDockerCommand reports whether a docker invocation is read-only.
+func isReadOnlyDockerCommand(args []string) bool {
+	subIdx := -1
+	for i, arg := range args {
+		if arg == "--version" || arg == "-v" {
+			return true
+		}
+		if !strings.HasPrefix(arg, "-") {
+			subIdx = i
+			break
+		}
+	}
+	if subIdx < 0 {
+		return false
+	}
+	sub := args[subIdx]
+	if !readOnlyDockerSubcommands[sub] {
+		return false
+	}
+	// For compound subcommands (container, image, network, volume, system,
+	// compose), the sub-action is the next positional.
+	rest := args[subIdx+1:]
+	for _, arg := range rest {
+		if !strings.HasPrefix(arg, "-") {
+			return !readOnlyDockerWriteSubActions[arg]
+		}
+	}
+	return true
+}
+
+// --- kubectl ---------------------------------------------------------------
+
+// readOnlyKubectlSubcommands are kubectl commands that only read cluster
+// state and never create, update, or delete resources.
+var readOnlyKubectlSubcommands = map[string]bool{
+	"get": true, "describe": true, "logs": true, "explain": true,
+	"top": true, "diff": true,
+	"version": true, "api-versions": true, "api-resources": true,
+	"cluster-info": true, "help": true,
+	"auth": true,   // "auth can-i" is read-only
+	"config": true, // "config view", "config current-context", "config get-*"
+}
+
+// readOnlyKubectlWriteSubActions blocks write sub-actions under normally
+// read-only kubectl subcommands (e.g. "kubectl auth reconcile").
+var readOnlyKubectlWriteSubActions = map[string]bool{
+	"set": true, "use-context": true, "set-context": true,
+	"set-cluster": true, "set-credentials": true,
+	"delete-cluster": true, "delete-context": true, "delete-user": true,
+	"rename-context": true,
+	"reconcile": true,
+}
+
+// isReadOnlyKubectlCommand reports whether a kubectl invocation is read-only.
+func isReadOnlyKubectlCommand(args []string) bool {
+	subIdx := -1
+	for i, arg := range args {
+		if arg == "--version" || arg == "-v" {
+			return true
+		}
+		// Skip --flag value pairs.
+		if strings.HasPrefix(arg, "--") && !strings.Contains(arg, "=") {
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			subIdx = i
+			break
+		}
+	}
+	if subIdx < 0 {
+		return false
+	}
+	sub := args[subIdx]
+	if !readOnlyKubectlSubcommands[sub] {
+		return false
+	}
+	rest := args[subIdx+1:]
+	for _, arg := range rest {
+		if !strings.HasPrefix(arg, "-") {
+			return !readOnlyKubectlWriteSubActions[arg]
 		}
 	}
 	return true

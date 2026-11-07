@@ -202,14 +202,15 @@ var readOnlyBashCommands = map[string]bool{
 	"du":       true,
 	"df":       true,
 	"which":    true,
+	"type":     true,
 	"pwd":      true,
 	"cd":       true,
 	"basename": true,
 	"dirname":  true,
 	"realpath": true,
 	"readlink": true,
-	// Text filters and formatters: they only produce stdout, and stdout is
-	// only a file when a redirect names one, which the redirect guard rejects.
+	// Text filters, formatters, and processors: produce stdout only; stdout
+	// is only a file when a redirect names one, which the redirect guard rejects.
 	"echo":    true,
 	"printf":  true,
 	"sort":    true,
@@ -229,6 +230,7 @@ var readOnlyBashCommands = map[string]bool{
 	"strings": true,
 	"jq":      true,
 	"yq":      true,
+	"awk":     true,
 	// Digests and identity: inspection only.
 	"shasum":    true,
 	"md5sum":    true,
@@ -243,6 +245,14 @@ var readOnlyBashCommands = map[string]bool{
 	"uname":     true,
 	"hostname":  true,
 	"printenv":  true,
+	"env":       true,
+	"locale":    true,
+	"arch":      true,
+	"sw_vers":   true,
+	"uptime":    true,
+	"cal":       true,
+	"bc":        true,
+	"expr":      true,
 	// More text and binary filters, plus the two shell conditions that turn
 	// an if-statement into an inspection.
 	"base64":   true,
@@ -257,6 +267,36 @@ var readOnlyBashCommands = map[string]bool{
 	"[":        true,
 	// gofmt prints a formatted file; only -w writes it back.
 	"gofmt": true,
+	// Pagers and documentation browsers.
+	"less": true,
+	"more": true,
+	"man":  true,
+	// Process inspection.
+	"ps":    true,
+	"pgrep": true,
+	"pidof": true,
+	"lsof":  true,
+	"top":   true,
+	// Archive decompression to stdout (extract-to-disk is guarded by classifier).
+	"zcat":  true,
+	"zless": true,
+	// Network inspection: read-only lookups and diagnostics.
+	"ping":       true,
+	"traceroute": true,
+	"tracepath":  true,
+	"mtr":        true,
+	"nslookup":   true,
+	"dig":        true,
+	"host":       true,
+	"whois":      true,
+	"netstat":    true,
+	"ss":         true,
+	"ifconfig":   true,
+	"ip":         true,
+	// macOS helpers that have no workspace write effect.
+	"open":    true,
+	"pbpaste": true,
+	"say":     true,
 }
 
 // readOnlyBashUnsafeFlags marks flags that let an otherwise read-only command
@@ -322,7 +362,8 @@ func isReadOnlyParsedCommand(c parsedCommand) bool {
 	}
 	// Commands whose read-only use depends on their arguments are classified
 	// there rather than by the name list here: xargs dispatches, sed can write
-	// or execute through its own program, and go is safe per subcommand.
+	// or execute through its own program, go is safe per subcommand, and gh is
+	// safe only for read-only subcommands (api GET, repo view, pr list/view, …).
 	switch c.Name {
 	case "git":
 		return isReadOnlyGitCommand(c)
@@ -332,6 +373,26 @@ func isReadOnlyParsedCommand(c parsedCommand) bool {
 		return isReadOnlySedCommand(c.Args)
 	case "go":
 		return isReadOnlyGoCommand(c.Args)
+	case "gh":
+		return isReadOnlyGhCommand(c.Args)
+	case "curl":
+		return isReadOnlyCurlCommand(c.Args)
+	case "wget":
+		return isReadOnlyWgetCommand(c.Args)
+	case "brew":
+		return isReadOnlyBrewCommand(c.Args)
+	case "npm", "yarn", "pnpm", "bun":
+		return isReadOnlyNodePackageCommand(c.Args)
+	case "pip", "pip3", "pip3.11", "pip3.12":
+		return isReadOnlyPipCommand(c.Args)
+	case "tar":
+		return isReadOnlyTarCommand(c.Args)
+	case "unzip":
+		return isReadOnlyUnzipCommand(c.Args)
+	case "docker":
+		return isReadOnlyDockerCommand(c.Args)
+	case "kubectl", "k":
+		return isReadOnlyKubectlCommand(c.Args)
 	}
 	if !readOnlyBashCommands[c.Name] {
 		return false

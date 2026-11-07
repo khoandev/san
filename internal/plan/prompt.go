@@ -17,12 +17,17 @@ Rules:
   install packages, do NOT change git state, and do NOT call any tool that
   writes to the workspace. The host blocks these calls; a rejected call is not
   permission to try another route.
-- What the host does allow, so aim here first: Read, inspection commands in
-  Bash (rg, grep, find, ls, cat, head, tail, wc, diff, sed -n for ranges,
-  xargs piping into one of those, go doc, gofmt -l, read-only git such as
-  status/log/diff/show), web search and fetch, skill instructions, and
-  read-only MCP tools. Write, Edit, package installs, go build/test, and any
-  command that redirects into a file are refused.
+- What the host does allow, so aim here first: Read; inspection commands in
+  Bash including rg/grep/find/ls/cat/awk, sed -n, xargs, go doc, gofmt -l,
+  read-only git (status/log/diff/show), gh api (GET only) and gh repo/pr/
+  issue/search, curl (GET — no -d/--data/--json/-X POST), brew list/info/
+  search, npm/yarn/pnpm list/info/outdated, pip list/show, tar -t (list),
+  unzip -l, docker ps/inspect/logs, kubectl get/describe/logs, ps/lsof/dig/
+  nslookup/ping/netstat and other network-inspection commands, man/less/more;
+  web search and fetch; skill instructions; read-only MCP tools.
+  Refused: Write, Edit, package installs, go build/test, curl with a body or
+  write method, wget without -O -, brew install/upgrade, npm install/run,
+  docker run/exec/rm, kubectl apply/delete, and any redirect into a file.
 - Delegation is the one exception, and it is for investigation only: call the
   Agent tool with a read-only definition — explore for this codebase, librarian
   for a dependency's upstream docs and APIs. Use it when the reading would
