@@ -26,10 +26,13 @@ func (s *ProviderSelector) Enter(ctx context.Context, width, height int) (tea.Cm
 	s.closeCustomForm()
 	s.closeOllamaForm()
 	s.assignRole = ""
+	s.clearEffortStep()
 	s.roleNotice = ""
 	s.refreshRoleInfo()
 	s.active = true
-	s.activeTab = providerTabModels
+	// Routing a role is what the overlay is for, so it opens there: the model
+	// list and the providers are one Tab away.
+	s.activeTab = providerTabRoles
 	s.width = width
 	s.height = height
 
@@ -262,6 +265,10 @@ func (s *ProviderSelector) rebuildVisibleItems() {
 	s.visibleItems = nil
 
 	switch {
+	case s.pickingEffort():
+		// The second assign step lists the chosen model's rungs instead of any
+		// model, so the two lists cannot be confused by a stale selection.
+		s.rebuildEffortStep()
 	case s.assigning(), s.activeTab == providerTabModels:
 		// Assign mode reuses the model list, so both states build the same
 		// rows; only the banner and what Enter does differ.

@@ -15,7 +15,10 @@ func (s *ProviderSelector) Render() string {
 		return ""
 	}
 
-	if len(s.visibleItems) == 0 && len(s.allModels) == 0 && len(s.allProviders) == 0 {
+	// The Roles tab is a settings surface, not a model list: it stays reachable
+	// before any provider is connected, so the "no models" page belongs only to
+	// the tabs that need one.
+	if s.activeTab != providerTabRoles && len(s.visibleItems) == 0 && len(s.allModels) == 0 && len(s.allProviders) == 0 {
 		return s.renderEmptyState()
 	}
 
@@ -100,6 +103,8 @@ func (s *ProviderSelector) renderItemList(sb *strings.Builder) {
 			sb.WriteString(s.renderAuthMethod(item, isSelected, i))
 		case providerItemRole:
 			sb.WriteString(s.renderRoleRow(item, isSelected))
+		case providerItemEffort:
+			sb.WriteString(s.renderEffortRow(item, isSelected))
 		}
 		sb.WriteString("\n")
 
@@ -145,13 +150,15 @@ func (s *ProviderSelector) renderTabs() string {
 		Foreground(kit.CurrentTheme.TextDim).
 		Padding(0, 2)
 
+	// Display order is the tab declaration's order: roles first, because that
+	// is what the overlay is opened for.
 	tabs := []struct {
 		name string
 		tab  providerTab
 	}{
+		{"Roles", providerTabRoles},
 		{"Models", providerTabModels},
 		{"Providers", providerTabProviders},
-		{"Roles", providerTabRoles},
 	}
 
 	var parts []string
@@ -178,6 +185,8 @@ func (s *ProviderSelector) renderSearchBox() string {
 		text = fmt.Sprintf(" %s▏ (%d/%d)", s.searchQuery, filteredCount, totalModels)
 	} else if s.searchQuery != "" {
 		text = " " + s.searchQuery + "▏"
+	} else if s.pickingEffort() {
+		text = " Type to filter efforts..."
 	} else if s.assigning() {
 		text = " Type to filter models..."
 	} else {
@@ -216,7 +225,7 @@ func (s *ProviderSelector) renderEmptyState() string {
 		s.renderSearchBox() + "\n\n" +
 		warningStyle.Render("  ⚠  No Models Available") + "\n\n" +
 		msgStyle.Render("  No LLM provider is connected yet.") + "\n" +
-		msgStyle.Render("  Press ") + cmdStyle.Render("Tab") + msgStyle.Render(" to switch to Providers tab and connect one.") + "\n\n" +
+		msgStyle.Render("  Press ") + cmdStyle.Render("Tab") + msgStyle.Render(" to reach the Providers tab and connect one.") + "\n\n" +
 		kit.DimStyle().Render("←/→/Tab switch · Esc cancel")
 
 	return s.panel().Wrap(content)
@@ -467,6 +476,9 @@ func (s *ProviderSelector) renderHints() string {
 		return prompt + kit.DimStyle().Render(" · Esc cancel")
 	}
 
+	if s.pickingEffort() {
+		return kit.DimStyle().Render("↑/↓ navigate · Enter assign effort for " + s.assignRole + " · Esc back to the model list")
+	}
 	if s.assigning() {
 		return kit.DimStyle().Render("↑/↓ navigate · Enter assign model for " + s.assignRole + " · Esc back to Roles")
 	}
@@ -477,7 +489,7 @@ func (s *ProviderSelector) renderHints() string {
 	case providerTabProviders:
 		parts = append(parts, "Ctrl+E edit", "Ctrl+D remove", "Enter connect/refresh")
 	case providerTabRoles:
-		parts = append(parts, "Enter assign", "Ctrl+D clear")
+		parts = append(parts, "Enter assign model + effort", "Ctrl+D clear")
 	default:
 		parts = append(parts, "Space mark · Enter confirm")
 	}

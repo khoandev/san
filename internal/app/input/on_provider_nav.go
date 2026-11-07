@@ -48,6 +48,7 @@ func (s *ProviderSelector) switchTab(t providerTab) {
 	// Assign mode borrows the Models list, so any tab switch is also a way out
 	// of it; the write never happened, which is what leaving means.
 	s.assignRole = ""
+	s.clearEffortStep()
 	if t == s.activeTab {
 		return
 	}
@@ -176,6 +177,14 @@ func (s *ProviderSelector) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 		if s.clearModelSearch() {
 			return nil
 		}
+		if s.pickingEffort() {
+			// Esc backs out one step: the model is chosen but nothing is written
+			// until an effort is picked, so this costs nothing.
+			s.clearEffortStep()
+			s.resetNavigation()
+			s.rebuildVisibleItems()
+			return nil
+		}
 		if s.assigning() {
 			// Esc is "I did not choose": drop the assign and write nothing.
 			s.finishAssign()
@@ -192,7 +201,8 @@ func (s *ProviderSelector) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 		return nil
 
 	case "space":
-		if (s.activeTab == providerTabModels || s.assigning()) && !s.searchFocused {
+		// The effort step has no model to mark: Space is filter text there.
+		if !s.pickingEffort() && (s.activeTab == providerTabModels || s.assigning()) && !s.searchFocused {
 			return s.toggleModel()
 		}
 		s.appendModelSearch(" ")
@@ -249,6 +259,8 @@ func (s *ProviderSelector) Select() tea.Cmd {
 		return s.selectAuthMethod(item)
 	case providerItemRole:
 		return s.selectRole(item)
+	case providerItemEffort:
+		return s.assignEffort(item.Effort)
 	default:
 		return nil
 	}

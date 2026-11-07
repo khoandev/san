@@ -409,6 +409,29 @@ func newProviderTestStore(t *testing.T) *llm.Store {
 	return store
 }
 
+// TestEnterOpensOnRolesTab pins both halves of the open: the Roles tab is
+// active, because routing a role is what the overlay is for, and the tab bar
+// lists Roles before Models and Models before Providers.
+func TestEnterOpensOnRolesTab(t *testing.T) {
+	newProviderTestStore(t) // isolate HOME: Enter builds its own store
+	m := NewProviderSelector()
+	if _, err := m.Enter(context.Background(), 100, 40); err != nil {
+		t.Fatalf("Enter() error = %v", err)
+	}
+	if m.activeTab != providerTabRoles {
+		t.Fatalf("activeTab = %v, want Roles", m.activeTab)
+	}
+
+	tabs := xansi.Strip(m.renderTabs())
+	roles, models, providers := strings.Index(tabs, "Roles"), strings.Index(tabs, "Models"), strings.Index(tabs, "Providers")
+	if roles < 0 || models < 0 || providers < 0 || !(roles < models && models < providers) {
+		t.Fatalf("tab bar = %q, want Roles, Models, Providers", tabs)
+	}
+	if view := xansi.Strip(m.Render()); !strings.Contains(view, tabs) {
+		t.Errorf("the open overlay does not show the tab bar %q:\n%s", tabs, view)
+	}
+}
+
 func TestEnterLoadsCachedModelsAndPutsCurrentFirst(t *testing.T) {
 	store := newProviderTestStore(t)
 	if err := store.CacheModels(llm.OpenAI, llm.AuthAPIKey, []llm.ModelInfo{
@@ -435,6 +458,13 @@ func TestEnterLoadsCachedModelsAndPutsCurrentFirst(t *testing.T) {
 	if len(m.allModels) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(m.allModels))
 	}
+	// The overlay opens on Roles whatever the model cache holds, so the model
+	// rows are built once the tab is switched rather than by Enter itself.
+	if m.activeTab != providerTabRoles {
+		t.Fatalf("opening tab = %v, want Roles", m.activeTab)
+	}
+	m.activeTab = providerTabModels
+	m.rebuildVisibleItems()
 
 	// Check visible items contain model rows
 	modelCount := 0
@@ -577,6 +607,7 @@ func TestRefreshAuthMethodReplacesModelsImmediately(t *testing.T) {
 
 func TestUpdateFilterMatchesModelIDDisplayNameAndProvider(t *testing.T) {
 	m := NewProviderSelector()
+	m.activeTab = providerTabModels
 	m.allModels = []providerModelItem{
 		{ID: "gpt-5", DisplayName: "GPT-5", ProviderName: "openai"},
 		{ID: "claude-sonnet", DisplayName: "Claude Sonnet", ProviderName: "anthropic"},

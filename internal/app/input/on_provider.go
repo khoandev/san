@@ -18,13 +18,16 @@ import (
 	"github.com/genai-io/san/internal/llm"
 )
 
-// providerTab represents which tab is active in the provider selector.
+// providerTab represents which tab is active in the provider selector. The
+// declaration order is the display order and the cycle order: roles first,
+// because routing a role to a model and an effort is what this overlay is
+// opened for, then the model list, then the providers behind both.
 type providerTab int
 
 const (
-	providerTabModels    providerTab = iota // model selection tab
+	providerTabRoles     providerTab = iota // model role assignment tab (the opening tab)
+	providerTabModels                       // model selection tab
 	providerTabProviders                    // provider management tab
-	providerTabRoles                        // model role assignment tab
 )
 
 // providerTabCount is how many tabs NextTab/PrevTab cycle through.
@@ -39,6 +42,7 @@ const (
 	providerItemProvider                               // provider row (Providers tab)
 	providerItemAuthMethod                             // expanded auth-method sub-row (Providers tab)
 	providerItemRole                                   // selectable role row (Roles tab)
+	providerItemEffort                                 // selectable effort row (Roles tab, assign step 2)
 )
 
 // providerListItem is a single row in the flattened visible-items list.
@@ -48,7 +52,17 @@ type providerListItem struct {
 	Provider    *providerProviderItem
 	AuthMethod  *providerAuthMethodItem
 	Role        *providerRoleItem
+	Effort      *providerEffortItem
 	ProviderIdx int // index into allProviders
+}
+
+// providerEffortItem is one choice in the second assign step: an effort rung
+// the chosen model advertises, or the model's own default. Label is what gets
+// stored ("" for the default, which clears any existing binding).
+type providerEffortItem struct {
+	Label   string
+	Display string
+	Default bool
 }
 
 // providerProviderItem represents a provider with its auth methods.
@@ -193,6 +207,13 @@ type ProviderSelector struct {
 	roleInfo   ModelRoleInfo
 	roleNotice string
 	assignRole string
+
+	// Assign mode runs in two steps: pick a model, then pick how hard it should
+	// think for that role. assignRef holds the model chosen by step one while
+	// step two lists the effort rungs — nothing is written until an effort is
+	// chosen, so backing out costs nothing. "" means the model list is showing.
+	assignRef     string
+	assignEfforts []providerEffortItem
 }
 
 // NewProviderSelector creates a new provider selector ProviderSelector.
@@ -240,11 +261,13 @@ type providerModelsLoadedMsg struct {
 	Models []providerModelItem
 }
 
-// providerRoleAssignedMsg reports a role's new model reference, written at user
-// scope by the tab's injected setter.
+// providerRoleAssignedMsg reports a role's new model reference and reasoning
+// effort, both written at user scope by the tab's injected setters. An empty
+// Effort means the model's own default, which also clears an older binding.
 type providerRoleAssignedMsg struct {
-	Role string
-	Ref  string
+	Role   string
+	Ref    string
+	Effort string
 }
 
 // providerRoleClearedMsg reports that a role returned to the session model.
@@ -332,10 +355,10 @@ func UpdateProvider(deps OverlayDeps, state *ProviderState, msg tea.Msg) (tea.Cm
 		}
 		return nil, true
 	case providerRoleAssignedMsg:
-		state.Selector.handleRoleWrite(msg.Role, msg.Ref, true)
+		state.Selector.handleRoleWrite(msg.Role, msg.Ref, msg.Effort, true)
 		return nil, true
 	case providerRoleClearedMsg:
-		state.Selector.handleRoleWrite(msg.Role, "", false)
+		state.Selector.handleRoleWrite(msg.Role, "", "", false)
 		return nil, true
 	case kit.StatusExpiredMsg:
 		if msg.Token == state.statusToken {

@@ -1,6 +1,7 @@
 package input
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -41,11 +42,13 @@ func rolesSelector(t *testing.T, info ModelRoleInfo, src *fakeRoleSource) *Provi
 // fakeRoleSource records what the tab writes, so a test can assert both the
 // message and the write it turns into.
 type fakeRoleSource struct {
-	info   ModelRoleInfo
-	err    error
-	set    []string // "role=ref" per call
-	clear  []string // role per call
-	reload int
+	info      ModelRoleInfo
+	err       error
+	errEffort error
+	set       []string // "role=ref" per call
+	effort    []string // "role=effort" per call; "role=" clears the binding
+	clear     []string // role per call
+	reload    int
 }
 
 func (f *fakeRoleSource) source() RoleSource {
@@ -63,12 +66,32 @@ func (f *fakeRoleSource) source() RoleSource {
 			f.reload++
 			return nil
 		},
+		SetEffort: func(role, effort string) error {
+			if f.err != nil {
+				return f.err
+			}
+			if f.errEffort != nil {
+				return f.errEffort
+			}
+			f.effort = append(f.effort, role+"="+effort)
+			if f.info.Efforts == nil {
+				f.info.Efforts = map[string]string{}
+			}
+			if effort == "" {
+				delete(f.info.Efforts, role)
+			} else {
+				f.info.Efforts[role] = effort
+			}
+			f.reload++
+			return nil
+		},
 		Clear: func(role string) error {
 			if f.err != nil {
 				return f.err
 			}
 			f.clear = append(f.clear, role)
 			delete(f.info.Roles, role)
+			delete(f.info.Efforts, role)
 			f.reload++
 			return nil
 		},
@@ -222,8 +245,8 @@ func TestAssigningModelWritesTheRole(t *testing.T) {
 	if !ok {
 		t.Fatalf("message = %T, want providerRoleAssignedMsg", cmd())
 	}
-	if msg.Role != "slow" || msg.Ref != "anthropic/claude-opus-4-1" {
-		t.Fatalf("assigned %+v, want slow -> anthropic/claude-opus-4-1", msg)
+	if msg.Role != "slow" || msg.Ref != "anthropic/claude-opus-4-1" || msg.Effort != "" {
+		t.Fatalf("assigned %+v, want slow -> anthropic/claude-opus-4-1 at the model's default", msg)
 	}
 	if m.assignRole != "" || m.activeTab != providerTabRoles {
 		t.Fatalf("after the pick: assignRole=%q tab=%v, want Roles", m.assignRole, m.activeTab)
@@ -234,11 +257,188 @@ func TestAssigningModelWritesTheRole(t *testing.T) {
 	if len(src.set) != 1 || src.set[0] != "slow=anthropic/claude-opus-4-1" {
 		t.Fatalf("writes = %v, want one write for slow", src.set)
 	}
+	// A model that does not reason has no effort step, and the empty effort is
+	// still written so a binding left on the previous model cannot survive.
+	if len(src.effort) != 1 || src.effort[0] != "slow=" {
+		t.Fatalf("effort writes = %v, want one clear for slow", src.effort)
+	}
 	if state.Selector.roleNotice != "" {
 		t.Fatalf("unexpected notice: %q", state.Selector.roleNotice)
 	}
 	if ref := roleRowNamed(&state.Selector, "slow").Role.Ref; ref != "anthropic/claude-opus-4-1" {
 		t.Fatalf("row still reads %q after the write", ref)
+	}
+}
+
+// ladderProvider is a registered provider double that advertises a reasoning
+// ladder, so the second assign step has rungs to offer. It lists no models: the
+// rows under test are injected, not fetched.
+type ladderProvider struct {
+	staticListProvider
+	efforts []string
+	def     string
+}
+
+func (p *ladderProvider) ThinkingEfforts(string) []string     { return p.efforts }
+func (p *ladderProvider) DefaultThinkingEffort(string) string { return p.def }
+
+// registerLadderProvider registers a provider whose models advertise
+// low/medium/high, the ladder an assignment's second step must list.
+func registerLadderProvider(t *testing.T) llm.ProviderID {
+	t.Helper()
+	providerName := llm.ProviderID("effort-test")
+	llm.Register(llm.Meta{Provider: providerName, AuthMethod: llm.AuthAPIKey}, func(context.Context) (llm.Provider, error) {
+		return &ladderProvider{
+			staticListProvider: staticListProvider{name: string(providerName) + ":api_key"},
+			efforts:            []string{"low", "medium", "high"},
+			def:                "medium",
+		}, nil
+	})
+	t.Cleanup(func() { llm.Unregister(providerName, llm.AuthAPIKey) })
+	return providerName
+}
+
+// reasoningSelector builds a Roles-tab selector whose borrowed model list holds
+// one model that reasons, and walks it to the effort step for "slow".
+func reasoningSelector(t *testing.T, providerName llm.ProviderID, src *fakeRoleSource) *ProviderSelector {
+	t.Helper()
+	m := rolesSelector(t, src.info, src)
+	m.allModels = []providerModelItem{{
+		ID: "thinker", DisplayName: "Thinker", ProviderName: string(providerName),
+		AuthMethod: llm.AuthAPIKey, Thinks: true,
+	}}
+	m.connectedProviders = []providerProviderItem{{Provider: providerName, DisplayName: "Effort Test"}}
+
+	m.selectedIdx = indexOfRole(m, "slow")
+	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.selectedIdx = indexOfModel(m, "thinker")
+	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
+	return m
+}
+
+// selectEffortRow points the cursor at one label of the second assign step.
+func selectEffortRow(t *testing.T, m *ProviderSelector, label string) {
+	t.Helper()
+	for i, item := range m.visibleItems {
+		if item.Kind == providerItemEffort && item.Effort != nil && item.Effort.Label == label {
+			m.selectedIdx = i
+			return
+		}
+	}
+	t.Fatalf("no effort row %q in the assign list", label)
+}
+
+// TestAssigningReasoningModelAsksForEffort covers the two-step assignment: a
+// model that reasons is not written until its depth is picked, and the second
+// step lists the model's own default before the rungs.
+func TestAssigningReasoningModelAsksForEffort(t *testing.T) {
+	providerName := registerLadderProvider(t)
+	src := &fakeRoleSource{info: ModelRoleInfo{Session: "claude-sonnet-4-6"}}
+	m := reasoningSelector(t, providerName, src)
+
+	if !m.pickingEffort() {
+		t.Fatalf("assign state = role %q ref %q, want the effort step", m.assignRole, m.assignRef)
+	}
+	if want := string(providerName) + "/thinker"; m.assignRef != want {
+		t.Fatalf("assignRef = %q, want %q", m.assignRef, want)
+	}
+	if len(src.set) != 0 || len(src.effort) != 0 {
+		t.Fatalf("the model was written before the effort: set=%v effort=%v", src.set, src.effort)
+	}
+
+	var got []string
+	for _, item := range m.visibleItems {
+		if item.Kind == providerItemEffort && item.Effort != nil {
+			got = append(got, item.Effort.Display)
+		}
+	}
+	want := []string{"model default", "low", "medium", "high"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("effort rows = %v, want %v", got, want)
+	}
+	if view := xansi.Strip(m.Render()); !strings.Contains(view, "model default") || !strings.Contains(view, "high") {
+		t.Errorf("the effort list is not rendered:\n%s", view)
+	}
+
+	selectEffortRow(t, m, "high")
+	cmd := m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("picking an effort emitted nothing")
+	}
+	msg, ok := cmd().(providerRoleAssignedMsg)
+	if !ok || msg.Role != "slow" || msg.Ref != string(providerName)+"/thinker" || msg.Effort != "high" {
+		t.Fatalf("message = %#v, want slow bound to the thinking model at high", cmd())
+	}
+
+	state := &ProviderState{Selector: *m}
+	UpdateProvider(OverlayDeps{}, state, msg)
+	if len(src.set) != 1 || src.set[0] != "slow="+string(providerName)+"/thinker" {
+		t.Fatalf("model writes = %v, want the chosen model", src.set)
+	}
+	if len(src.effort) != 1 || src.effort[0] != "slow=high" {
+		t.Fatalf("effort writes = %v, want slow=high", src.effort)
+	}
+	if state.Selector.roleNotice != "" {
+		t.Fatalf("unexpected notice: %q", state.Selector.roleNotice)
+	}
+	row := roleRowNamed(&state.Selector, "slow")
+	if row.Role.Ref != string(providerName)+"/thinker" || row.Role.Effort != "high" {
+		t.Fatalf("row reads %+v after the write", row.Role)
+	}
+}
+
+// TestEscInEffortStepOnlyBacksOut keeps the second step free to abandon: Esc
+// returns to the model list with nothing written, and a second Esc cancels the
+// assignment outright.
+func TestEscInEffortStepOnlyBacksOut(t *testing.T) {
+	providerName := registerLadderProvider(t)
+	src := &fakeRoleSource{info: ModelRoleInfo{Session: "claude-sonnet-4-6"}}
+	m := reasoningSelector(t, providerName, src)
+
+	if cmd := m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEscape}); cmd != nil {
+		t.Fatalf("Esc in the effort step emitted %T", cmd())
+	}
+	if m.assignRef != "" || !m.assigning() {
+		t.Fatalf("after Esc: ref=%q role=%q, want the model list again", m.assignRef, m.assignRole)
+	}
+	models := 0
+	for _, item := range m.visibleItems {
+		if item.Kind == providerItemModel {
+			models++
+		}
+	}
+	if models != 1 {
+		t.Fatalf("model rows after Esc = %d, want the borrowed list back", models)
+	}
+
+	if cmd := m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEscape}); cmd != nil {
+		t.Fatalf("second Esc emitted %T", cmd())
+	}
+	if m.assignRole != "" || m.activeTab != providerTabRoles {
+		t.Fatalf("after the second Esc: role=%q tab=%v, want Roles", m.assignRole, m.activeTab)
+	}
+	if len(src.set) != 0 || len(src.effort) != 0 || len(src.clear) != 0 {
+		t.Fatalf("Esc wrote settings: set=%v effort=%v clear=%v", src.set, src.effort, src.clear)
+	}
+}
+
+// TestRoleRowsShowBoundEffort keeps the effort visible next to the model it
+// qualifies, and shows the session's own effort on the default row.
+func TestRoleRowsShowBoundEffort(t *testing.T) {
+	m := rolesSelector(t, ModelRoleInfo{
+		Roles:         map[string]string{"slow": "anthropic/claude-opus-4-1"},
+		Efforts:       map[string]string{"slow": "high"},
+		Session:       "claude-sonnet-4-6",
+		SessionEffort: "low",
+	}, nil)
+
+	slow := xansi.Strip(m.renderRoleRow(roleRowNamed(m, "slow"), false))
+	if !strings.Contains(slow, "high") || !strings.Contains(slow, "anthropic/claude-opus-4-1") {
+		t.Errorf("slow row = %q, want its model and effort", slow)
+	}
+	def := xansi.Strip(m.renderRoleRow(roleRowNamed(m, "default"), false))
+	if !strings.Contains(def, "low") {
+		t.Errorf("default row = %q, want the session effort", def)
 	}
 }
 
@@ -259,8 +459,8 @@ func TestEscCancelsAssignWithoutWriting(t *testing.T) {
 	if m.assignRole != "" || m.activeTab != providerTabRoles {
 		t.Fatalf("after Esc: assignRole=%q tab=%v, want the Roles tab", m.assignRole, m.activeTab)
 	}
-	if len(src.set) != 0 || len(src.clear) != 0 {
-		t.Fatalf("Esc wrote settings: set=%v clear=%v", src.set, src.clear)
+	if len(src.set) != 0 || len(src.effort) != 0 || len(src.clear) != 0 {
+		t.Fatalf("Esc wrote settings: set=%v effort=%v clear=%v", src.set, src.effort, src.clear)
 	}
 	if view := xansi.Strip(m.Render()); !strings.Contains(view, "Roles") {
 		t.Errorf("after Esc the tab bar is gone:\n%s", view)
@@ -272,6 +472,7 @@ func TestEscCancelsAssignWithoutWriting(t *testing.T) {
 func TestCtrlDClearsRole(t *testing.T) {
 	src := &fakeRoleSource{info: ModelRoleInfo{
 		Roles:   map[string]string{"slow": "anthropic/claude-opus-4-1"},
+		Efforts: map[string]string{"slow": "high"},
 		Session: "claude-sonnet-4-6",
 	}}
 	m := rolesSelector(t, src.info, src)
@@ -290,8 +491,10 @@ func TestCtrlDClearsRole(t *testing.T) {
 	if len(src.clear) != 1 || src.clear[0] != "slow" {
 		t.Fatalf("clears = %v, want slow", src.clear)
 	}
-	if ref := roleRowNamed(&state.Selector, "slow").Role.Ref; ref != "" {
-		t.Fatalf("row still reads %q after clearing", ref)
+	// One clear drops the model and the effort together: the next binding must
+	// not inherit the previous model's depth.
+	if row := roleRowNamed(&state.Selector, "slow"); row.Role.Ref != "" || row.Role.Effort != "" {
+		t.Fatalf("row still reads %+v after clearing", row.Role)
 	}
 
 	session := rolesSelector(t, ModelRoleInfo{Session: "claude-sonnet-4-6"}, src)
@@ -382,27 +585,31 @@ func TestRoleSourceWritesUserScopeAndReloads(t *testing.T) {
 		}
 	}
 	writeSettings(filepath.Join(confdir.Dir(project), "settings.json"),
-		`{"modelRoles":{"plan":"anthropic/claude-opus-4-1"}}`)
+		`{"modelRoles":{"plan":"anthropic/claude-opus-4-1"},"modelRoleEfforts":{"plan":"high"}}`)
 	// An untrusted workspace keeps only restrictive project settings, so the
 	// project's role bindings apply only once the folder is trusted.
 	if err := setting.TrustWorkspace(project); err != nil {
 		t.Fatal(err)
 	}
 
-	readRoles := func(path string) map[string]string {
+	type roleFile struct {
+		ModelRoles       map[string]string `json:"modelRoles"`
+		ModelRoleEfforts map[string]string `json:"modelRoleEfforts"`
+	}
+	readFile := func(path string) roleFile {
 		t.Helper()
+		var parsed roleFile
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil
-		}
-		var parsed struct {
-			ModelRoles map[string]string `json:"modelRoles"`
+			return parsed
 		}
 		if err := json.Unmarshal(data, &parsed); err != nil {
 			t.Fatalf("unmarshal %s: %v", path, err)
 		}
-		return parsed.ModelRoles
+		return parsed
 	}
+	readRoles := func(path string) map[string]string { return readFile(path).ModelRoles }
+	readEfforts := func(path string) map[string]string { return readFile(path).ModelRoleEfforts }
 
 	settings := setting.New(setting.NewData())
 	if err := settings.Reload(project); err != nil {
@@ -426,6 +633,9 @@ func TestRoleSourceWritesUserScopeAndReloads(t *testing.T) {
 	if info.Roles["plan"] != "anthropic/claude-opus-4-1" || info.Project["plan"] != "anthropic/claude-opus-4-1" {
 		t.Fatalf("project role not read: roles=%v project=%v", info.Roles, info.Project)
 	}
+	if info.ProjectEfforts["plan"] != "high" {
+		t.Fatalf("project efforts = %v, want plan=high", info.ProjectEfforts)
+	}
 
 	if err := src.Set("slow", "anthropic/claude-opus-4-1"); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -444,6 +654,30 @@ func TestRoleSourceWritesUserScopeAndReloads(t *testing.T) {
 		t.Errorf("reloaded slow = %q, want the assignment", got)
 	}
 
+	// The effort is a second write at the same scope, and the empty effort is
+	// how "model default" is stored.
+	if err := src.SetEffort("slow", "high"); err != nil {
+		t.Fatalf("SetEffort: %v", err)
+	}
+	if efforts := readEfforts(userFile); efforts["slow"] != "high" {
+		t.Fatalf("user efforts = %v, want slow=high", efforts)
+	}
+	if got := src.Info().Efforts["slow"]; got != "high" {
+		t.Errorf("reloaded slow effort = %q, want high", got)
+	}
+	if reconfigured != 2 {
+		t.Errorf("worker rebuilt %d times after the effort write, want 2", reconfigured)
+	}
+	if err := src.SetEffort("slow", ""); err != nil {
+		t.Fatalf("SetEffort(clear): %v", err)
+	}
+	if efforts := readEfforts(userFile); efforts["slow"] != "" {
+		t.Fatalf("user efforts still bind slow: %v", efforts)
+	}
+	if got := src.Info().Efforts["slow"]; got != "" {
+		t.Errorf("slow effort still reads %q after clearing", got)
+	}
+
 	if err := src.Clear("slow"); err != nil {
 		t.Fatalf("Clear: %v", err)
 	}
@@ -453,8 +687,8 @@ func TestRoleSourceWritesUserScopeAndReloads(t *testing.T) {
 	if got := src.Info().Roles["slow"]; got != "" {
 		t.Errorf("slow still resolves to %q after clearing", got)
 	}
-	if reconfigured != 2 {
-		t.Errorf("worker rebuilt %d times, want 2", reconfigured)
+	if reconfigured != 4 {
+		t.Errorf("worker rebuilt %d times, want 4", reconfigured)
 	}
 }
 
