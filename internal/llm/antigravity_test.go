@@ -520,7 +520,10 @@ func TestAntigravityModelIDResolution(t *testing.T) {
 	}{
 		{"antigravity-gemini-3-flash", "gemini-3-flash"},
 		{"models/antigravity-claude-sonnet-4-6", "claude-sonnet-4-6"},
-		{"models/gemini-3-pro", "gemini-3-pro"},
+		{"models/gemini-3-pro", "gemini-3-pro-low"},
+		{"gemini-3.8-flash", "gemini-3.8-flash-medium"},
+		{"gemini-3.8-flash-high", "gemini-3.8-flash-high"},
+		{"gemini-3.1-pro", "gemini-3.1-pro-low"},
 	}
 	for _, tt := range tests {
 		got := resolveAntigravityModelID(tt.input)

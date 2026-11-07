@@ -567,9 +567,10 @@ func antigravityFallbackModels() []ai.Model {
 	textAndImage := []ai.Modality{ai.ModalityText, ai.ModalityImage}
 	return []ai.Model{
 		{ID: "gemini-3-flash", Name: "Gemini 3 Flash (Antigravity)", ContextWindow: 1048576, MaxOutput: 65536, Input: textAndImage},
-		{ID: "gemini-3.8-flash", Name: "Gemini 3.8 Flash (Antigravity)", ContextWindow: 1048576, MaxOutput: 65536, Input: textAndImage},
-		{ID: "gemini-3-pro", Name: "Gemini 3 Pro (Antigravity)", ContextWindow: 1048576, MaxOutput: 65535, Input: textAndImage},
-		{ID: "gemini-3.1-pro", Name: "Gemini 3.1 Pro (Antigravity)", ContextWindow: 1048576, MaxOutput: 65535, Input: textAndImage},
+		{ID: "gemini-3.8-flash-medium", Name: "Gemini 3.8 Flash (Medium) (Antigravity)", ContextWindow: 1048576, MaxOutput: 65536, Input: textAndImage},
+		{ID: "gemini-3.8-flash-high", Name: "Gemini 3.8 Flash (High) (Antigravity)", ContextWindow: 1048576, MaxOutput: 65536, Input: textAndImage},
+		{ID: "gemini-3.8-flash-low", Name: "Gemini 3.8 Flash (Low) (Antigravity)", ContextWindow: 1048576, MaxOutput: 65536, Input: textAndImage},
+		{ID: "gemini-3-pro-low", Name: "Gemini 3 Pro (Antigravity)", ContextWindow: 1048576, MaxOutput: 65535, Input: textAndImage},
 		{ID: "gemini-2.5-flash", Name: "Gemini 2.5 Flash (Antigravity)", ContextWindow: 1048576, MaxOutput: 65536, Input: textAndImage},
 		{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro (Antigravity)", ContextWindow: 1048576, MaxOutput: 65536, Input: textAndImage},
 		{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6 (Antigravity)", ContextWindow: 200000, MaxOutput: 64000, Input: textAndImage},
@@ -632,6 +633,7 @@ func (rt antigravityRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 		req = req.Clone(req.Context())
 		req.URL.Scheme = "https"
 		req.URL.Host = "daily-cloudcode-pa.googleapis.com"
+		req.Host = "daily-cloudcode-pa.googleapis.com"
 		req.URL.Path = "/v1internal:streamGenerateContent"
 		req.URL.RawQuery = "alt=sse"
 
@@ -695,6 +697,7 @@ func (rt antigravityRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 
 	// Any other request: set auth and headers and pass through
 	req = req.Clone(req.Context())
+	req.Host = "daily-cloudcode-pa.googleapis.com"
 	req.Header.Set("Authorization", "Bearer "+blob.AccessToken)
 	req.Header.Set("User-Agent", antigravityUserAgent)
 	req.Header.Del("x-goog-api-key")
@@ -727,6 +730,16 @@ func generateSyntheticProjectID() string {
 func resolveAntigravityModelID(raw string) string {
 	raw = strings.TrimPrefix(raw, "models/")
 	raw = strings.TrimPrefix(raw, "antigravity-")
+
+	lower := strings.ToLower(raw)
+	switch lower {
+	case "gemini-3.8-flash":
+		return "gemini-3.8-flash-medium"
+	case "gemini-3-pro":
+		return "gemini-3-pro-low"
+	case "gemini-3.1-pro":
+		return "gemini-3.1-pro-low"
+	}
 	return raw
 }
 
@@ -1201,7 +1214,11 @@ func handleAntigravityModelsList(ctx context.Context, accessToken, projectID str
 	var modelsList []map[string]any
 	if err == nil && len(available) > 0 {
 		for id, m := range available {
-			if strings.Contains(id, "image") || strings.Contains(id, "imagen") || strings.HasSuffix(id, "-disabled") {
+			lower := strings.ToLower(id)
+			if !strings.HasPrefix(lower, "gemini-") && !strings.HasPrefix(lower, "claude-") && !strings.HasPrefix(lower, "gpt-oss-") {
+				continue
+			}
+			if strings.Contains(lower, "image") || strings.Contains(lower, "imagen") || strings.HasSuffix(lower, "-disabled") || strings.HasSuffix(lower, "-tiered") {
 				continue
 			}
 			name := id
