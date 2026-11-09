@@ -114,7 +114,14 @@ func (t *ShellTool) ExecuteApproved(ctx context.Context, params map[string]any, 
 		return t.foregroundResult(ctx, description, "", "", err, time.Since(start), timeout, "", cwd, 0, "", false)
 	}
 
-	trackedCommand, trackedFile, cleanup := prepareCwdTracking(shell, command)
+	// rtk filters this command's output; it is applied here, after approval and
+	// with the preview already shown, so the arguments the model wrote stay the
+	// ones the permission rules, the approval and the transcript saw. Only the
+	// process gets the rewrite: a prompt this command raises still names the
+	// command the model wrote.
+	execCommand := rtkCommand(ctx, shell, cwd, options.lifetime, command)
+
+	trackedCommand, trackedFile, cleanup := prepareCwdTracking(shell, execCommand)
 	defer cleanup()
 
 	// Execute command
@@ -318,8 +325,10 @@ func (t *ShellTool) executeBackground(ctx context.Context, command, description,
 		taskCtx, cancel = context.WithTimeout(context.Background(), timeout)
 	}
 
-	// Create command
-	cmd := shellCommand(taskCtx, shell, command, shellEnv(ctx))
+	// Create command. Only the process gets the rtk rewrite: the task registry
+	// and the "Command:" line below keep the command the model wrote, so a
+	// background row still reads as the tool the model called.
+	cmd := shellCommand(taskCtx, shell, rtkCommand(ctx, shell, cwd, lifetime, command), shellEnv(ctx))
 	cmd.Dir = cwd
 
 	// Start the child in its own session: detached from the controlling
