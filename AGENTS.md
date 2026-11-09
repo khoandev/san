@@ -14,12 +14,11 @@ carry its own `AGENTS.md`, and the file nearest the working directory wins.
 ## Start Here
 
 - Product overview: `README.md`
-- Documentation index: `docs/index.md`
-- Detailed architecture: `docs/concepts/architecture.md`
-- Package map and ownership: `docs/reference/package-map.md`
-- Dependency rules: `docs/reference/dependency-rules.md`
-- Feature notes: `docs/packages/index.md`
-- Development workflow: `docs/operations/development.md`
+- Development workflow: `docs/operations/development.md` (upstream only; this
+  fork keeps no `docs/` tree, so read it on `upstream/main`)
+- Architecture, package map, dependency rules and feature notes: the upstream
+  `docs/` tree on `upstream/main`; the code under `internal/` is the source of
+  truth here.
 
 ## Repository Shape
 
@@ -41,14 +40,11 @@ carry its own `AGENTS.md`, and the file nearest the working directory wins.
 
 ## Rules
 
-Before editing internal packages, read:
-
-- `docs/reference/dependency-rules.md` — allowed import directions and the
-  rule for each layer.
-- `docs/design/principles.md` — coding principles for package structure,
-  interfaces, tests, and context handling.
-
-Update those files when the rules change. Do not duplicate them here.
+Before editing internal packages, follow the upstream rules for allowed import
+directions and layer ownership (`docs/reference/dependency-rules.md` on
+`upstream/main`) and the coding principles for package structure, interfaces,
+tests, and context handling (`docs/design/principles.md` on `upstream/main`).
+Those files are not kept in this fork; when a rule changes, change it upstream.
 
 san is one application built on [sdk-go](https://github.com/genai-io/sdk-go),
 which holds the generic agent building blocks. Do not reimplement what sdk-go
@@ -82,9 +78,9 @@ dialect would cost a failed round-trip per novel payload mistake.
 
 ## Common Commands
 
-See `docs/operations/development.md` for build / test / lint / format
-and the sandbox-friendly `GOCACHE` workaround. Update that file when
-commands change. Do not duplicate them here.
+See `docs/operations/development.md` on `upstream/main` for build, test, lint
+and format commands and the sandbox-friendly `GOCACHE` workaround. Update that
+file when commands change. Do not duplicate them here.
 
 ## Manual Test Build
 
@@ -103,11 +99,14 @@ AMFI may kill the process with "code signature invalid".
 
 ## Documentation Rules
 
-- Add or update docs in the same change as architecture or workflow changes.
-- Each feature document should list purpose, entrypoints, core packages, flow,
-  configuration, tests, and common pitfalls.
-- Proposals and architecture decision records live directly in `docs/design/`,
-  named `proposal-NNNN-topic.md` and `decision-NNNN-topic.md`.
-- File naming rules live in `docs/reference/file-naming.md`.
+This fork keeps no `docs/` tree, and no `assets/` or `examples/` fixtures;
+commit `449ab868` removed them on purpose. Do not add them back.
+
+- When merging `upstream/main`, resolve any conflict on a `docs/`, `assets/` or
+  `examples/` path by keeping the file deleted (`git rm`) and dropping upstream's
+  edit. Expect the same modify/delete conflict on every merge that touches those
+  paths; that is the intended resolution, not a mistake to re-litigate.
+- Tests must not read fixtures from those paths. Generate what a test needs under
+  `t.TempDir()`, or drop the test when its only subject was the deleted fixture.
 - Active plans live in `notes/active/`; completed plans move to
   `notes/completed/`.

@@ -28,43 +28,70 @@ func attachmentBytes(t *testing.T, encoded string) []byte {
 	return data
 }
 
-func TestLoadRealLargePNG(t *testing.T) {
-	path, err := filepath.Abs("../../assets/san.png")
+// noisyPNG builds PNG bytes of random opaque pixels: compression cannot shrink
+// them under the payload cap, so the image exercises the re-encode path.
+func noisyPNG(t *testing.T) []byte {
+	t.Helper()
+	pic := image.NewRGBA(image.Rect(0, 0, 1600, 1200))
+	noise := rand.New(rand.NewSource(7))
+	for i := 0; i < len(pic.Pix); i += 4 {
+		noise.Read(pic.Pix[i : i+3])
+		pic.Pix[i+3] = 255
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, pic); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() <= maxImageSize {
+		t.Fatalf("test PNG too small: %d", buf.Len())
+	}
+	return buf.Bytes()
+}
+
+func TestLoadLargePNG(t *testing.T) {
+	// No image fixture ships with the repository, so write an oversized one.
+	path := filepath.Join(t.TempDir(), "large-noise.png")
+	if err := os.WriteFile(path, noisyPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	absPath, err := filepath.Abs(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(path)
+	info, err := os.Stat(absPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Size() <= maxImageSize {
-		t.Fatalf("expected real fixture to exceed payload cap, got %d", info.Size())
+		t.Fatalf("expected fixture to exceed payload cap, got %d", info.Size())
 	}
-	img, err := Load(path)
+	img, err := Load(absPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if img.Path != path || img.FileName != "san"+extForMediaType(img.MediaType) {
+	if img.Path != absPath || img.FileName != "large-noise"+extForMediaType(img.MediaType) {
 		t.Fatalf("incorrect path/name: %q %q", img.Path, img.FileName)
 	}
 	data := attachmentBytes(t, img.Data)
-	t.Logf("san.png: %d input bytes -> %d %s bytes", info.Size(), len(data), img.MediaType)
+	t.Logf("large-noise.png: %d input bytes -> %d %s bytes", info.Size(), len(data), img.MediaType)
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || "image/"+format != img.MediaType || cfg.Width > 2000 || cfg.Height > 2000 {
 		t.Fatalf("invalid normalized image: %v %s %dx%d %s", err, format, cfg.Width, cfg.Height, img.MediaType)
 	}
-	original, err := os.ReadFile(path)
+	original, err := os.ReadFile(absPath)
 	if err != nil || len(original) != int(info.Size()) {
 		t.Fatalf("source changed: %v", err)
 	}
 }
 
 func TestClipboardNormalizeAndPersist(t *testing.T) {
-	data, err := os.ReadFile("../../assets/san.png")
-	if err != nil {
+	picture := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	picture.Set(1, 1, color.RGBA{255, 0, 0, 255})
+	var source bytes.Buffer
+	if err := png.Encode(&source, picture); err != nil {
 		t.Fatal(err)
 	}
-	img, err := newClipboardImage(data)
+	img, err := newClipboardImage(source.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,20 +178,7 @@ func TestLimitsAndInvalidData(t *testing.T) {
 
 func TestIncompressiblePNGUsesJPEG(t *testing.T) {
 	// Random opaque pixels force an oversized PNG even within 2000 pixels.
-	pic := image.NewRGBA(image.Rect(0, 0, 1600, 1200))
-	noise := rand.New(rand.NewSource(7))
-	for i := 0; i < len(pic.Pix); i += 4 {
-		noise.Read(pic.Pix[i : i+3])
-		pic.Pix[i+3] = 255
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, pic); err != nil {
-		t.Fatal(err)
-	}
-	if buf.Len() <= maxImageSize {
-		t.Fatalf("test PNG too small: %d", buf.Len())
-	}
-	data, typ, err := normalize(buf.Bytes(), "image/png")
+	data, typ, err := normalize(noisyPNG(t), "image/png")
 	if err != nil || typ != "image/jpeg" || len(data) > maxImageSize {
 		t.Fatalf("fallback failed: %v %s %d", err, typ, len(data))
 	}
