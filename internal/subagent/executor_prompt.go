@@ -190,12 +190,21 @@ func requestPermissionModeIn(config *AgentConfig, req tool.AgentExecRequest, par
 	// Explicit explore is a read-only ceiling; edit preserves the accept-edits
 	// policy. An unnamed definition snapshots the parent session, while a named
 	// definition retains its configured policy.
+	//
+	// A read-only definition is a ceiling wherever it came from. Routing an
+	// unnamed call to explore narrows the run to investigation, so inheriting a
+	// writing parent would hand the investigator the power the route just
+	// refused it; every other substituted definition keeps the posture the call
+	// would have inherited.
 	switch strings.TrimSpace(req.Mode) {
 	case "explore":
 		return PermissionExplore
 	case "edit":
 		return PermissionAcceptEdits
 	case "", "default":
+		if NormalizePermissionMode(string(config.PermissionMode)) == PermissionExplore {
+			return PermissionExplore
+		}
 		if strings.TrimSpace(req.Agent) == "" || config.displayOnly {
 			return parent
 		}
@@ -203,6 +212,15 @@ func requestPermissionModeIn(config *AgentConfig, req tool.AgentExecRequest, par
 	default:
 		return PermissionMode(strings.TrimSpace(req.Mode))
 	}
+}
+
+// requestAgentName is the name a request runs under for errors and logs: the
+// pinned route's definition when one was substituted, else the caller's name.
+func requestAgentName(req tool.AgentExecRequest) string {
+	if name := strings.TrimSpace(req.Route.Agent); name != "" {
+		return name
+	}
+	return strings.TrimSpace(req.Agent)
 }
 
 func displayAgentName(name string) string {

@@ -5,7 +5,7 @@ when-to-use: "When: the change is understood and can be made while the main conv
 model: "@standard"
 tier: standard
 mode: edit
-allow_tools: [Read, Write, Edit, Bash, WebFetch, WebSearch, Skill]
+allow_tools: [Read, Write, Edit, Bash, WebFetch, WebSearch, Skill, AskUserQuestion]
 ---
 
 # Task

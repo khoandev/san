@@ -892,7 +892,7 @@ func renderAgentResultDetails(data ToolResultData, details toolresult.AgentDetai
 	if width <= 0 {
 		width = 80
 	}
-	sb.WriteString(formatAgentDefinition(parseAgentInput(data.ToolInput), width))
+	sb.WriteString(formatAgentDefinition(withRouteInfo(parseAgentInput(data.ToolInput), details), width))
 	activity := details.Activity
 	const maxActivityLines = 30
 	if len(activity) > maxActivityLines {
@@ -1008,7 +1008,13 @@ func formatAgentDefinition(agent agentInput, width int) string {
 	}
 
 	var sb strings.Builder
-	meta := make([]string, 0, 2)
+	meta := make([]string, 0, 3)
+	if agent.Definition != "" {
+		meta = append(meta, agent.Definition)
+	}
+	if agent.Tier != "" {
+		meta = append(meta, fmt.Sprintf("tier=%s", agent.Tier))
+	}
 	if agent.Mode != "" {
 		meta = append(meta, fmt.Sprintf("mode=%s", agent.Mode))
 	}
@@ -1244,8 +1250,25 @@ type agentInput struct {
 	Description string `json:"description"`
 	Prompt      string `json:"prompt"`
 	Mode        string `json:"mode"`
+	Tier        string `json:"tier"`
 	Background  bool   `json:"run_in_background"`
 	Valid       bool   `json:"-"`
+	// Definition is the definition the call actually ran as, taken from the
+	// result details: a routed call named none, so its input cannot say.
+	Definition string `json:"-"`
+}
+
+// withRouteInfo fills in what the call actually ran as. The input records only
+// what the model asked for; the details are the sole record of a definition san
+// chose in its place, and of the rung the run used.
+func withRouteInfo(agent agentInput, details toolresult.AgentDetails) agentInput {
+	if details.AgentName != "" {
+		agent.Definition = details.AgentName
+	}
+	if details.Tier != "" {
+		agent.Tier = details.Tier
+	}
+	return agent
 }
 
 func parseAgentInput(input string) agentInput {

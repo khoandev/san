@@ -10,16 +10,19 @@ import (
 	"github.com/genai-io/sdk-go/pkg/ai/aitest"
 )
 
-// fixtureRouter answers with one fixed decision and counts how often it was
-// asked, so a test can tell "routed" from "asked and declined".
+// fixtureRouter answers with one fixed decision, counts how often it was asked,
+// and keeps every request, so a test can tell "routed" from "asked and
+// declined" and can check the posture the executor offered it.
 type fixtureRouter struct {
 	decision RouteDecision
 	ok       bool
 	calls    int
+	requests []RouteRequest
 }
 
-func (r *fixtureRouter) Route(context.Context, RouteRequest) (RouteDecision, bool) {
+func (r *fixtureRouter) Route(_ context.Context, req RouteRequest) (RouteDecision, bool) {
 	r.calls++
+	r.requests = append(r.requests, req)
 	return r.decision, r.ok
 }
 
@@ -52,23 +55,71 @@ func routedExecutor(t *testing.T, parent PermissionMode, router Router) *Executo
 	return adapter
 }
 
-// TestRouteAgentNeverSendsAnEditDefinitionToAReadOnlySession is the boundary
-// routing must not cross: a read-only posture delegates investigation, so a
-// classifier that suggests an edit worker must not be able to substitute one.
-func TestRouteAgentNeverSendsAnEditDefinitionToAReadOnlySession(t *testing.T) {
+// TestReadOnlySessionRoutesToAReadOnlyDefinition pins what plan mode gains from
+// routing: a read-only session still gets its brief classified, and a review
+// goes to the read-only reviewer instead of the default investigator.
+func TestReadOnlySessionRoutesToAReadOnlyDefinition(t *testing.T) {
+	router := &fixtureRouter{decision: RouteDecision{Tier: "deep", Agent: "reviewer"}, ok: true}
+	adapter := routedExecutor(t, PermissionExplore, router)
+
+	decision, routed := adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{Prompt: "review this diff"})
+	if !routed {
+		t.Fatal("a read-only session did not classify its brief")
+	}
+	if router.calls != 1 {
+		t.Fatalf("router consulted %d times, want the brief classified once", router.calls)
+	}
+	if !router.requests[0].ReadOnly {
+		t.Fatal("the router was not told the call runs read-only")
+	}
+	if decision.Agent != "reviewer" || decision.Tier != "deep" {
+		t.Fatalf("decision = %+v, want reviewer on the deep rung", decision)
+	}
+	if decision.Info.PermissionMode != string(PermissionExplore) {
+		t.Fatalf("approval mode = %q, want the read-only ceiling", decision.Info.PermissionMode)
+	}
+
+	// Execution follows the pinned route into the read-only reviewer.
+	run, err := adapter.Executor.prepareRun(context.Background(), tool.AgentExecRequest{
+		Prompt: "review this diff", Route: decision, Tier: decision.Tier,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.cfg.config.Name != "reviewer" || run.cfg.permMode != PermissionExplore {
+		t.Fatalf("run = %q under %q, want the read-only reviewer", run.cfg.config.Name, run.cfg.permMode)
+	}
+}
+
+// TestReadOnlySessionRefusesAnEditCharter is the boundary routing must not
+// cross: a read-only posture delegates investigation, so a classifier that
+// suggests an edit worker must not be able to substitute one. The call is still
+// classified — the verdict is what tells a review from a survey — and it lands
+// on the read-only default instead.
+func TestReadOnlySessionRefusesAnEditCharter(t *testing.T) {
 	router := &fixtureRouter{decision: RouteDecision{Tier: "fast", Agent: "quick"}, ok: true}
 	adapter := routedExecutor(t, PermissionExplore, router)
 
-	if decision, routed := adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{Prompt: "rename the field"}); routed {
-		t.Fatalf("read-only session routed an unnamed call to %+v", decision)
+	decision, routed := adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{Prompt: "rename the field"})
+	if !routed {
+		t.Fatal("a read-only session did not classify its brief")
 	}
-	if router.calls != 0 {
-		t.Fatalf("read-only session classified a brief %d times; classification could only offer an edit definition", router.calls)
+	if router.calls != 1 {
+		t.Fatalf("router consulted %d times, want the brief classified once", router.calls)
+	}
+	if !router.requests[0].ReadOnly {
+		t.Fatal("the router was not told the call runs read-only")
+	}
+	if decision.Agent != "" || decision.Info.Name != "explore" {
+		t.Fatalf("decision = %+v on %q, want no substitution and the read-only default", decision, decision.Info.Name)
+	}
+	if decision.Info.PermissionMode != string(PermissionExplore) {
+		t.Fatalf("approval mode = %q, want the read-only ceiling", decision.Info.PermissionMode)
 	}
 
 	// An explicit tier still reaches the run, but only as a rung: the posture
 	// keeps its read-only definition.
-	decision, routed := adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{Tier: "deep", Prompt: "map the plan store"})
+	decision, routed = adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{Tier: "deep", Prompt: "map the plan store"})
 	if !routed || decision.Tier != "deep" || decision.Agent != "" {
 		t.Fatalf("tiered read-only decision = %+v, routed=%v; want the deep rung and no substitution", decision, routed)
 	}
@@ -103,6 +154,9 @@ func TestRouteAgentMapsTheRungToAWorker(t *testing.T) {
 			if !routed {
 				t.Fatal("the call was not routed")
 			}
+			if len(router.requests) != 1 || router.requests[0].ReadOnly {
+				t.Fatalf("router requests = %+v, want one writing call", router.requests)
+			}
 			if decision.Tier != tc.tier || decision.Agent != tc.agent || decision.Info.Model != tc.model {
 				t.Fatalf("decision = %+v, want %s/%s on %s", decision, tc.tier, tc.agent, tc.model)
 			}
@@ -128,6 +182,87 @@ func TestRouteAgentMapsTheRungToAWorker(t *testing.T) {
 				t.Fatalf("run mode = %q, want the inherited default posture", run.cfg.permMode)
 			}
 		})
+	}
+}
+
+// TestRouteAgentTreatsAnUnknownNameAsALabel is the fix that makes routing fire:
+// a model naming its work ("fix-parser") instead of a definition must still be
+// classified, and the definition the router chose is what runs.
+func TestRouteAgentTreatsAnUnknownNameAsALabel(t *testing.T) {
+	router := &fixtureRouter{decision: RouteDecision{Tier: "fast", Agent: "explore"}, ok: true}
+	adapter := routedExecutor(t, PermissionDefault, router)
+
+	decision, routed := adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{
+		Name: "fix-parser", Prompt: "find where the parser lives",
+	})
+	if !routed {
+		t.Fatal("a labelled call was not routed")
+	}
+	if decision.Agent != "explore" || decision.Label != "fix-parser" || decision.Tier != "fast" {
+		t.Fatalf("decision = %+v, want explore/fast under label fix-parser", decision)
+	}
+	if router.calls != 1 {
+		t.Fatalf("router consulted %d times, want the brief classified once", router.calls)
+	}
+	// Approval shows the ceiling execution applies, not the posture the label
+	// would have inherited.
+	if decision.Info.PermissionMode != string(PermissionExplore) {
+		t.Fatalf("approval mode = %q, want the read-only ceiling", decision.Info.PermissionMode)
+	}
+
+	// Execution follows the route, not the label: the label cannot name a
+	// definition the route did not choose.
+	run, err := adapter.Executor.prepareRun(context.Background(), tool.AgentExecRequest{
+		Agent: "fix-parser", Prompt: "find where the parser lives", Route: decision, Tier: decision.Tier,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.cfg.config.Name != "explore" || run.cfg.modelID != "fast-model" {
+		t.Fatalf("run = %q on %q, want explore on the fast rung", run.cfg.config.Name, run.cfg.modelID)
+	}
+}
+
+// TestNamedDefinitionIsNeverSubstituted keeps the caller's decision: the tool
+// offers every call to the host, so a router that answers for a recognized
+// definition must not be able to move it.
+func TestNamedDefinitionIsNeverSubstituted(t *testing.T) {
+	router := &fixtureRouter{decision: RouteDecision{Tier: "fast", Agent: "quick"}, ok: true}
+	adapter := routedExecutor(t, PermissionDefault, router)
+
+	decision, routed := adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{
+		Name: "reviewer", Prompt: "review the diff",
+	})
+	if !routed || decision.Agent != "" || decision.Label != "" || decision.Tier != "" {
+		t.Fatalf("a named call was routed: %+v", decision)
+	}
+	if decision.Info.Name != "reviewer" {
+		t.Fatalf("approval resolved %q, want the named definition", decision.Info.Name)
+	}
+	if router.calls != 0 {
+		t.Fatalf("a named definition was classified %d times", router.calls)
+	}
+}
+
+// TestRoutedReadOnlyDefinitionKeepsItsCeiling is the invariant routing must not
+// break: an investigation substituted into a writing session runs read-only,
+// because the route narrowed the posture and execution must honour that.
+func TestRoutedReadOnlyDefinitionKeepsItsCeiling(t *testing.T) {
+	router := &fixtureRouter{decision: RouteDecision{Tier: "fast", Agent: "explore"}, ok: true}
+	adapter := routedExecutor(t, PermissionAcceptEdits, router)
+
+	decision, routed := adapter.RouteAgent(context.Background(), tool.AgentRouteRequest{Prompt: "how does the store load"})
+	if !routed || decision.Agent != "explore" {
+		t.Fatalf("decision = %+v, routed=%v; want the explore definition", decision, routed)
+	}
+	run, err := adapter.Executor.prepareRun(context.Background(), tool.AgentExecRequest{
+		Prompt: "how does the store load", Route: decision, Tier: decision.Tier,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.cfg.permMode != PermissionExplore {
+		t.Fatalf("routed explore ran under %q, want the read-only ceiling", run.cfg.permMode)
 	}
 }
 

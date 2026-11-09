@@ -48,9 +48,10 @@ func GetMessagesGetter(ctx context.Context) MessagesGetter {
 }
 
 // AgentRouteRequest asks the host what an Agent call will run as before it
-// runs. Name and Tier are the call's own signals: a call that names a
-// definition or asks for a depth has already decided, so only a call that
-// leaves both open is classified. Resume marks a continuation, which keeps the
+// runs. Name and Tier are the call's own signals: a name the host recognizes as
+// a definition, or a depth, has already decided. A name that is not a definition
+// only labels the task, so it is classified like an unnamed call and keeps the
+// label as display identity. Resume marks a continuation, which keeps the
 // policy it was approved under instead of being routed again.
 type AgentRouteRequest struct {
 	Name   string
@@ -71,6 +72,10 @@ type AgentRoute struct {
 	// Agent is the definition the call runs as. Empty keeps the default
 	// worker, which is what an unnamed call runs anyway.
 	Agent string
+	// Label is the caller's own name for the task when it named no
+	// definition. It never changes what runs: Agent does, and Label only
+	// names the work being delegated.
+	Label string
 	// Info is the approval-time projection: the name, model and posture the
 	// user is shown. It is never consulted during execution.
 	Info AgentConfigInfo
@@ -91,9 +96,15 @@ type AgentExecutor interface {
 }
 
 // AgentRouter is the optional capability of answering "what will this call run
-// as" for a call that names neither a definition nor a tier. It is separate
-// from AgentExecutor so a host without a classifier keeps the old behavior: no
-// router, no routing, and every call runs exactly what it asked for.
+// as" for a call that named no definition, and for a call whose name is only a
+// label. It is separate from AgentExecutor so a host without a classifier keeps
+// the old behavior: no router, no routing, and every call runs exactly what it
+// asked for.
+//
+// A host decides whether the name is a definition: it must answer with no
+// substitution for one it recognizes, and may route a call whose name it does
+// not, keeping that name as AgentRoute.Label. Routing narrows the posture,
+// never widens it.
 type AgentRouter interface {
 	// RouteAgent returns the pinned decision for req. ok reports that the host
 	// made one at all; false means the call keeps the definition it named (or
@@ -163,9 +174,13 @@ type AgentExecResult struct {
 
 // AgentTaskInfo contains info about a background agent task.
 type AgentTaskInfo struct {
-	Identity   toolresult.AgentIdentity
-	TaskID     string
-	AgentName  string
+	Identity  toolresult.AgentIdentity
+	TaskID    string
+	AgentName string
+	// Model is the model the frozen launch configuration resolves to. A
+	// background task has produced no result yet, so this is the only place
+	// its route can be reported from.
+	Model      string
 	OutputFile string
 }
 

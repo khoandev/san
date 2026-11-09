@@ -39,7 +39,11 @@ import (
 // Per-tool guidance (when to reach for a tool, how to call it) lives in each
 // tool's schema description, not here — the prompt carries only cross-tool
 // rules a single description cannot express, and a disabled tool takes its
-// guidance with it because the schema disappears from the request.
+// guidance with it because the schema disappears from the request. The one
+// exception is the delegation policy in the behavior part: whether to hand
+// work to another agent at all is a judgement that comes before any tool is
+// picked, so it names the Agent catalog and is worded against that tool being
+// offered.
 //
 //go:embed prompts/*.txt
 var promptFS embed.FS

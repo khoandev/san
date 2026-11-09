@@ -37,6 +37,9 @@ func TestACPExecutionDirectoryPermissions(t *testing.T) {
 					}
 					var step, writes atomic.Int32
 					driver := aitest.Always(func(ctx context.Context, req *ai.Request) iter.Seq2[ai.Delta, error] {
+						if isAutoTierRequest(req) {
+							return aitest.Says(`{"agent":"task","tier":"standard","reason":"one write"}`)(ctx, req)
+						}
 						if worker && !workerRequest(req) {
 							if hasResult(req) {
 								return aitest.Says("parent done")(ctx, req)

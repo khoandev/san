@@ -568,8 +568,13 @@ func (e *Executor) resolveRequestAgentConfig(req tool.AgentExecRequest, parent P
 		config, ok := req.ResolvedAgentConfig.(*AgentConfig)
 		return config, ok && config != nil
 	}
-	if strings.TrimSpace(req.Agent) == "" && strings.TrimSpace(req.Route.Agent) != "" {
-		config, ok := e.resolveAgentConfigIn(req.Route.Agent, parent)
+	// A pinned route outranks the request's own name. The name is a caller
+	// decision only when the host recognized it as a definition; otherwise the
+	// route already chose the charter and the name is just the label it runs
+	// under. Reading the route first is what makes the approved decision the
+	// one that executes.
+	if routed := strings.TrimSpace(req.Route.Agent); routed != "" {
+		config, ok := e.resolveAgentConfigIn(routed, parent)
 		if !ok {
 			return nil, false
 		}
@@ -613,7 +618,7 @@ func (e *Executor) prepareRunConfig(ctx context.Context, req tool.AgentExecReque
 	parent := e.parentPosture(req)
 	config, ok := e.resolveRequestAgentConfig(req, parent)
 	if !ok {
-		return nil, fmt.Errorf("unknown or disabled agent: %s", req.Agent)
+		return nil, fmt.Errorf("unknown or disabled agent: %s", requestAgentName(req))
 	}
 
 	// Freeze mutable registry/approval-time configuration, including lazily

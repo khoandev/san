@@ -5,7 +5,7 @@ when-to-use: "When: answering means reading many files here, or reading a librar
 model: "@fast"
 tier: fast
 mode: explore
-allow_tools: [Read, Bash, WebFetch, WebSearch]
+allow_tools: [Read, Bash, WebFetch, WebSearch, AskUserQuestion]
 ---
 
 # Explore

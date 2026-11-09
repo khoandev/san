@@ -2,7 +2,6 @@ package app
 
 import (
 	"strings"
-	"sync"
 
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/log"
@@ -11,34 +10,52 @@ import (
 	"go.uber.org/zap"
 )
 
-// autoTierUnassignedOnce keeps the "bind the fast role" notice to one line per
-// process: the Agent tool is reconfigured on every model, workspace and settings
-// change, and a warning per rebuild would bury the run it belongs to.
-var autoTierUnassignedOnce sync.Once
-
 // installAutoTier gives an Agent adapter the brief classifier, when the feature
-// is on and the fast role names a model. One inference per unnamed delegation is
-// the whole cost, so an unassigned fast role installs nothing: the session model
-// is not a cheap substitute, and every delegation then runs the tier its
-// definition declared. Routing narrows, never widens — the classifier answers
-// with a definition and a rung, and the executor still refuses an edit charter
-// in a read-only session.
-func installAutoTier(adapter *subagent.ExecutorAdapter, registry *subagent.Registry, enabled bool, resolve subagent.RoleResolver) {
+// is on. One inference per unnamed delegation is the whole cost, and the model
+// that runs it comes from a fallback chain: the fast role, then the standard
+// role, then the session's own model. A fresh install usually has no fast role
+// bound, so requiring one would silently leave every delegation running the
+// tier its definition declared — the very case routing exists to fix.
+//
+// Routing narrows, never widens: the classifier answers with a definition and a
+// rung, and the executor still refuses an edit charter in a read-only session.
+func installAutoTier(adapter *subagent.ExecutorAdapter, registry *subagent.Registry, enabled bool, resolve subagent.RoleResolver, session llm.Provider, sessionModel string) {
 	if !enabled || adapter == nil || resolve == nil {
 		return
 	}
-	assignment := resolve(string(llm.RoleFast))
-	if !assignment.Assigned || assignment.Provider == nil || strings.TrimSpace(assignment.ModelID) == "" {
-		autoTierUnassignedOnce.Do(func() {
-			log.Logger().Info("automatic tier routing needs a model in the fast role; delegations keep their declared tier",
-				zap.String("setting", "agents.autoTier"),
-				zap.String("modelRole", string(llm.RoleFast)))
-		})
+	provider, model, effort, role := classifierBinding(resolve, session, sessionModel)
+	if provider == nil || strings.TrimSpace(model) == "" {
+		log.Logger().Debug("automatic tier routing is off: no model to classify with",
+			zap.String("setting", "agents.autoTier"),
+			zap.String("modelRole", string(llm.RoleFast)),
+			zap.String("fallbackModelRole", string(llm.RoleStandard)))
 		return
 	}
-	judge := triage.New(assignment.Provider, assignment.ModelID, registry)
-	judge.SetThinkingEffort(assignment.Effort)
+	log.Logger().Debug("automatic tier routing",
+		zap.String("setting", "agents.autoTier"),
+		zap.String("modelRole", role),
+		zap.String("model", model))
+	judge := triage.New(provider, model, registry)
+	judge.SetThinkingEffort(effort)
 	adapter.SetRouter(judge)
+}
+
+// classifierBinding picks the model one classification runs on: the fast role,
+// else the standard role, else the session's own model. The effort bound to a
+// role travels with its model; the session fallback has no role, so it keeps
+// the model's default effort. role names the rung that answered ("fast",
+// "standard" or "session") for the log line, and is empty when nothing did.
+func classifierBinding(resolve subagent.RoleResolver, session llm.Provider, sessionModel string) (llm.Provider, string, string, string) {
+	for _, role := range []llm.ModelRole{llm.RoleFast, llm.RoleStandard} {
+		assignment := resolve(string(role))
+		if assignment.Assigned && assignment.Provider != nil && strings.TrimSpace(assignment.ModelID) != "" {
+			return assignment.Provider, assignment.ModelID, assignment.Effort, string(role)
+		}
+	}
+	if session != nil && strings.TrimSpace(sessionModel) != "" {
+		return session, sessionModel, "", "session"
+	}
+	return nil, "", "", ""
 }
 
 // autoTierEnabled reports whether automatic routing is on. A model built without

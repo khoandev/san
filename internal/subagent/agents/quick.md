@@ -5,7 +5,7 @@ when-to-use: "When: the brief already says exactly what to do and the work is on
 model: "@fast"
 tier: fast
 mode: edit
-allow_tools: [Read, Write, Edit, Bash]
+allow_tools: [Read, Write, Edit, Bash, AskUserQuestion]
 max-steps: 25
 ---
 

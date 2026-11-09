@@ -59,7 +59,14 @@ type AgentIdentity struct {
 // AgentDetails keeps display metadata out of the parent model's result text.
 type AgentDetails struct {
 	// Response is worker prose without routing metadata; nil marks older results.
-	Response     *string
+	Response *string
+	// AgentName is the definition the call actually ran as, which differs
+	// from the call's own name when san routed it. Empty means the default
+	// worker.
+	AgentName string
+	// Tier is the rung the run used — fast, standard or deep. Empty keeps the
+	// definition's own rung, so it is reported only when a route chose one.
+	Tier         string
 	Identity     AgentIdentity
 	Model        string
 	ToolUses     int

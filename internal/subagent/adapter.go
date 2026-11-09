@@ -59,13 +59,20 @@ func (a *ExecutorAdapter) RunBackground(req tool.AgentExecRequest) (tool.AgentTa
 
 	info := agentTask.GetStatus()
 	identity := toolresult.AgentIdentity{ID: info.ID, Name: info.AgentName, CallID: req.ParentToolCallID, SessionID: info.AgentSessionID}
+	// The frozen launch configuration is the report of what this task will run:
+	// a launch has no result yet, so its model comes from there or nowhere.
+	model := ""
 	if state, ok := agentTask.LaunchState().(*continuationState); ok {
 		identity.CallID = state.req.ParentToolCallID
+		if state.cfg != nil {
+			model = state.cfg.modelID
+		}
 	}
 	return tool.AgentTaskInfo{
 		Identity:   identity,
 		TaskID:     info.ID,
 		AgentName:  info.AgentName,
+		Model:      model,
 		OutputFile: info.OutputFile,
 	}, nil
 }

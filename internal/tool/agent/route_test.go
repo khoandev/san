@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/genai-io/san/internal/tool"
+	"github.com/genai-io/san/internal/tool/toolresult"
 )
 
 // routingExecutor is a host that both selects a definition and classifies a
@@ -105,8 +106,11 @@ func TestBypassExecutionRoutesWithoutApproval(t *testing.T) {
 // TestCallerDecisionSkipsTheRouter keeps classification for calls that left it
 // open: a named definition or an explicit depth has already decided, and
 // spending a model call to re-decide would only be able to disagree.
+//
+// The tool still offers every call to the host, because only the host knows
+// which names are definitions; a name it recognizes must come back unrouted.
 func TestCallerDecisionSkipsTheRouter(t *testing.T) {
-	executor := routedExecutor(tool.AgentRoute{Tier: "deep", Agent: "task"})
+	executor := routedExecutor()
 	agentTool := NewAgentTool()
 	agentTool.SetExecutor(executor)
 
@@ -114,8 +118,8 @@ func TestCallerDecisionSkipsTheRouter(t *testing.T) {
 	if _, err := agentTool.PreparePermission(context.Background(), named, "."); err != nil {
 		t.Fatal(err)
 	}
-	if len(executor.requests) != 0 {
-		t.Fatalf("a named call asked for routing: %+v", executor.requests)
+	if len(executor.requests) != 1 || executor.requests[0].Name != "explore" || executor.requests[0].Tier != "" {
+		t.Fatalf("router requests = %+v, want one request carrying the name", executor.requests)
 	}
 	tierExecutor := routedExecutor()
 	agentTool.SetExecutor(tierExecutor)
@@ -133,7 +137,7 @@ func TestCallerDecisionSkipsTheRouter(t *testing.T) {
 	if pinned.Tier != "fast" || pinned.Agent != "" {
 		t.Fatalf("tiered route = %+v, want the caller's fast rung and no substitution", pinned)
 	}
-	if pinned, _ := pinnedRoute(named); pinned.Tier != "" || pinned.Agent != "" {
+	if pinned, _ := pinnedRoute(named); pinned.Tier != "" || pinned.Agent != "" || pinned.Label != "" {
 		t.Fatalf("named route = %+v, want no routing", pinned)
 	}
 	agentTool.ExecuteApproved(context.Background(), tiered, ".")
@@ -160,10 +164,53 @@ func TestUnknownTierIsRejectedBeforeAnythingRuns(t *testing.T) {
 	}
 }
 
+// TestUnrecognizedNameIsRoutedAsALabel pins what an invented name buys: the
+// host classifies the call like an unnamed one, the definition it chose is what
+// runs, and the name survives only as the label the work is reported under.
+func TestUnrecognizedNameIsRoutedAsALabel(t *testing.T) {
+	executor := routedExecutor(tool.AgentRoute{
+		Tier:  "fast",
+		Agent: "explore",
+		Label: "fix-parser",
+		Info:  tool.AgentConfigInfo{Name: "explore", Model: "fast-model", PermissionMode: "explore"},
+		Raw:   "explore-config",
+	})
+	agentTool := NewAgentTool()
+	agentTool.SetExecutor(executor)
+	params := map[string]any{"name": "fix-parser", "prompt": "find where the parser lives"}
+
+	permission, err := agentTool.PreparePermission(context.Background(), params, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := permission.AgentMeta.AgentName; got != "explore" {
+		t.Fatalf("approval shows %q, want the routed definition", got)
+	}
+	if len(executor.requests) != 1 || executor.requests[0].Name != "fix-parser" {
+		t.Fatalf("router requests = %+v, want the label offered for classification", executor.requests)
+	}
+	pinned, ok := pinnedRoute(params)
+	if !ok || pinned.Agent != "explore" || pinned.Label != "fix-parser" {
+		t.Fatalf("pinned route = %+v, pinned=%v; want explore under the label", pinned, ok)
+	}
+
+	if result := agentTool.ExecuteApproved(context.Background(), params, "."); !result.Success {
+		t.Fatalf("execution failed: %+v", result)
+	}
+	// The label keeps naming the work; the route keeps naming the definition.
+	if got := executor.runReq; got.Agent != "fix-parser" || got.Route.Agent != "explore" || got.Route.Label != "fix-parser" {
+		t.Fatalf("execution ran %+v, want explore under label fix-parser", got)
+	}
+	if executor.runReq.ResolvedAgentConfig != "explore-config" {
+		t.Fatalf("execution lost the approved configuration: %+v", executor.runReq.ResolvedAgentConfig)
+	}
+}
+
 // TestRoutedCallKeepsTheCallerNameForPosture pins the identity the executor
-// uses to decide posture: a routed definition must not look like a call the
-// model named, or an unnamed session call would silently adopt the definition's
-// own edit policy.
+// uses to decide posture: a call the model left unnamed stays unnamed, so it
+// inherits the session posture instead of adopting the definition's own edit
+// policy. A labelled call keeps its label instead, and the route decides what
+// runs.
 func TestRoutedCallKeepsTheCallerNameForPosture(t *testing.T) {
 	executor := routedExecutor(tool.AgentRoute{
 		Tier:  "fast",
@@ -182,5 +229,81 @@ func TestRoutedCallKeepsTheCallerNameForPosture(t *testing.T) {
 	}
 	if executor.runReq.Route.Agent != "quick" {
 		t.Fatalf("route lost its definition: %+v", executor.runReq.Route)
+	}
+}
+
+// TestRoutedCallReportsWhereItRan pins what the parent model reads back: a call
+// it left unnamed names the definition san chose and the rung it ran at, so the
+// next delegation needs no classifier.
+func TestRoutedCallReportsWhereItRan(t *testing.T) {
+	executor := routedExecutor(tool.AgentRoute{
+		Tier:  "fast",
+		Agent: "explore",
+		Info:  tool.AgentConfigInfo{Name: "explore", Model: "fast-model", PermissionMode: "explore"},
+		Raw:   "explore-config",
+	})
+	agentTool := NewAgentTool()
+	agentTool.SetExecutor(executor)
+
+	result := agentTool.Execute(context.Background(), map[string]any{"prompt": "map the store"}, ".")
+	if !result.Success {
+		t.Fatalf("execution failed: %+v", result)
+	}
+	if !strings.Contains(result.Output, "ran as explore (fast") {
+		t.Fatalf("model cannot see the route it got: %q", result.Output)
+	}
+	if !strings.Contains(result.Metadata.Subtitle, "explore") {
+		t.Fatalf("subtitle lost the definition that ran: %q", result.Metadata.Subtitle)
+	}
+	details, ok := result.Details.(toolresult.AgentDetails)
+	if !ok || details.AgentName != "explore" || details.Tier != "fast" {
+		t.Fatalf("details = %+v, want the ran definition and its rung", result.Details)
+	}
+}
+
+// TestRoutedCallReportsTheLabelItKept pins that an invented name stays visible
+// as the label of the work while the line still names the definition that ran.
+func TestRoutedCallReportsTheLabelItKept(t *testing.T) {
+	executor := routedExecutor(tool.AgentRoute{
+		Tier:  "fast",
+		Agent: "explore",
+		Label: "fix-parser",
+		Info:  tool.AgentConfigInfo{Name: "explore", Model: "fast-model", PermissionMode: "explore"},
+		Raw:   "explore-config",
+	})
+	agentTool := NewAgentTool()
+	agentTool.SetExecutor(executor)
+
+	result := agentTool.Execute(context.Background(), map[string]any{"name": "fix-parser", "prompt": "find the parser"}, ".")
+	if !result.Success {
+		t.Fatalf("execution failed: %+v", result)
+	}
+	if !strings.Contains(result.Output, `ran as explore (fast, fast-model) · "fix-parser"`) {
+		t.Fatalf("route line = %q, want the definition under the caller's label", result.Output)
+	}
+}
+
+// TestBackgroundLaunchReportsWhereItRan covers the launch path: the model reads
+// the same route line even though the work has not produced content yet.
+func TestBackgroundLaunchReportsWhereItRan(t *testing.T) {
+	executor := routedExecutor(tool.AgentRoute{
+		Tier:  "standard",
+		Agent: "task",
+		Info:  tool.AgentConfigInfo{Name: "task", Model: "standard-model", PermissionMode: "default"},
+		Raw:   "task-config",
+	})
+	agentTool := NewAgentTool()
+	agentTool.SetExecutor(executor)
+
+	result := agentTool.Execute(context.Background(), map[string]any{"prompt": "fix the parser", "run_in_background": true}, ".")
+	if !result.Success {
+		t.Fatalf("launch failed: %+v", result)
+	}
+	if !strings.Contains(result.Output, "ran as task (standard, standard-model)") {
+		t.Fatalf("background launch hid the route: %q", result.Output)
+	}
+	details, ok := result.Details.(toolresult.AgentDetails)
+	if !ok || details.AgentName != "task" || details.Tier != "standard" {
+		t.Fatalf("details = %+v, want the ran definition and its rung", result.Details)
 	}
 }

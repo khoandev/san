@@ -18,11 +18,15 @@ func TestAgentToolSchemaMatchesBuilder(t *testing.T) {
 	}
 }
 
-func TestAgentSchemaRequiresBenefitAndContextIndependence(t *testing.T) {
+// Delegation is the default for work that stands on its own; the brake is that
+// the main conversation keeps what is one step or needs its context. The test
+// pins both halves, because losing either one costs: without the first the main
+// model does everything itself, without the second every turn spawns a worker.
+func TestAgentSchemaPutsDelegationFirst(t *testing.T) {
 	description := agentSchema("").Description
 	for _, want := range []string{
-		"Work directly by default",
-		"Delegate only when it offers a clear benefit and needs little prior conversation context",
+		"Delegate independently scoped, self-contained work",
+		"Do it yourself when it is one step or needs the conversation's context",
 	} {
 		if !strings.Contains(description, want) {
 			t.Errorf("Agent description should contain %q", want)
@@ -81,7 +85,7 @@ func TestAgentSchemaTeachesTiersAndStaysLean(t *testing.T) {
 		"- fast: one sentence of goal",
 		"- standard: the goal, the paths involved, and the definition of done",
 		"- deep: the goal, exact files, constraints, acceptance criteria",
-		"Omit name and tier for routine work and san routes it",
+		"Omit name and tier for routine work; san routes it",
 	} {
 		if !strings.Contains(full, want) {
 			t.Errorf("description should teach %q:\n%s", want, full)
@@ -89,7 +93,7 @@ func TestAgentSchemaTeachesTiersAndStaysLean(t *testing.T) {
 	}
 	// A catalog-free schema cannot point at a definition that may not exist,
 	// and the tier rubric still applies to the unnamed default worker.
-	if strings.Contains(agentSchema("").Description, "Pick the narrowest definition") {
+	if strings.Contains(agentSchema("").Description, "Route by intent") {
 		t.Error("catalog-free description advises a choice it cannot offer")
 	}
 	if !strings.Contains(agentSchema("").Description, "- fast: one sentence of goal") {
@@ -143,9 +147,30 @@ func TestAgentSchemaExplainsNameResolution(t *testing.T) {
 	if !ok {
 		t.Fatal("Agent schema should expose name")
 	}
-	want := "Optional name for this agent. New names label the task; an existing custom definition supplies its configuration."
+	want := "Optional. A name the catalog lists selects that definition. Any other name only labels the task, and san still routes the call on its brief."
 	if description := name["description"]; description != want {
 		t.Fatalf("name description = %q, want %q", description, want)
+	}
+}
+
+// The catalog turns a list of definitions into a choice. Every row here is a
+// decision the delegating model would otherwise make by name similarity, and
+// the last line keeps a findings-only brief away from the writing worker.
+func TestAgentSchemaRoutesByIntent(t *testing.T) {
+	description := agentSchema(sampleCatalog).Description
+	for _, want := range []string{
+		"Route by intent",
+		"- a question, or where code lives → explore",
+		"- a fix with a definition of done → task",
+		"- one small edit already spelled out → quick",
+		"- checking an existing diff or design → reviewer",
+		"Name an entry; other names are labels",
+		"Findings never go to task",
+		"a read-only definition never edits",
+	} {
+		if !strings.Contains(description, want) {
+			t.Errorf("routing table should teach %q:\n%s", want, description)
+		}
 	}
 }
 

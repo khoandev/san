@@ -1003,7 +1003,7 @@ func (m *model) ReconfigureAgentTool() {
 	executor.SetDisabledTools(m.services.Setting.DisabledTools())
 
 	adapter := subagent.NewExecutorAdapter(executor)
-	installAutoTier(adapter, executor.AgentRegistry(), m.autoTierEnabled(), resolver)
+	installAutoTier(adapter, executor.AgentRegistry(), m.autoTierEnabled(), resolver, m.env.LLMProvider, m.env.GetModelID())
 	type executorSetter interface{ SetExecutor(tool.AgentExecutor) }
 	type searchPathSetter interface{ SetSearchPaths([]string) }
 	home, _ := os.UserHomeDir()

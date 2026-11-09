@@ -9,18 +9,19 @@ func TestAgentSchemaIncludesPredefinedCatalogWithoutSelectors(t *testing.T) {
 	catalog := "Available predefined agents:\n\n- reviewer: Reviews changes\n  Use when: Before merging"
 	tool := &AgentTool{}
 	schema := tool.SchemaWithAgentCatalog(catalog)
-	if !strings.Contains(schema.Description, catalog) || !strings.Contains(schema.Description, "Pick the narrowest definition") {
+	if !strings.Contains(schema.Description, catalog) || !strings.Contains(schema.Description, "Route by intent") {
 		t.Fatalf("predefined agents are not discoverable: %s", schema.Description)
 	}
-	// The priority order is what turns a list of definitions into a choice;
+	// The intent table is what turns a list of definitions into a choice;
 	// without it the model picks by name similarity. The last line is the
 	// routing opt-out: the model may leave both name and tier unset.
 	for _, want := range []string{
-		"investigation, including a dependency's upstream docs, → explore",
-		"review → reviewer",
-		"a bounded change → task",
-		"one small edit the brief spells out → quick",
-		"Omit name and tier for routine work and san routes it",
+		"a question, or where code lives → explore",
+		"a fix with a definition of done → task",
+		"one small edit already spelled out → quick",
+		"checking an existing diff or design → reviewer",
+		"Name an entry; other names are labels",
+		"Omit name and tier for routine work; san routes it",
 	} {
 		if !strings.Contains(schema.Description, want) {
 			t.Errorf("agent selection guidance lost %q: %s", want, schema.Description)

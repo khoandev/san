@@ -7,11 +7,15 @@ import (
 	"github.com/genai-io/san/internal/tool"
 )
 
-// RouteRequest is what a Router sees of a delegation: the brief alone. Routing
-// runs only for a call that named no definition and asked for no depth, so the
-// brief is the only signal there is.
+// RouteRequest is what a Router sees of a delegation: the brief, and the
+// posture the call would inherit. It carries ReadOnly so a classifier can pick
+// from the definitions that posture can actually run — a read-only session may
+// still route to explore or reviewer, and must never be offered an edit
+// charter. Routing runs only for a call that named no definition and asked for
+// no depth, so the brief is the only description of the work there is.
 type RouteRequest struct {
-	Prompt string
+	Prompt   string
+	ReadOnly bool
 }
 
 // RouteDecision is a Router's answer: the rung the brief is for, and optionally
@@ -52,11 +56,15 @@ func (a *ExecutorAdapter) SetRouter(r Router) {
 // answers what the call will run as: the definition, the rung, the model shown
 // to the user, and the exact configuration execution must use.
 //
-// Routing narrows, never widens. An unnamed call in a read-only parent keeps
-// the posture default — the bundled explore definition — because substituting
-// an edit charter would turn an investigation the user approved into a worker
-// that writes. A named definition is never replaced, and a continuation keeps
-// the policy it was approved under instead of being classified again.
+// A name this host recognizes is a caller decision; any other name only labels
+// the task, so the call is classified like an unnamed one and the label travels
+// with the route. Routing narrows, never widens: a read-only parent is still
+// classified — a review belongs to reviewer even in plan mode — but only the
+// read-only definitions are on offer, so an unnamed call there keeps the
+// posture default (the bundled explore definition) rather than turning an
+// investigation the user approved into a worker that writes. A named definition
+// is never replaced, and a continuation keeps the policy it was approved under
+// instead of being classified again.
 func (a *ExecutorAdapter) RouteAgent(ctx context.Context, req tool.AgentRouteRequest) (tool.AgentRoute, bool) {
 	if req.Resume {
 		return tool.AgentRoute{}, false
@@ -69,14 +77,26 @@ func (a *ExecutorAdapter) RouteAgent(ctx context.Context, req tool.AgentRouteReq
 		return tool.AgentRoute{}, false
 	}
 
-	callerNamed := strings.TrimSpace(req.Name) != ""
-	chosen := strings.TrimSpace(req.Name)
+	name := strings.TrimSpace(req.Name)
+	callerNamed := a.Executor.knownDefinition(name)
+	chosen, label := "", ""
+	if callerNamed {
+		chosen = name
+	} else {
+		label = name
+	}
 	if !callerNamed && tier == "" {
-		verdict, ok := a.Executor.classify(ctx, req.Prompt)
+		verdict, ok := a.Executor.classify(ctx, RouteRequest{Prompt: req.Prompt}, parent)
 		if !ok {
 			return tool.AgentRoute{}, false
 		}
 		tier, chosen = verdict.tier, verdict.agent
+	}
+	if !callerNamed && chosen != "" {
+		// A verdict this host cannot vouch for is dropped for the rung's own
+		// definition instead of being run: a classifier may not hand a session
+		// a charter routing itself would have refused.
+		chosen = a.Executor.routableDefinition(chosen, parent)
 	}
 	if !callerNamed && chosen == "" {
 		chosen = a.Executor.tierDefinition(tier, parent)
@@ -95,7 +115,7 @@ func (a *ExecutorAdapter) RouteAgent(ctx context.Context, req tool.AgentRouteReq
 	}
 	routed := ""
 	if !callerNamed {
-		// The call is still unnamed: it keeps the posture it would have
+		// The call named no definition: it keeps the posture it would have
 		// inherited, and only its charter and rung change. A named call keeps
 		// the name it wrote, so nothing is substituted for it.
 		routed = chosen
@@ -103,20 +123,46 @@ func (a *ExecutorAdapter) RouteAgent(ctx context.Context, req tool.AgentRouteReq
 			if posture, _, ok := a.ResolveAgentSelection(""); ok {
 				info.PermissionMode = posture.PermissionMode
 			}
+			// A read-only definition is not a posture the call could have
+			// inherited: approval must show the ceiling execution will apply.
+			if config, ok := raw.(*AgentConfig); ok && NormalizePermissionMode(string(config.PermissionMode)) == PermissionExplore {
+				info.PermissionMode = string(PermissionExplore)
+			}
 		}
 	}
-	return tool.AgentRoute{Tier: tier, Agent: routed, Info: info, Raw: raw}, true
+	return tool.AgentRoute{Tier: tier, Agent: routed, Label: label, Info: info, Raw: raw}, true
 }
 
-// classify asks the installed router for a verdict. It refuses to run without a
-// router, and refuses in a read-only parent: the only edit definition a route
-// could name would be refused by that posture anyway, so classification would
-// spend a model call to learn nothing.
-func (e *Executor) classify(ctx context.Context, prompt string) (routeVerdict, bool) {
-	if e.router == nil || e.currentParentPermissionMode() == PermissionExplore {
+// knownDefinition reports whether name names a definition this host would run.
+// An unrecognized name is a task label: the model wanted to name the work, not
+// to pick a charter, so the call is still classified and the label survives as
+// display identity. A disabled definition is not known either — the call must
+// not be routed to what the user turned off, and only a name that resolves is
+// allowed to decide for itself.
+func (e *Executor) knownDefinition(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || e.registry == nil {
+		return false
+	}
+	_, exists, enabled := e.registry.LookupAgent(name)
+	return exists && enabled
+}
+
+// classify asks the installed router for a verdict. A read-only parent is
+// classified like any other: investigation is most of what such a session does,
+// and the router is what tells an investigation from a review. ReadOnly travels
+// with the request so the router offers only definitions that posture can run;
+// it is derived from the parent posture RouteAgent already read, so one launch
+// reads the session mode once and the two cannot disagree.
+//
+// The verdict's definition is not trusted here; RouteAgent runs it through
+// routableDefinition before it can substitute anything.
+func (e *Executor) classify(ctx context.Context, req RouteRequest, parent PermissionMode) (routeVerdict, bool) {
+	if e.router == nil {
 		return routeVerdict{}, false
 	}
-	decision, ok := e.router.Route(ctx, RouteRequest{Prompt: prompt})
+	req.ReadOnly = req.ReadOnly || parent == PermissionExplore
+	decision, ok := e.router.Route(ctx, req)
 	if !ok {
 		return routeVerdict{}, false
 	}

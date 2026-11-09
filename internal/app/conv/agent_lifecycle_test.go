@@ -243,6 +243,17 @@ func TestAgentLifecycleBuildingKeepsIdentity(t *testing.T) {
 	}
 }
 
+// TestAgentResultNamesTheDefinitionThatRan proves the renderer reads the route
+// the tool reported: a call that named no definition still shows what it ran
+// as and at which rung.
+func TestAgentResultNamesTheDefinitionThatRan(t *testing.T) {
+	data := ToolResultData{ToolName: "Agent", ToolInput: `{"description":"Map the store"}`, Content: "finding", Expanded: true, Width: 80}
+	got := ansi.Strip(renderAgentResultDetails(data, toolresult.AgentDetails{AgentName: "explore", Tier: "fast"}, nil))
+	if !strings.Contains(got, "[explore, tier=fast]") {
+		t.Fatalf("expanded result lost the route that ran: %q", got)
+	}
+}
+
 func TestAgentLifecycleNegativeCurrentIndex(t *testing.T) {
 	call := core.ToolCall{ID: "worker", Name: "Agent"}
 	if got := RenderPendingToolSpinner(PendingToolSpinnerParams{PendingCalls: []core.ToolCall{call}, CurrentIdx: -1}); got != "" {

@@ -89,7 +89,7 @@ func (s *acpSession) configureAgents() {
 	// Same automatic-routing wiring the TUI installs, reading the same setting,
 	// so a delegation behaves alike on both surfaces.
 	adapter := subagent.NewExecutorAdapter(e)
-	installAutoTier(adapter, e.AgentRegistry(), s.autoTierEnabled(), resolver)
+	installAutoTier(adapter, e.AgentRegistry(), s.autoTierEnabled(), resolver, s.runtimeBuildParams.Provider, s.runtimeBuildParams.ModelID)
 	worker := agenttool.NewAgentTool()
 	worker.SetExecutor(adapter)
 	schema := worker.Schema()

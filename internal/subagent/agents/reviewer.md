@@ -5,7 +5,7 @@ when-to-use: "When: a change already exists and needs an outside check before me
 model: "@deep"
 tier: deep
 mode: explore
-allow_tools: [Read, Bash, WebFetch, WebSearch]
+allow_tools: [Read, Bash, WebFetch, WebSearch, AskUserQuestion]
 ---
 
 # Reviewer

@@ -268,8 +268,11 @@ func TestBundledAgentCanBeDisabled(t *testing.T) {
 // Grep, Glob, Find or LSP), which would silently narrow the schema and produce
 // a worker that cannot do its job.
 func TestBundledAgentToolsExist(t *testing.T) {
+	// AskUserQuestion is a safe interaction tool: a routed worker must be able
+	// to ask the user, the way an unnamed worker could before routing existed.
 	allowed := []string{tool.ToolRead, tool.ToolWrite, tool.ToolEdit, tool.ToolBash,
-		tool.ToolWebFetch, tool.ToolWebSearch, tool.ToolSkill, tool.ToolSendMessage}
+		tool.ToolWebFetch, tool.ToolWebSearch, tool.ToolSkill, tool.ToolSendMessage,
+		tool.ToolAskUserQuestion}
 
 	present := make(map[string]bool)
 	for _, schema := range tool.GetToolSchemas() {

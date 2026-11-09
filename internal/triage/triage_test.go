@@ -58,15 +58,30 @@ func routingRegistry(t *testing.T, disabled ...string) *subagent.Registry {
 	if err := registry.InitStores(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	registry.Register(&subagent.AgentConfig{Name: "explore", Model: "@fast", PermissionMode: subagent.PermissionExplore})
-	registry.Register(&subagent.AgentConfig{Name: "quick", Model: "@fast", PermissionMode: subagent.PermissionAcceptEdits})
-	registry.Register(&subagent.AgentConfig{Name: "task", Model: "@standard", PermissionMode: subagent.PermissionAcceptEdits})
-	registry.Register(&subagent.AgentConfig{Name: "reviewer", Model: "@deep", PermissionMode: subagent.PermissionExplore})
+	registry.Register(&subagent.AgentConfig{Name: "explore", Model: "@fast", Tier: subagent.TierFast, PermissionMode: subagent.PermissionExplore})
+	registry.Register(&subagent.AgentConfig{Name: "quick", Model: "@fast", Tier: subagent.TierFast, PermissionMode: subagent.PermissionAcceptEdits})
+	registry.Register(&subagent.AgentConfig{Name: "task", Model: "@standard", Tier: subagent.TierStandard, PermissionMode: subagent.PermissionAcceptEdits})
+	registry.Register(&subagent.AgentConfig{Name: "reviewer", Model: "@deep", Tier: subagent.TierDeep, PermissionMode: subagent.PermissionExplore})
 	for _, name := range disabled {
 		if err := registry.SetEnabled(name, false, setting.ScopeUser); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return registry
+}
+
+// bareTierRegistry holds one definition that declares no rung, so a test can
+// check that an unusable verdict tier never costs a definition its identity.
+func bareTierRegistry(t *testing.T) *subagent.Registry {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	registry := subagent.NewRegistry()
+	if err := registry.InitStores(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	registry.Register(&subagent.AgentConfig{Name: "bare", Model: "@fast", PermissionMode: subagent.PermissionAcceptEdits})
 	return registry
 }
 
@@ -128,7 +143,6 @@ func TestBrokenVerdictFallsBackToStandard(t *testing.T) {
 	for name, content := range map[string]string{
 		"prose":        "I would say this is a small change.",
 		"malformed":    `{"agent": "quick", "tier":}`,
-		"unknown rung": `{"agent":"quick","tier":"enormous"}`,
 		"unknown name": `{"agent":"ghost","tier":"fast"}`,
 		"empty answer": `{}`,
 	} {
@@ -155,6 +169,59 @@ func TestDisabledDefinitionFallsBackToStandard(t *testing.T) {
 	}
 }
 
+// TestDefinitionSurvivesAnUnusableRung pins the rubric's order: the definition
+// is the decision, so a verdict with a missing or nonsense rung keeps the
+// definition it chose at the rung that definition declares.
+func TestDefinitionSurvivesAnUnusableRung(t *testing.T) {
+	for name, tc := range map[string]struct{ content, agent, tier string }{
+		"no rung":      {`{"agent":"explore","reason":"where is it"}`, "explore", "fast"},
+		"unknown rung": {`{"agent":"reviewer","tier":"enormous"}`, "reviewer", "deep"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			judge, _ := newJudge(t, tc.content)
+			decision, ok := judge.Classify(context.Background(), Request{Prompt: "brief"})
+			if !ok {
+				t.Fatal("the brief was not classified")
+			}
+			if decision.Agent != tc.agent || decision.Tier != tc.tier {
+				t.Fatalf("decision = %+v, want %s at its declared %s rung", decision, tc.agent, tc.tier)
+			}
+		})
+	}
+
+	// A definition that declares no rung still survives the bad tier.
+	judge := New(&stubProvider{content: `{"agent":"bare","tier":""}`}, "fast-model", bareTierRegistry(t))
+	decision, ok := judge.Classify(context.Background(), Request{Prompt: "brief"})
+	if !ok || decision.Agent != "bare" || decision.Tier != "standard" {
+		t.Fatalf("decision = %+v, ok=%v; want the definition at the standard rung", decision, ok)
+	}
+}
+
+// TestVerdictBudgetLeavesRoomForReasoning pins the output cap: reasoning tokens
+// count against it, so an explicit effort takes the cap off the wire, while a
+// plain classification stays bounded.
+func TestVerdictBudgetLeavesRoomForReasoning(t *testing.T) {
+	plain, plainProvider := newJudge(t, `{"agent":"quick","tier":"fast"}`)
+	if _, ok := plain.Classify(context.Background(), Request{Prompt: "one rename"}); !ok {
+		t.Fatal("the brief was not classified")
+	}
+	if got := plainProvider.last.Last().MaxTokens; got != maxVerdictTokens {
+		t.Fatalf("cap = %d, want %d", got, maxVerdictTokens)
+	}
+
+	effort, effortProvider := newJudge(t, `{"agent":"quick","tier":"fast"}`)
+	effort.SetThinkingEffort("high")
+	if _, ok := effort.Classify(context.Background(), Request{Prompt: "one rename"}); !ok {
+		t.Fatal("the brief was not classified")
+	}
+	if got := effortProvider.last.Last().MaxTokens; got != 0 {
+		t.Fatalf("cap = %d with an effort set, want the cap off the wire", got)
+	}
+	if defaultTimeout != 4*time.Second {
+		t.Fatalf("default timeout = %s, want the bounded 4s classification", defaultTimeout)
+	}
+}
+
 // A read-only session delegates investigation: a verdict that names an editing
 // charter is unusable there, so it is clamped to the read-only default instead
 // of being repaired into a worker that writes.
@@ -170,6 +237,22 @@ func TestReadOnlySessionNeverGetsAnEditCharter(t *testing.T) {
 	judge, _ = newJudge(t, `{"agent":"reviewer","tier":"deep"}`)
 	if decision, ok := judge.Classify(context.Background(), Request{Prompt: "review the diff", ReadOnly: true}); !ok || decision.Agent != "reviewer" || decision.Tier != "deep" {
 		t.Fatalf("decision = %+v, ok=%v; want the read-only reviewer", decision, ok)
+	}
+}
+
+// TestRouteCarriesTheReadOnlyPosture guards the adapter seam: the executor
+// tells the judge whether the call would run read-only, and dropping that flag
+// would quietly hand a plan-mode session the edit charter a verdict named.
+func TestRouteCarriesTheReadOnlyPosture(t *testing.T) {
+	judge, _ := newJudge(t, `{"agent":"quick","tier":"fast","reason":"one rename"}`)
+
+	readOnly, ok := judge.Route(context.Background(), subagent.RouteRequest{Prompt: "one rename", ReadOnly: true})
+	if !ok || readOnly.Agent != "explore" || readOnly.Tier != "standard" {
+		t.Fatalf("read-only route = %+v, ok=%v; want the explore fallback", readOnly, ok)
+	}
+	writing, ok := judge.Route(context.Background(), subagent.RouteRequest{Prompt: "one rename"})
+	if !ok || writing.Agent != "quick" || writing.Tier != "fast" {
+		t.Fatalf("writing route = %+v, ok=%v; want the verdict untouched", writing, ok)
 	}
 }
 
@@ -207,9 +290,11 @@ func TestClassificationTimesOutIntoTheFallback(t *testing.T) {
 	}
 }
 
-// An unbound fast role is the one case that never reaches a provider: there is
-// no cheap model to classify with, and the session model is not a substitute.
-func TestUnassignedFastRoleSkipsTheJudge(t *testing.T) {
+// A judge built without a model is the last guard on classification. The app
+// picks the model through fast → standard → session before it builds one, so
+// this case means the host passed nothing at all: decline rather than spend an
+// inference the judge cannot make.
+func TestJudgeWithoutAModelDeclines(t *testing.T) {
 	provider := &stubProvider{content: `{"agent":"quick","tier":"fast"}`}
 	judge := New(provider, "  ", routingRegistry(t))
 
@@ -220,7 +305,7 @@ func TestUnassignedFastRoleSkipsTheJudge(t *testing.T) {
 		t.Fatalf("an unassigned judge routed the call: %+v", decision)
 	}
 	if provider.calls != 0 {
-		t.Fatalf("provider called %d times; an unassigned fast role must not classify", provider.calls)
+		t.Fatalf("provider called %d times; a judge without a model must not classify", provider.calls)
 	}
 	if New(nil, "fast-model", routingRegistry(t)).Assigned() {
 		t.Fatal("a judge without a provider reported itself assigned")

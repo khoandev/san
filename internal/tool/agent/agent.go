@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/genai-io/san/internal/core"
@@ -106,7 +105,7 @@ func (t *AgentTool) PreparePermission(ctx context.Context, params map[string]any
 		}
 		// Pin what execution reads, even when it is "no route": a call that was
 		// reviewed without routing must not be classified again at execution.
-		params["_route"] = tool.AgentRoute{Tier: route.Tier, Agent: route.Agent}
+		params["_route"] = tool.AgentRoute{Tier: route.Tier, Agent: route.Agent, Label: route.Label}
 	}
 
 	// Determine effective model for permission display.
@@ -147,17 +146,16 @@ func (t *AgentTool) PreparePermission(ctx context.Context, params map[string]any
 	}, nil
 }
 
-// routeAgent asks the host to route an Agent call. A host without a router, or
-// a call that already decided (a named definition or an explicit tier), keeps
+// routeAgent asks the host to route an Agent call. A host without a router keeps
 // the plain selection path: the returned route carries only the tier the caller
 // asked for, so an explicit depth still reaches execution.
+//
+// Every call is offered to the host, because only the host can tell a name it
+// recognizes as a definition from a name the model invented to label the task.
+// A recognized definition must come back unrouted; an unrecognized name is
+// classified and travels back as the route's label.
 func (t *AgentTool) routeAgent(ctx context.Context, agentName, tier, prompt string) tool.AgentRoute {
 	route := tool.AgentRoute{Tier: tier}
-	// A named definition has decided already: it supplies its own charter, and
-	// only an unnamed call can have a definition substituted for it.
-	if strings.TrimSpace(agentName) != "" {
-		return route
-	}
 	router, ok := t.executor.(tool.AgentRouter)
 	if !ok {
 		return route
@@ -280,12 +278,28 @@ func (t *AgentTool) execute(ctx context.Context, params map[string]any, cwd stri
 			return toolresult.NewErrorResult(t.Name(), fmt.Sprintf("failed to start background agent: %v", err))
 		}
 
+		ranName := ranAgentName(taskInfo.AgentName, route, agentName)
 		output := fmt.Sprintf("Agent started in background.\nTask ID: %s\nDescription: %s", taskInfo.TaskID, description)
+		// The launch reports the model its frozen configuration resolves to.
+		// A host that reports none falls back to the model approval pinned.
+		model := taskInfo.Model
+		if model == "" {
+			model = route.Info.Model
+		}
+		if line := routeLine(route, agentName, ranName, model); line != "" {
+			output += "\n\n" + line
+		}
 		duration := time.Since(start)
 		return toolresult.ToolResult{
 			Success: true,
-			Details: toolresult.AgentDetails{TaskID: taskInfo.TaskID, Identity: taskInfo.Identity},
-			Output:  output + tool.BackgroundLaunchSuffix,
+			Details: toolresult.AgentDetails{
+				TaskID:    taskInfo.TaskID,
+				Identity:  taskInfo.Identity,
+				AgentName: ranName,
+				Tier:      route.Tier,
+				Model:     model,
+			},
+			Output: output + tool.BackgroundLaunchSuffix,
 			HookResponse: map[string]any{
 				"backgroundTask": map[string]any{
 					"taskId":      taskInfo.TaskID,
@@ -298,7 +312,7 @@ func (t *AgentTool) execute(ctx context.Context, params map[string]any, cwd stri
 			Metadata: toolresult.ResultMetadata{
 				Title:    t.Name(),
 				Icon:     t.Icon(),
-				Subtitle: fmt.Sprintf("[background] %s: %s", displayAgentLabel(agentName), taskInfo.TaskID),
+				Subtitle: fmt.Sprintf("[background] %s: %s", displayAgentLabel(ranName), taskInfo.TaskID),
 				Duration: duration,
 			},
 		}
@@ -321,7 +335,10 @@ func (t *AgentTool) execute(ctx context.Context, params map[string]any, cwd stri
 
 	duration := time.Since(start)
 
-	displayName := displayAgentLabel(agentName)
+	// The subtitle names what actually ran: a routed call reports the
+	// definition san chose, not the label the model wrote.
+	ranName := ranAgentName(result.AgentName, route, agentName)
+	displayName := displayAgentLabel(ranName)
 	agentDuration := result.Duration
 	if agentDuration == 0 {
 		agentDuration = duration
@@ -330,15 +347,21 @@ func (t *AgentTool) execute(ctx context.Context, params map[string]any, cwd stri
 	if !result.Success {
 		status = "failed"
 	}
+	model := result.Model
+	if model == "" {
+		model = route.Info.Model
+	}
 	return toolresult.ToolResult{
 		Success:      result.Success,
-		Output:       formatForegroundAgentResult(result),
+		Output:       formatForegroundAgentResult(result, routeLine(route, agentName, ranName, model)),
 		Error:        result.Error,
 		HookResponse: buildAgentHookResponse(result, agentName, prompt),
 		Details: toolresult.AgentDetails{
-			Response: &result.Content,
-			Identity: result.Identity,
-			Model:    result.Model, ToolUses: result.ToolUses,
+			Response:  &result.Content,
+			AgentName: ranName,
+			Tier:      route.Tier,
+			Identity:  result.Identity,
+			Model:     result.Model, ToolUses: result.ToolUses,
 			InputTokens: result.TotalInputTokens, OutputTokens: result.TotalOutputTokens,
 			Duration: agentDuration, Activity: result.Activity, Error: result.Error,
 			Stopped: errors.Is(err, context.Canceled),
