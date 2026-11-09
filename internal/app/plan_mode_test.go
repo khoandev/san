@@ -186,7 +186,7 @@ func TestPlanStateSurvivesSessionRoundTrip(t *testing.T) {
 	}
 	m.persistPlan()
 
-	history, err := store.Read("sess-1")
+	history, err := store.Read("sess-1", session.ReadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
