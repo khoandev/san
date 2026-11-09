@@ -128,18 +128,57 @@ func TestRTKRewriteDisabledByEnv(t *testing.T) {
 }
 
 func TestRTKRewriteTimesOut(t *testing.T) {
-	// exec, so the child that holds the output pipe is the one killed.
-	fakeRTK(t, `if [ "$1" = rewrite ]; then exec sleep 5; fi`)
-	previous := rtkRewriteTimeout
-	rtkRewriteTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { rtkRewriteTimeout = previous })
+	// A grandchild that inherits the output pipe is the case WaitDelay exists
+	// for: killing rtk alone leaves the pipe open, and without the delay
+	// cmd.Output would block until that child exits.
+	for _, tc := range []struct {
+		name   string
+		script string
+	}{
+		{"deadline", `if [ "$1" = rewrite ]; then exec sleep 5; fi`},
+		{"grandchild holds the pipe", `if [ "$1" = rewrite ]; then sleep 5 & wait; fi`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeRTK(t, tc.script)
+			previous := rtkRewriteTimeout
+			rtkRewriteTimeout = 50 * time.Millisecond
+			t.Cleanup(func() { rtkRewriteTimeout = previous })
 
-	start := time.Now()
-	if got := rewriteShellCommand(context.Background(), t.TempDir(), "git status"); got != "git status" {
-		t.Fatalf("rewrite after timeout = %q, want the command unchanged", got)
+			start := time.Now()
+			if got := rewriteShellCommand(context.Background(), t.TempDir(), "git status"); got != "git status" {
+				t.Fatalf("rewrite after timeout = %q, want the command unchanged", got)
+			}
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("rewrite blocked for %v, want the deadline plus %v", elapsed, rtkRewriteWaitDelay)
+			}
+		})
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("rewrite blocked for %v, want the 50ms deadline", elapsed)
+}
+
+func TestRTKRewriteSkipsScripts(t *testing.T) {
+	// The stand-in rewrites anything it is given, so an unchanged result is the
+	// guard at work, not a passthrough exit code.
+	fakeRTK(t, `if [ "$1" = rewrite ]; then printf 'rtk %s' "$2"; exit 3; fi`)
+	scripts := map[string]string{
+		"multi-line":      "git status\ngit log -1",
+		"heredoc":         "cat <<EOF > notes.txt\nhello\nEOF",
+		"loop":            "for f in *.go; do\n  echo \"$f\"\ndone",
+		"carriage return": "git status\r\ngit log -1",
+	}
+	for name, script := range scripts {
+		t.Run(name, func(t *testing.T) {
+			if got := rewriteShellCommand(context.Background(), t.TempDir(), script); got != script {
+				t.Fatalf("script = %q, want it left untouched", got)
+			}
+		})
+	}
+}
+
+func TestRTKRewriteKeepsSingleLineChains(t *testing.T) {
+	fakeRTK(t, `if [ "$1" = rewrite ]; then printf 'rtk git status && rtk go test ./...'; exit 3; fi`)
+	command := "git status && go test ./..."
+	if got := rewriteShellCommand(context.Background(), t.TempDir(), command); got != "rtk git status && rtk go test ./..." {
+		t.Fatalf("chain = %q, want the rewrite applied", got)
 	}
 }
 

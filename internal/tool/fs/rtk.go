@@ -22,6 +22,13 @@ var rtkLookPath = exec.LookPath
 // variable so tests can shrink it.
 var rtkRewriteTimeout = 2 * time.Second
 
+// rtkRewriteWaitDelay bounds the wait for rtk's output pipe once the deadline
+// has killed it. Without it a grandchild that inherited the pipe keeps
+// cmd.Output blocked past the deadline — the same failure the shell paths
+// guard against with WaitDelay — which would wedge the Bash call it was meant
+// to speed up.
+const rtkRewriteWaitDelay = 200 * time.Millisecond
+
 // Exit codes with which `rtk rewrite` prints a rewrite: 0 when allow rules
 // cover every command in the chain, 3 when an ask rule matched or no rule did.
 // Every other code (1 no rewrite, 2 deny) means the command runs unchanged.
@@ -49,6 +56,13 @@ func rewriteShellCommand(ctx context.Context, cwd, command string) string {
 	if strings.TrimSpace(command) == "" || envSwitchOn("SAN_DISABLE_RTK") {
 		return command
 	}
+	// A script — multi-line, so usually a heredoc or a loop — stays raw. rtk
+	// rewrites a chain command by command, and a script that came back partly
+	// rewritten would run something other than what was approved; the tool
+	// cannot tell a complete rewrite from a truncated one.
+	if strings.ContainsAny(command, "\r\n") {
+		return command
+	}
 	binary, err := rtkLookPath("rtk")
 	if err != nil {
 		return command
@@ -62,6 +76,7 @@ func rewriteShellCommand(ctx context.Context, cwd, command string) string {
 	cmd := exec.CommandContext(rewriteCtx, binary, "rewrite", command)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
+	cmd.WaitDelay = rtkRewriteWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError

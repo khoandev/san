@@ -105,9 +105,10 @@ Use `san --help` for CLI options and `/help` for interactive commands.
 If [`rtk`](https://github.com/rtk-ai/rtk) is on your `PATH`, San runs every Bash
 command through it — `git status` becomes `rtk git status` — so the model reads
 compressed output. There is nothing to configure: rtk is detected per command,
-and a command it cannot handle runs unchanged. Permission rules, the approval
-preview and the transcript still show the command as written. Turn it off with
-`SAN_DISABLE_RTK=1`, or ask for one command's raw output with `rtk bypass <cmd>`.
+and a command it cannot handle — or a multi-line script — runs unchanged.
+Permission rules, the approval preview and the transcript still show the command
+as written. Turn it off with `SAN_DISABLE_RTK=1`, or ask for one command's raw
+output with `rtk bypass <cmd>`.
 
 ## Editing: one anchored patch, applied atomically
 
