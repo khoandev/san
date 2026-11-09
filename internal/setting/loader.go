@@ -14,6 +14,7 @@ import (
 
 	"github.com/genai-io/san/internal/atomicfile"
 	"github.com/genai-io/san/internal/confdir"
+	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/log"
 	"github.com/genai-io/san/internal/proc"
 )
@@ -125,6 +126,11 @@ func (l *Loader) Load() (*Data, error) {
 			log.Logger().Warn("failed to parse config file", zap.String("path", src.path), zap.Error(err))
 			continue
 		}
+		// Fold before merging, not after: each file's retired names collapse
+		// onto their rung here, so the later file's rung outranks the earlier
+		// one's the way every other setting does. Folding the merged map would
+		// instead let the user's retired name beat the project's new one.
+		foldModelRoles(&s)
 		if src.project && l.untrusted && !(src.local && UntrackedInRepo(src.path)) {
 			s = Data{Permissions: PermissionSettings{Deny: s.Permissions.Deny, Ask: s.Permissions.Ask}}
 		}
@@ -222,6 +228,7 @@ func (l *Loader) LoadFile(path string) (*Data, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
+	foldModelRoles(&s)
 	return &s, nil
 }
 
@@ -235,7 +242,9 @@ func (l *Loader) saveToFile(path string, settings *Data) error {
 	if err := atomicfile.ReadJSON(path, existing); err != nil {
 		return err
 	}
-	return atomicfile.WriteJSON(path, mergeSettings(existing, settings), 0o644)
+	merged := mergeSettings(existing, settings)
+	foldModelRoles(merged)
+	return atomicfile.WriteJSON(path, merged, 0o644)
 }
 
 var (
@@ -307,6 +316,9 @@ func updateSettingsFile(scope Scope, mutate func(*Data)) error {
 		return err
 	}
 	mutate(existing)
+	// Every write folds too, so a legacy key left in the file by an older san
+	// is migrated by any save instead of waiting for a hand edit.
+	foldModelRoles(existing)
 	if err := atomicfile.WriteJSON(path, existing, 0o644); err != nil {
 		return err
 	}
@@ -319,13 +331,15 @@ func updateSettingsFile(scope Scope, mutate func(*Data)) error {
 // ModelRoleName normalizes and validates a role name for modelRoles. Names are
 // one namespace, not two spellings of one namespace, so the returned name is
 // lowercase; a name that cannot be a role is an error the caller shows inline
-// rather than a silent binding that never resolves.
+// rather than a silent binding that never resolves. A retired per-agent name is
+// stored under the rung that answers its work, so a write never puts a dead key
+// back into the file.
 func ModelRoleName(name string) (string, error) {
 	canonical := strings.ToLower(strings.TrimSpace(name))
 	if !ValidModelRoleName(canonical) {
 		return "", fmt.Errorf("invalid role name %q: use lowercase letters, digits and hyphens, starting with a letter", name)
 	}
-	return canonical, nil
+	return core.CanonicalModelRole(canonical), nil
 }
 
 // ValidateModelRole checks one binding: the role name and its model reference.
@@ -385,13 +399,7 @@ func SetModelRole(name, ref string, scope Scope) error {
 		if d.ModelRoles == nil {
 			d.ModelRoles = make(map[string]string)
 		}
-		// Drop any hand-edited key that names the same role in another case, so
-		// the file keeps one entry per role.
-		for existing := range d.ModelRoles {
-			if strings.EqualFold(strings.TrimSpace(existing), key) {
-				delete(d.ModelRoles, existing)
-			}
-		}
+		clearRoleKey(d.ModelRoles, key)
 		d.ModelRoles[key] = ref
 	})
 }
@@ -407,16 +415,8 @@ func ClearModelRole(name string, scope Scope) error {
 		return err
 	}
 	return updateSettingsFile(scope, func(d *Data) {
-		for existing := range d.ModelRoles {
-			if strings.EqualFold(strings.TrimSpace(existing), key) {
-				delete(d.ModelRoles, existing)
-			}
-		}
-		for existing := range d.ModelRoleEfforts {
-			if strings.EqualFold(strings.TrimSpace(existing), key) {
-				delete(d.ModelRoleEfforts, existing)
-			}
-		}
+		clearRoleKey(d.ModelRoles, key)
+		clearRoleKey(d.ModelRoleEfforts, key)
 	})
 }
 
@@ -473,11 +473,7 @@ func SetModelRoleEffort(name, effort string, scope Scope) error {
 		if d.ModelRoleEfforts == nil {
 			d.ModelRoleEfforts = make(map[string]string)
 		}
-		for existing := range d.ModelRoleEfforts {
-			if strings.EqualFold(strings.TrimSpace(existing), key) {
-				delete(d.ModelRoleEfforts, existing)
-			}
-		}
+		clearRoleKey(d.ModelRoleEfforts, key)
 		d.ModelRoleEfforts[key] = canonical
 	})
 }
@@ -495,11 +491,7 @@ func ClearModelRoleEffort(name string, scope Scope) error {
 		return err
 	}
 	return updateSettingsFile(scope, func(d *Data) {
-		for existing := range d.ModelRoleEfforts {
-			if strings.EqualFold(strings.TrimSpace(existing), key) {
-				delete(d.ModelRoleEfforts, existing)
-			}
-		}
+		clearRoleKey(d.ModelRoleEfforts, key)
 	})
 }
 

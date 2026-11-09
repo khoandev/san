@@ -70,7 +70,7 @@ func RunAgent(opts AgentRunOptions) error {
 	// same permission gate (deny_tools / confirmation floor / allow_tools / mode)
 	// as TUI-spawned subagents.
 	executor := subagent.NewExecutor(provider, cwd, modelID, nil)
-	executor.SetDefaultModel(effectiveWorkerModel(workerSettings.SubagentModel, workerSettings.ModelRole(string(llm.RoleTask))))
+	executor.SetDefaultModel(effectiveWorkerModel(workerSettings.SubagentModel, workerSettings.ModelRole(string(llm.RoleStandard))))
 	executor.SetResolver(llm.NewProviderPool(llm.Default().Store()))
 	// An agent definition's "@role" model — and the effort bound to that role —
 	// resolves through the same bindings the TUI uses, so a headless run honours

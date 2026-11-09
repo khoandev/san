@@ -72,6 +72,47 @@ func NormalizePermissionMode(s string) PermissionMode {
 	return PermissionMode(s)
 }
 
+// AgentTier names the rung of work a definition is written for, so a
+// delegating model can choose by cost before it knows which model a repository
+// binds: fast for one small edit, standard for a bounded change, deep for work
+// worth the wait. It is a declaration about the work, not the model — the model
+// a definition runs on is its own role reference.
+type AgentTier string
+
+const (
+	// TierFast is cheap, quick work: one small edit or a lookup.
+	TierFast AgentTier = "fast"
+	// TierStandard is a bounded change with a definition of done.
+	TierStandard AgentTier = "standard"
+	// TierDeep is work where extra latency pays: planning and review.
+	TierDeep AgentTier = "deep"
+)
+
+// NormalizeAgentTier trims a tier label and folds the retired per-agent role
+// names onto their rung (smol, explore and librarian onto fast; task and
+// designer onto standard; plan, slow and reviewer onto deep), so a definition
+// written before the ladder keeps declaring the work it is for. An unrecognized
+// label is kept as written, so ValidateAgentTier can reject it instead of the
+// definition silently losing its tier.
+func NormalizeAgentTier(s string) AgentTier {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	return AgentTier(llm.LegacyRoleAlias(s))
+}
+
+// ValidAgentTier reports whether t is a rung a definition may declare. "" is
+// valid: the definition states no tier, and the catalog then says nothing about
+// one.
+func ValidAgentTier(t AgentTier) bool {
+	switch t {
+	case "", TierFast, TierStandard, TierDeep:
+		return true
+	}
+	return false
+}
+
 // ToolRule is a single allow/deny entry. Pattern follows the unified
 // "Tool(pattern)" glob syntax shared with settings.permissions — see
 // docs/concepts/permission-model.md.
@@ -310,6 +351,11 @@ type AgentConfig struct {
 	//   - "vendor/model" (e.g. "deepseek/deepseek-v4") to route to another
 	//     connected provider; the named vendor must be connected
 	Model string `yaml:"model" json:"model"`
+
+	// Tier is the rung of work this definition is for (see AgentTier). It is a
+	// declaration the agent catalog shows the delegating model; the runtime
+	// never reads it to pick a model.
+	Tier AgentTier `yaml:"tier,omitempty" json:"tier,omitempty"`
 
 	// PermissionMode is the default policy when no allow/deny rule matches.
 	PermissionMode PermissionMode `yaml:"mode" json:"mode"`

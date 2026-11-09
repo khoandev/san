@@ -149,9 +149,23 @@ type Data struct {
 	// Advisor turns the optional reviewer on and names the model it reviews
 	// with (JSON key "advisor"). Off unless enabled.
 	Advisor AdvisorSettings `json:"advisor,omitzero"`
+	// Agents tunes how delegations are routed (JSON key "agents").
+	Agents AgentsSettings `json:"agents,omitzero"`
 	// LastOperationMode is the user-wide mode restored when starting a new session.
 	LastOperationMode string `json:"lastOperationMode,omitempty"`
 }
+
+// AgentsSettings tunes how the Agent tool picks a worker.
+type AgentsSettings struct {
+	// AutoTier lets san choose the definition and depth for a delegation that
+	// named neither (JSON key "agents.autoTier"). Opt-out: nil/absent means on;
+	// false keeps every unnamed call on the plain default worker and spends no
+	// inference classifying it. Read via Settings.AutoTier.
+	AutoTier *bool `json:"autoTier,omitempty"`
+}
+
+// AutoTierOn reports whether automatic routing is enabled. Unset counts as on.
+func (a AgentsSettings) AutoTierOn() bool { return a.AutoTier == nil || *a.AutoTier }
 
 // AutoPilotSettings tunes the autopilot copilot. Every field is optional;
 // empty keeps the built-in defaults (session model + built-in system prompt, no
@@ -964,6 +978,7 @@ func (s *Data) Clone() *Data {
 	dst.AllowBypass = clonePtr(s.AllowBypass)
 	dst.AutoUpdate = clonePtr(s.AutoUpdate)
 	dst.AutoMemory = clonePtr(s.AutoMemory)
+	dst.Agents.AutoTier = clonePtr(s.Agents.AutoTier)
 	dst.ContextBar = clonePtr(s.ContextBar)
 	dst.GitBar = clonePtr(s.GitBar)
 	dst.SkillCommands = clonePtr(s.SkillCommands)

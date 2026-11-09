@@ -97,13 +97,13 @@ func TestPlanModeDelegatesOnlyReadOnlyAgents(t *testing.T) {
 		if strings.TrimSpace(name) == "" {
 			return true
 		}
-		return name == "explore" || name == "librarian"
+		return name == "explore" || name == "reviewer"
 	})
 
 	allowed := []map[string]any{
 		{"prompt": "map the plan store"},
 		{"name": "explore", "prompt": "map the plan store"},
-		{"name": "librarian", "prompt": "read the upstream changelog"},
+		{"name": "reviewer", "prompt": "review the draft"},
 	}
 	for _, args := range allowed {
 		if got := d.HasPermissionToUseTool("Agent", args, session); got.Behavior == perm.Reject {
@@ -113,7 +113,7 @@ func TestPlanModeDelegatesOnlyReadOnlyAgents(t *testing.T) {
 
 	refused := []map[string]any{
 		{"name": "task", "prompt": "implement it"},
-		{"name": "designer", "prompt": "restyle the panel"},
+		{"name": "quick", "prompt": "rename the field"},
 	}
 	for _, args := range refused {
 		got := d.HasPermissionToUseTool("Agent", args, session)

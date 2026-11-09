@@ -3,9 +3,12 @@ package llm
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/genai-io/sdk-go/pkg/ai"
+
+	"github.com/genai-io/san/internal/core"
 )
 
 // roleTestProvider is a provider identity for resolution tests: what matters is
@@ -45,8 +48,8 @@ func TestRoleResolverResolvesAssignedVendorReference(t *testing.T) {
 	if got.Provider != anthropic || got.ModelID != "claude-sonnet-4-6" {
 		t.Fatalf("resolved = (%v, %q), want the bound vendor model", got.Provider, got.ModelID)
 	}
-	if got.Inherited || got.Ref != "anthropic/claude-sonnet-4-6" || got.Role != RoleSlow {
-		t.Fatalf("target provenance = %+v, want an explicit slow assignment", got)
+	if got.Inherited || got.Ref != "anthropic/claude-sonnet-4-6" || got.Role != RoleDeep {
+		t.Fatalf("target provenance = %+v, want the deep rung the retired slow slot folded onto", got)
 	}
 }
 
@@ -68,8 +71,8 @@ func TestRoleResolverUnassignedRoleUsesSessionModel(t *testing.T) {
 	session := &roleTestProvider{name: "openai:api_key"}
 	resolver := NewRoleResolver(nil)
 
-	for _, name := range []string{"slow", "smol", "task", "review"} {
-		got := resolver.Resolve(context.Background(), Bindings(map[string]string{"designer": "claude-sonnet-4-6"}), name, session, "gpt-5")
+	for _, name := range []string{"deep", "fast", "standard", "review"} {
+		got := resolver.Resolve(context.Background(), Bindings(map[string]string{"custom-slot": "claude-sonnet-4-6"}), name, session, "gpt-5")
 		if got.Provider != session || got.ModelID != "gpt-5" {
 			t.Fatalf("%s = (%v, %q), want the session model", name, got.Provider, got.ModelID)
 		}
@@ -166,12 +169,9 @@ func TestRoleResolverNilProviderPoolStillResolvesBareReferences(t *testing.T) {
 }
 
 func TestRoleCatalogAndNames(t *testing.T) {
-	// Per-agent slots come first after the session's own model, because they are
-	// what a user tunes; the utility roles they fall back to come last.
-	want := []ModelRole{
-		RoleDefault, RolePlan, RoleTask, RoleExplore, RoleLibrarian,
-		RoleReviewer, RoleDesigner, RoleSmol, RoleSlow,
-	}
+	// The ladder is display order: the session's own model, then cheapest work
+	// to hardest. A retired per-agent name occupies no row of its own.
+	want := []ModelRole{RoleDefault, RoleFast, RoleStandard, RoleDeep}
 	got := RoleCatalog()
 	if len(got) != len(want) {
 		t.Fatalf("catalog has %d roles, want %d", len(got), len(want))
@@ -184,32 +184,25 @@ func TestRoleCatalogAndNames(t *testing.T) {
 			t.Fatalf("role %q is missing its description or consumer", spec.Name)
 		}
 	}
-	// Every fallback names a role in the catalog, and following them cannot
-	// loop: an unassigned role must always reach a terminal slot.
-	for _, spec := range got {
-		role, depth := spec, 0
-		for role.Fallback != "" {
-			next, ok := RoleSpecFor(string(role.Fallback))
-			if !ok {
-				t.Fatalf("role %q falls back to unknown role %q", role.Name, role.Fallback)
-			}
-			role = next
-			depth++
-			if depth > len(want) {
-				t.Fatalf("fallback chain from %q loops", spec.Name)
-			}
-		}
-	}
 	// The returned slice is a copy: a caller cannot rename a built-in role.
 	got[0].Name = "renamed"
 	if RoleCatalog()[0].Name != RoleDefault {
 		t.Fatal("RoleCatalog handed out its own storage")
 	}
-	if _, ok := RoleSpecFor("SLOW"); !ok {
+	if _, ok := RoleSpecFor("FAST"); !ok {
 		t.Fatal("RoleSpecFor should fold case")
 	}
 	if _, ok := RoleSpecFor("review"); ok {
 		t.Fatal("a custom role has no built-in spec")
+	}
+	if _, ok := RoleSpecFor("slow"); ok {
+		t.Fatal("a retired name is an alias, not a catalog row")
+	}
+	if got, want := LegacyRoleAlias("SLOW"), string(RoleDeep); got != want {
+		t.Fatalf("LegacyRoleAlias(SLOW) = %q, want %q", got, want)
+	}
+	if got := LegacyRoleAlias("review"); got != "review" {
+		t.Fatalf("LegacyRoleAlias(review) = %q, want the name unchanged", got)
 	}
 
 	for name, valid := range map[string]bool{
@@ -275,50 +268,119 @@ func TestRoleBindingsEffortTrimsAndFolds(t *testing.T) {
 	}
 }
 
-// TestRoleResolverUnassignedFollowsFallbackRole pins the compatibility promise
-// of the per-agent slots: a user who never binds explore, librarian or reviewer
-// keeps the model those agents used before their roles existed.
-func TestRoleResolverUnassignedFollowsFallbackRole(t *testing.T) {
+// TestLegacyRoleAliases pins the compatibility table: a settings file or an
+// agent definition written before the ladder existed still routes. The
+// companion mirror in internal/setting is pinned to the same literal.
+func TestLegacyRoleAliases(t *testing.T) {
+	want := map[string]string{
+		"smol":      "fast",
+		"explore":   "fast",
+		"librarian": "fast",
+		"task":      "standard",
+		"designer":  "standard",
+		"plan":      "deep",
+		"slow":      "deep",
+		"reviewer":  "deep",
+	}
+	for name, role := range want {
+		if got := LegacyRoleAlias(name); got != role {
+			t.Errorf("LegacyRoleAlias(%q) = %q, want %q", name, got, role)
+		}
+		if got := LegacyRoleAlias(" " + strings.ToUpper(name) + " "); got != role {
+			t.Errorf("LegacyRoleAlias(%q) = %q, want %q", strings.ToUpper(name), got, role)
+		}
+	}
+	// Every retired name is listed exactly once in inheritance order, and only
+	// for a rung that exists in the catalog.
+	retired := core.RetiredModelRoles()
+	if len(retired) != len(want) {
+		t.Fatalf("retired table has %d entries, want %d", len(retired), len(want))
+	}
+	seen := make(map[string]bool, len(retired))
+	for _, entry := range retired {
+		if seen[entry.Name] {
+			t.Fatalf("retired table lists %q twice", entry.Name)
+		}
+		seen[entry.Name] = true
+		if got := want[entry.Name]; got != entry.Role {
+			t.Fatalf("retired table maps %q to %q, want %q", entry.Name, entry.Role, got)
+		}
+		if _, ok := RoleSpecFor(entry.Role); !ok {
+			t.Fatalf("retired name %q folds onto a role outside the catalog", entry.Name)
+		}
+	}
+}
+
+// TestRoleResolverLegacyNamesRouteToTheirRung pins the promise of the collapse:
+// a binding written under a retired name still answers for the rung that
+// absorbed it, and the resolver reports that rung.
+func TestRoleResolverLegacyNamesRouteToTheirRung(t *testing.T) {
 	anthropic := &roleTestProvider{name: "anthropic:api_key"}
 	session := &roleTestProvider{name: "openai:api_key"}
 	resolver := NewRoleResolver(roleTestResolver{connected: Anthropic, provider: anthropic})
 	bindings := Bindings(map[string]string{
 		"smol": "anthropic/claude-haiku-4-5",
-		"slow": "anthropic/claude-sonnet-4-6",
+		"task": "anthropic/claude-sonnet-4-6",
+		"slow": "anthropic/claude-opus-4-7",
 	})
 
-	for role, want := range map[string]string{
-		"explore":   "claude-haiku-4-5",
-		"librarian": "claude-haiku-4-5",
-		"reviewer":  "claude-sonnet-4-6",
+	for name, want := range map[string]struct {
+		model string
+		role  ModelRole
+	}{
+		"smol":      {"claude-haiku-4-5", RoleFast},
+		"explore":   {"claude-haiku-4-5", RoleFast},
+		"librarian": {"claude-haiku-4-5", RoleFast},
+		"task":      {"claude-sonnet-4-6", RoleStandard},
+		"designer":  {"claude-sonnet-4-6", RoleStandard},
+		"plan":      {"claude-opus-4-7", RoleDeep},
+		"slow":      {"claude-opus-4-7", RoleDeep},
+		"reviewer":  {"claude-opus-4-7", RoleDeep},
 	} {
-		got := resolver.Resolve(context.Background(), bindings, role, session, "gpt-5")
-		if got.Provider != anthropic || got.ModelID != want {
-			t.Fatalf("%s = (%v, %q), want the fallback role's model %q", role, got.Provider, got.ModelID, want)
+		got := resolver.Resolve(context.Background(), bindings, name, session, "gpt-5")
+		if got.Provider != anthropic || got.ModelID != want.model {
+			t.Fatalf("%s = (%v, %q), want %q", name, got.Provider, got.ModelID, want.model)
 		}
 		if got.Inherited {
-			t.Fatalf("%s reported inheritance although its fallback role is bound", role)
+			t.Fatalf("%s reported inheritance although its rung is bound", name)
+		}
+		if got.Role != want.role {
+			t.Fatalf("%s reported role %q, want %q", name, got.Role, want.role)
 		}
 	}
 
-	// Binding the slot itself wins over the fallback role, with or without a
-	// vendor of its own.
-	for _, ref := range []string{"anthropic/claude-opus-4-7", "gpt-5-mini"} {
-		own := Bindings(map[string]string{"explore": ref, "smol": "anthropic/claude-haiku-4-5"})
-		got := resolver.Resolve(context.Background(), own, "explore", session, "gpt-5")
-		want := "claude-opus-4-7"
-		if ref == "gpt-5-mini" {
-			want = "gpt-5-mini" // a bare id stays on the session provider
-		}
-		if got.ModelID != want || got.Inherited {
-			t.Fatalf("assigned explore %q = %+v, want its own binding %q", ref, got, want)
-		}
+	// A named binding of its own wins over the retired sibling, and a canonical
+	// key wins over the retired name it inherited the work from.
+	own := Bindings(map[string]string{
+		"explore": "anthropic/claude-opus-4-7",
+		"smol":    "anthropic/claude-haiku-4-5",
+		"fast":    "anthropic/claude-sonnet-4-6",
+	})
+	if got := resolver.Resolve(context.Background(), own, "explore", session, "gpt-5"); got.ModelID != "claude-opus-4-7" {
+		t.Fatalf("named explore = %q, want its own binding", got.ModelID)
+	}
+	if got := resolver.Resolve(context.Background(), own, "fast", session, "gpt-5"); got.ModelID != "claude-sonnet-4-6" {
+		t.Fatalf("fast = %q, want the canonical binding over the retired smol", got.ModelID)
 	}
 
 	// Nothing bound anywhere: the session model answers, as it always did.
-	sessionOnly := resolver.Resolve(context.Background(), Bindings(nil), "explore", session, "gpt-5")
+	sessionOnly := resolver.Resolve(context.Background(), Bindings(nil), "reviewer", session, "gpt-5")
 	if sessionOnly.Provider != session || sessionOnly.ModelID != "gpt-5" || !sessionOnly.Inherited {
-		t.Fatalf("unbound fallback chain = %+v, want the session model", sessionOnly)
+		t.Fatalf("unbound legacy role = %+v, want the session model", sessionOnly)
+	}
+}
+
+// TestRoleResolverCanonicalAliasCycleStops keeps the depth bound meaningful on
+// the ladder names too: "@fast" -> "@standard" -> "@fast" resolves to the
+// session model instead of looping.
+func TestRoleResolverCanonicalAliasCycleStops(t *testing.T) {
+	session := &roleTestProvider{name: "openai:api_key"}
+	resolver := NewRoleResolver(nil)
+	cycle := Bindings(map[string]string{"fast": "@standard", "standard": "@fast"})
+
+	got := resolver.Resolve(context.Background(), cycle, "fast", session, "gpt-5")
+	if got.Provider != session || got.ModelID != "gpt-5" || !got.Inherited {
+		t.Fatalf("canonical cycle = %+v, want the session model", got)
 	}
 }
 
@@ -329,7 +391,7 @@ func TestRoleResolverCarriesEffort(t *testing.T) {
 	session := &roleTestProvider{name: "openai:api_key"}
 	resolver := NewRoleResolver(roleTestResolver{connected: Anthropic, provider: anthropic})
 
-	// Effort of a fallback role travels with the model it supplied.
+	// The effort of a retired name travels with the model it supplied.
 	fallback := BindingsOf(
 		map[string]string{"smol": "anthropic/claude-haiku-4-5"},
 		map[string]string{"smol": "low"},
@@ -338,7 +400,7 @@ func TestRoleResolverCarriesEffort(t *testing.T) {
 		t.Fatalf("explore via smol = %+v, want smol's model and effort", got)
 	}
 
-	// The named role's own effort wins over its fallback's.
+	// The named role's own effort wins over the retired sibling's.
 	both := BindingsOf(
 		map[string]string{"smol": "anthropic/claude-haiku-4-5"},
 		map[string]string{"smol": "low", "explore": "high"},

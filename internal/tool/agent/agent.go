@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/genai-io/san/internal/core"
@@ -43,6 +44,10 @@ func (t *AgentTool) SetExecutor(executor tool.AgentExecutor) {
 // PreparePermission prepares a permission request with agent metadata
 func (t *AgentTool) PreparePermission(ctx context.Context, params map[string]any, cwd string) (*perm.PermissionRequest, error) {
 	agentName := tool.GetString(params, "name")
+	tier, err := parseTier(tool.GetString(params, "tier"))
+	if err != nil {
+		return nil, err
+	}
 
 	prompt, err := tool.RequireString(params, "prompt")
 	if err != nil {
@@ -71,8 +76,10 @@ func (t *AgentTool) PreparePermission(ctx context.Context, params map[string]any
 
 	// Resolve the agent definition and carry the exact config into execution so a
 	// registry reload while approval is pending cannot change what was approved.
-	// A continuation is pinned to the original worker policy by the executor.
+	// A continuation is pinned to the original worker policy by the executor and
+	// is never routed again: the depth it was approved with is the depth it runs.
 	var config tool.AgentConfigInfo
+	var route tool.AgentRoute
 	if resolver, supported := t.executor.(interface {
 		ContinuationConfig(string) (tool.AgentConfigInfo, error)
 	}); resume.TaskID != "" && supported {
@@ -81,16 +88,25 @@ func (t *AgentTool) PreparePermission(ctx context.Context, params map[string]any
 			return nil, err
 		}
 	} else {
-		selected, resolvedConfig, ok := t.executor.ResolveAgentSelection(agentName)
-		if !ok {
-			return nil, fmt.Errorf("unknown or disabled agent: %s", agentName)
+		route = t.routeAgent(ctx, agentName, tier, prompt)
+		resolvedConfig := route.Raw
+		if route.Info.Name != "" {
+			config = route.Info
+		} else {
+			selected, pinned, ok := t.executor.ResolveAgentSelection(agentName)
+			if !ok {
+				return nil, fmt.Errorf("unknown or disabled agent: %s", agentName)
+			}
+			config, resolvedConfig = selected, pinned
 		}
-		config = selected
 		if resume.TaskID == "" {
 			params["_resolvedAgentConfig"] = resolvedConfig
 		} else {
 			config.PermissionMode = resume.PermissionMode
 		}
+		// Pin what execution reads, even when it is "no route": a call that was
+		// reviewed without routing must not be classified again at execution.
+		params["_route"] = tool.AgentRoute{Tier: route.Tier, Agent: route.Agent}
 	}
 
 	// Determine effective model for permission display.
@@ -131,6 +147,44 @@ func (t *AgentTool) PreparePermission(ctx context.Context, params map[string]any
 	}, nil
 }
 
+// routeAgent asks the host to route an Agent call. A host without a router, or
+// a call that already decided (a named definition or an explicit tier), keeps
+// the plain selection path: the returned route carries only the tier the caller
+// asked for, so an explicit depth still reaches execution.
+func (t *AgentTool) routeAgent(ctx context.Context, agentName, tier, prompt string) tool.AgentRoute {
+	route := tool.AgentRoute{Tier: tier}
+	// A named definition has decided already: it supplies its own charter, and
+	// only an unnamed call can have a definition substituted for it.
+	if strings.TrimSpace(agentName) != "" {
+		return route
+	}
+	router, ok := t.executor.(tool.AgentRouter)
+	if !ok {
+		return route
+	}
+	decision, routed := router.RouteAgent(ctx, tool.AgentRouteRequest{Name: agentName, Tier: tier, Prompt: prompt})
+	if !routed {
+		return route
+	}
+	// The caller's rung is a decision, not a suggestion: a host may map it to a
+	// definition, but it cannot quietly answer at a different depth.
+	if tier != "" {
+		decision.Tier = tier
+	}
+	return decision
+}
+
+// pinnedRoute returns the routing decision a call was approved with, and
+// whether approval pinned one at all.
+func pinnedRoute(params map[string]any) (tool.AgentRoute, bool) {
+	value, ok := params["_route"]
+	if !ok {
+		return tool.AgentRoute{}, false
+	}
+	route, _ := value.(tool.AgentRoute)
+	return route, true
+}
+
 // Reject removed selectors rather than silently widening an old read-only request.
 func validateAgentParams(params map[string]any) error {
 	if _, exists := params["resume_task_id"]; exists {
@@ -161,6 +215,10 @@ func (t *AgentTool) execute(ctx context.Context, params map[string]any, cwd stri
 	start := time.Now()
 
 	agentName := tool.GetString(params, "name")
+	tier, err := parseTier(tool.GetString(params, "tier"))
+	if err != nil {
+		return toolresult.NewErrorResult(t.Name(), err.Error())
+	}
 
 	prompt := tool.GetString(params, "prompt")
 	if prompt == "" {
@@ -190,11 +248,20 @@ func (t *AgentTool) execute(ctx context.Context, params map[string]any, cwd stri
 	}
 
 	resolvedAgentConfig, _ := params["_resolvedAgentConfig"]
+	// A call approved with a route runs that route verbatim. Bypass mode never
+	// prepares a permission request, so a call without a pin is routed here,
+	// once, by the same rule approval would have used.
+	route, pinned := pinnedRoute(params)
+	if !pinned {
+		route = t.routeAgent(ctx, agentName, tier, prompt)
+	}
 	// New work receives a self-contained brief.
 	req := tool.AgentExecRequest{
 		ParentToolCallID:    core.ToolCallIDFromContext(ctx),
 		Agent:               agentName,
 		ResolvedAgentConfig: resolvedAgentConfig,
+		Route:               route,
+		Tier:                route.Tier,
 		Prompt:              prompt,
 		Description:         description,
 		Background:          runBackground,

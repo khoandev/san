@@ -104,12 +104,12 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 	sessionStore := m.services.SessionStore
 
 	// The review is short, bounded, and repeated every turn, so it is the
-	// cheapest work the app does: it follows the smol role when the user bound
+	// cheapest work the app does: it follows the fast role when the user bound
 	// one. Resolved here, on the UI goroutine, rather than inside the fork — the
 	// closure runs on a background goroutine and must not read live env state.
 	// An unassigned role keeps the session model, and with it the prefix-cache
 	// parity the fork relies on.
-	reviewTarget := m.resolveRole(llm.RoleSmol)
+	reviewTarget := m.resolveRole(llm.RoleFast)
 	reviewProvider, reviewModel := reviewTarget.Provider, reviewTarget.ModelID
 	reviewEffort := m.resolveRoleEffort(reviewTarget)
 	if reviewProvider == nil {

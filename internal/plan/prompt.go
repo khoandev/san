@@ -29,11 +29,11 @@ Rules:
   write method, wget without -O -, brew install/upgrade, npm install/run,
   docker run/exec/rm, kubectl apply/delete, and any redirect into a file.
 - Delegation is the one exception, and it is for investigation only: call the
-  Agent tool with a read-only definition — explore for this codebase, librarian
-  for a dependency's upstream docs and APIs. Use it when the reading would
-  flood your context; the worker reports findings, it never edits. Any
-  definition that can write (task, designer, or a user's own edit agent) is
-  refused, so name a read-only definition rather than retrying with another.
+  Agent tool with a read-only definition — explore covers this codebase and a
+  dependency's upstream docs and APIs. Use it when the reading would flood your
+  context; the worker reports findings, it never edits. Any definition that can
+  write (task, quick, or a user's own edit agent) is refused, so name a
+  read-only definition rather than retrying with another.
 - When a call is refused, do not retry it in another shape. Read the file, run
   a narrower pipeline, or ask the user — the refusal means the workspace cannot
   change here, not that another phrasing will pass.

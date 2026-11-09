@@ -43,6 +43,7 @@ type Executor struct {
 	registry                   *Registry
 	resolver                   ProviderResolver // resolves "vendor/model" overrides; nil = same-provider only
 	roleResolver               RoleResolver     // resolves "@role" models; nil = the parent model answers
+	router                     Router           // classifies an unnamed call's brief; nil = no routing
 	cwd                        string
 	parentModelID              string // Parent conversation's model ID (used when inheriting)
 	defaultModel               string // Configured model for the default worker; empty inherits.
@@ -98,6 +99,11 @@ func NewExecutor(llmProvider llm.Provider, cwd string, parentModelID string, hoo
 func (e *Executor) ConfigureOwner(tasks *task.Manager, registry *Registry, permission func(bool, string) perm.PermissionFunc, toolContext func(context.Context, string) context.Context) {
 	e.tasks, e.registry, e.permission, e.toolContext = tasks, registry, permission, toolContext
 }
+
+// AgentRegistry is the set of definitions this executor resolves against. A host
+// that vouches for a routed definition name — the triage judge does — must use
+// the same set execution will use, not a second copy of it.
+func (e *Executor) AgentRegistry() *Registry { return e.registry }
 
 // SetPostTool observes owned handoffs before they are consumed by worker CWD handling.
 func (e *Executor) SetPostTool(post func(core.ToolResult, any)) { e.postTool = post }
@@ -551,6 +557,18 @@ func (e *Executor) resolveRequestAgentConfig(req tool.AgentExecRequest, parent P
 		config, ok := req.ResolvedAgentConfig.(*AgentConfig)
 		return config, ok && config != nil
 	}
+	if strings.TrimSpace(req.Agent) == "" && strings.TrimSpace(req.Route.Agent) != "" {
+		config, ok := e.resolveAgentConfigIn(req.Route.Agent, parent)
+		if !ok {
+			return nil, false
+		}
+		// Routing may substitute a charter but never the posture: a read-only
+		// session only ever runs a read-only definition.
+		if parent == PermissionExplore && NormalizePermissionMode(string(config.PermissionMode)) != PermissionExplore {
+			return e.resolveAgentConfigIn("", parent)
+		}
+		return config, true
+	}
 	return e.resolveAgentConfigIn(req.Agent, parent)
 }
 
@@ -608,7 +626,7 @@ func (e *Executor) prepareRunConfig(ctx context.Context, req tool.AgentExecReque
 		maxSteps = req.MaxSteps
 	}
 
-	provider, modelID, effort, err := e.resolveModel(ctx, req.Model, e.configuredModel(config, req.Agent))
+	provider, modelID, effort, err := e.resolveModel(ctx, req.Model, e.routeModelRef(config, req))
 	if err != nil {
 		return nil, err
 	}
@@ -935,6 +953,18 @@ func (e *Executor) fireSubagentStop(req tool.AgentExecRequest, agentHookID, agen
 	})
 }
 
+// routeModelRef is the model reference a run asks for after routing. A tier is
+// a per-call request for depth, so it moves the run onto that rung even when a
+// worker setting or a definition named a model for the general case; the
+// definition still supplies the charter, tools and mode it declared.
+func (e *Executor) routeModelRef(config *AgentConfig, req tool.AgentExecRequest) string {
+	ref := e.configuredModel(config, req.Agent)
+	if tier := strings.TrimSpace(req.Tier); tier != "" {
+		return "@" + tier
+	}
+	return ref
+}
+
 // resolveModel picks the provider, model id and reasoning effort for a run, by
 // priority:
 // 1. Explicit request override (req.Model)
@@ -1009,7 +1039,17 @@ func (e *Executor) resolveRole(role string) RoleAssignment {
 // configured spelling, including ""/"inherit", which the caller renders as the
 // parent model.
 func (e *Executor) effectiveModelName(config *AgentConfig, name string) string {
+	return e.effectiveModelNameAtTier(config, name, "")
+}
+
+// effectiveModelNameAtTier is effectiveModelName for a call that asked for a
+// depth: approval must show the model the tier sends the work to, not the
+// definition's own rung, or the user approves a model that never runs.
+func (e *Executor) effectiveModelNameAtTier(config *AgentConfig, name, tier string) string {
 	ref := e.configuredModel(config, name)
+	if strings.TrimSpace(tier) != "" {
+		ref = "@" + strings.TrimSpace(tier)
+	}
 	role, ok := llm.ParseRoleAlias(ref)
 	if !ok {
 		return ref

@@ -6,6 +6,33 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// TestNormalizeAgentTier pins the tier vocabulary: the three rungs, the retired
+// per-agent role names folded onto them, and an unknown label kept as written so
+// the parser can reject it rather than show a tier nobody can act on.
+func TestNormalizeAgentTier(t *testing.T) {
+	for in, want := range map[string]AgentTier{
+		"":          "",
+		"  Fast ":   TierFast,
+		"standard":  TierStandard,
+		"DEEP":      TierDeep,
+		"smol":      TierFast,
+		"librarian": TierFast,
+		"designer":  TierStandard,
+		"reviewer":  TierDeep,
+		"default":   "default",
+		"fastt":     "fastt",
+	} {
+		if got := NormalizeAgentTier(in); got != want {
+			t.Errorf("NormalizeAgentTier(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for tier, want := range map[AgentTier]bool{"": true, TierFast: true, TierStandard: true, TierDeep: true, "default": false, "fastt": false} {
+		if got := ValidAgentTier(tier); got != want {
+			t.Errorf("ValidAgentTier(%q) = %v, want %v", tier, got, want)
+		}
+	}
+}
+
 func TestToolListUnmarshalCanonicalForms(t *testing.T) {
 	var cfg struct {
 		AllowTools ToolList `yaml:"allow_tools"`

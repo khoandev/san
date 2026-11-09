@@ -30,59 +30,64 @@ func roleModel(roles map[string]string, subagentModel string) (*model, *switchPr
 
 // TestRoleModelPrecedence pins the one precedence rule every role consumer
 // follows: an explicit setting for that consumer wins, then the role's
-// modelRoles binding, then the session model. It covers the three roles the plan
-// routes work through — smol (judges, hooks, the self-learning review), slow
-// (the advisor), task (the default worker).
+// modelRoles binding, then the session model. It covers the three rungs this
+// work routes consumer calls through — fast (judges, hooks, the self-learning
+// review), deep (the advisor), standard (the default worker).
 func TestRoleModelPrecedence(t *testing.T) {
 	cases := []struct {
 		name   string
 		roles  map[string]string
 		worker string // subagentModel
-		smol   string // autoPilot.model
-		slow   string // advisor.model
+		judge  string // autoPilot.model
+		advice string // advisor.model
 		want   map[string]string
 	}{
 		{
 			name: "unassigned roles follow the session model",
-			want: map[string]string{"smol": "session-model", "slow": "session-model", "task": ""},
+			want: map[string]string{"fast": "session-model", "deep": "session-model", "standard": ""},
 		},
 		{
 			name:  "role bindings answer when no override is set",
-			roles: map[string]string{"smol": "haiku", "slow": "opus", "task": "worker"},
-			want:  map[string]string{"smol": "haiku", "slow": "opus", "task": "worker"},
+			roles: map[string]string{"fast": "haiku", "deep": "opus", "standard": "worker"},
+			want:  map[string]string{"fast": "haiku", "deep": "opus", "standard": "worker"},
 		},
 		{
 			name:   "an explicit setting wins over the role",
-			roles:  map[string]string{"smol": "haiku", "slow": "opus", "task": "worker"},
+			roles:  map[string]string{"fast": "haiku", "deep": "opus", "standard": "worker"},
 			worker: "explicit-worker",
-			smol:   "explicit-judge",
-			slow:   "explicit-review",
-			want:   map[string]string{"smol": "explicit-judge", "slow": "explicit-review", "task": "explicit-worker"},
+			judge:  "explicit-judge",
+			advice: "explicit-review",
+			want:   map[string]string{"fast": "explicit-judge", "deep": "explicit-review", "standard": "explicit-worker"},
 		},
 		{
-			name:   "an explicit inherit still wins over the task role",
-			roles:  map[string]string{"task": "worker"},
+			name:   "an explicit inherit still wins over the standard role",
+			roles:  map[string]string{"standard": "worker"},
 			worker: "inherit",
-			want:   map[string]string{"smol": "session-model", "slow": "session-model", "task": "inherit"},
+			want:   map[string]string{"fast": "session-model", "deep": "session-model", "standard": "inherit"},
 		},
 		{
 			name:  "an unconnected vendor falls back to the session model",
-			roles: map[string]string{"smol": "openai/gpt-5", "slow": "openai/gpt-5", "task": "openai/gpt-5"},
-			// task is a reference handed to the executor, which resolves it
+			roles: map[string]string{"fast": "openai/gpt-5", "deep": "openai/gpt-5", "standard": "openai/gpt-5"},
+			// standard is a reference handed to the executor, which resolves it
 			// later; the other two resolve now.
-			want: map[string]string{"smol": "session-model", "slow": "session-model", "task": "openai/gpt-5"},
+			want: map[string]string{"fast": "session-model", "deep": "session-model", "standard": "openai/gpt-5"},
 		},
 		{
-			name:  "an unconnected vendor override falls back too",
-			roles: map[string]string{"smol": "haiku", "slow": "opus"},
-			smol:  "openai/gpt-5",
-			slow:  "openai/gpt-5",
-			want:  map[string]string{"smol": "session-model", "slow": "session-model", "task": ""},
+			name:   "an unconnected vendor override falls back too",
+			roles:  map[string]string{"fast": "haiku", "deep": "opus"},
+			judge:  "openai/gpt-5",
+			advice: "openai/gpt-5",
+			want:   map[string]string{"fast": "session-model", "deep": "session-model", "standard": ""},
 		},
 		{
 			name:  "an at-alias chain resolves through the other role",
-			roles: map[string]string{"smol": "@slow", "slow": "opus"},
-			want:  map[string]string{"smol": "opus", "slow": "opus", "task": ""},
+			roles: map[string]string{"fast": "@deep", "deep": "opus"},
+			want:  map[string]string{"fast": "opus", "deep": "opus", "standard": ""},
+		},
+		{
+			name:  "a retired key still answers its rung",
+			roles: map[string]string{"smol": "haiku", "slow": "opus"},
+			want:  map[string]string{"fast": "haiku", "deep": "opus", "standard": ""},
 		},
 	}
 
@@ -90,24 +95,24 @@ func TestRoleModelPrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, provider := roleModel(tc.roles, tc.worker)
 
-			smolProvider, smolModel := m.resolveJudgeModel(tc.smol)
-			if smolModel != tc.want["smol"] {
-				t.Errorf("smol model = %q, want %q", smolModel, tc.want["smol"])
+			judgeProvider, judgeModel := m.resolveJudgeModel(tc.judge)
+			if judgeModel != tc.want["fast"] {
+				t.Errorf("judge model = %q, want %q", judgeModel, tc.want["fast"])
 			}
-			if smolProvider != provider {
-				t.Errorf("smol provider = %v, want the session provider", smolProvider)
-			}
-
-			slowProvider, slowModel := m.resolveAdvisorModel(setting.AdvisorSettings{Model: tc.slow})
-			if slowModel != tc.want["slow"] {
-				t.Errorf("slow model = %q, want %q", slowModel, tc.want["slow"])
-			}
-			if slowProvider != provider {
-				t.Errorf("slow provider = %v, want the session provider", slowProvider)
+			if judgeProvider != provider {
+				t.Errorf("judge provider = %v, want the session provider", judgeProvider)
 			}
 
-			if got := m.workerModel(); got != tc.want["task"] {
-				t.Errorf("task role = %q, want %q", got, tc.want["task"])
+			adviceProvider, adviceModel := m.resolveAdvisorModel(setting.AdvisorSettings{Model: tc.advice})
+			if adviceModel != tc.want["deep"] {
+				t.Errorf("advisor model = %q, want %q", adviceModel, tc.want["deep"])
+			}
+			if adviceProvider != provider {
+				t.Errorf("advisor provider = %v, want the session provider", adviceProvider)
+			}
+
+			if got := m.workerModel(); got != tc.want["standard"] {
+				t.Errorf("standard role = %q, want %q", got, tc.want["standard"])
 			}
 		})
 	}
@@ -242,7 +247,7 @@ func TestSubagentRoleResolver(t *testing.T) {
 func TestSubagentRoleResolverCarriesEffort(t *testing.T) {
 	m, provider := roleModelWithEfforts(
 		map[string]string{"explore": "haiku", "reviewer": "opus"},
-		map[string]string{"explore": "high", "reviewer": "ultra", "smol": "low"},
+		map[string]string{"explore": "high", "reviewer": "ultra", "budget": "low"},
 		[]string{"low", "medium", "high"}, "medium",
 	)
 	resolve := roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID())
@@ -255,9 +260,10 @@ func TestSubagentRoleResolverCarriesEffort(t *testing.T) {
 		t.Fatalf("reviewer = %+v, want the model default for a rung it lacks", got)
 	}
 	// An effort with no model of its own still reaches the run, on the session
-	// model the role inherits.
-	if got := resolve("smol"); !got.Assigned || got.ModelID != "session-model" || got.Effort != "low" {
-		t.Fatalf("smol = %+v, want the session model with the role's low", got)
+	// model the role inherits. "budget" is a custom role: a name the catalog
+	// does not describe also occupies no row, so nothing can supply its model.
+	if got := resolve("budget"); !got.Assigned || got.ModelID != "session-model" || got.Effort != "low" {
+		t.Fatalf("budget = %+v, want the session model with the role's low", got)
 	}
 	// Nothing bound anywhere: the executor keeps its own parent model.
 	if got := resolve("task"); got.Assigned || got.Effort != "" {

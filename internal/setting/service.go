@@ -96,6 +96,14 @@ func (s *Settings) AllowBypass() bool {
 	return s.data == nil || s.data.AllowBypass == nil || *s.data.AllowBypass
 }
 
+// AutoTier reports whether san may pick the definition and depth for a
+// delegation that named neither. Opt-out: on unless "agents.autoTier" is false.
+func (s *Settings) AutoTier() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data == nil || s.data.Agents.AutoTierOn()
+}
+
 // ShowSkillCommands reports whether skills are listed in the "/" command menu.
 // Opt-out: listed unless the user sets "skillCommands": false. Hiding is a menu
 // preference only — a skill still runs when its "/<skill>" is typed.

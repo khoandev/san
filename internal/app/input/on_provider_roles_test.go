@@ -112,8 +112,8 @@ func roleRowNamed(m *ProviderSelector, role string) providerListItem {
 // the catalog does not describe.
 func TestRoleRowsCoverCatalogAndCustomRoles(t *testing.T) {
 	rows := roleRows(ModelRoleInfo{
-		Roles:   map[string]string{"slow": "anthropic/claude-opus-4-1", "review-x": "opus"},
-		Project: map[string]string{"slow": "anthropic/claude-opus-4-1"},
+		Roles:   map[string]string{"deep": "anthropic/claude-opus-4-1", "review-x": "opus"},
+		Project: map[string]string{"deep": "anthropic/claude-opus-4-1"},
 		Session: "claude-sonnet-4-6",
 	})
 
@@ -137,14 +137,14 @@ func TestRoleRowsCoverCatalogAndCustomRoles(t *testing.T) {
 	for _, row := range rows {
 		byRole[row.Role] = row
 	}
-	if !byRole["slow"].ProjectOverride {
-		t.Error("slow should be marked as a project assignment")
+	if !byRole["deep"].ProjectOverride {
+		t.Error("deep should be marked as a project assignment")
 	}
-	if byRole["smol"].ProjectOverride {
-		t.Error("smol has no project assignment")
+	if byRole["fast"].ProjectOverride {
+		t.Error("fast has no project assignment")
 	}
-	if byRole["smol"].Ref != "" {
-		t.Errorf("unassigned smol ref = %q, want empty", byRole["smol"].Ref)
+	if byRole["fast"].Ref != "" {
+		t.Errorf("unassigned fast ref = %q, want empty", byRole["fast"].Ref)
 	}
 	if !byRole["default"].IsSession {
 		t.Error("the default row must be the session-model row")
@@ -169,15 +169,17 @@ func TestRolesTabShowsSessionModelWhenUnassigned(t *testing.T) {
 	render := func(role string) string {
 		return xansi.Strip(m.renderRoleRow(roleRowNamed(m, role), false))
 	}
-	if got := render("smol"); !strings.Contains(got, "(session model: claude-sonnet-4-6)") {
+	if got := render("fast"); !strings.Contains(got, "(session model: claude-sonnet-4-6)") {
 		t.Errorf("unassigned row = %q, want the session model named", got)
 	}
 
+	// A binding written under a retired name fills the rung it folded onto, so
+	// the fast row shows the model the work actually runs on.
 	assigned := rolesSelector(t, ModelRoleInfo{
 		Roles:   map[string]string{"smol": "anthropic/claude-haiku-4-5"},
 		Session: "claude-sonnet-4-6",
 	}, nil)
-	if got := xansi.Strip(assigned.renderRoleRow(roleRowNamed(assigned, "smol"), false)); !strings.Contains(got, "anthropic/claude-haiku-4-5") {
+	if got := xansi.Strip(assigned.renderRoleRow(roleRowNamed(assigned, "fast"), false)); !strings.Contains(got, "anthropic/claude-haiku-4-5") {
 		t.Errorf("assigned row = %q, want the binding shown", got)
 	}
 
@@ -186,7 +188,7 @@ func TestRolesTabShowsSessionModelWhenUnassigned(t *testing.T) {
 		Project: map[string]string{"slow": "anthropic/claude-opus-4-1"},
 		Session: "claude-sonnet-4-6",
 	}, nil)
-	if got := xansi.Strip(project.renderRoleRow(roleRowNamed(project, "slow"), false)); !strings.Contains(got, "project") {
+	if got := xansi.Strip(project.renderRoleRow(roleRowNamed(project, "deep"), false)); !strings.Contains(got, "project") {
 		t.Errorf("project-assigned row = %q, want the project marker", got)
 	}
 }
@@ -196,13 +198,13 @@ func TestRolesTabShowsSessionModelWhenUnassigned(t *testing.T) {
 func TestEnterOnRoleRowStartsAssignMode(t *testing.T) {
 	m := rolesSelector(t, ModelRoleInfo{Session: "claude-sonnet-4-6"}, nil)
 
-	m.selectedIdx = indexOfRole(m, "slow")
+	m.selectedIdx = indexOfRole(m, "deep")
 	cmd := m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
 		t.Fatal("Enter on a role row must not emit a message yet")
 	}
-	if m.assignRole != "slow" {
-		t.Fatalf("assignRole = %q, want slow", m.assignRole)
+	if m.assignRole != "deep" {
+		t.Fatalf("assignRole = %q, want deep", m.assignRole)
 	}
 	models := 0
 	for _, item := range m.visibleItems {
@@ -215,7 +217,7 @@ func TestEnterOnRoleRowStartsAssignMode(t *testing.T) {
 	}
 
 	view := xansi.Strip(m.Render())
-	if !strings.Contains(view, "Assign slow") {
+	if !strings.Contains(view, "Assign deep") {
 		t.Errorf("assign mode has no banner:\n%s", view)
 	}
 	if strings.Contains(view, "Providers") {
@@ -233,7 +235,7 @@ func TestAssigningModelWritesTheRole(t *testing.T) {
 	src := &fakeRoleSource{info: ModelRoleInfo{Session: "claude-sonnet-4-6"}}
 	m := rolesSelector(t, src.info, src)
 
-	m.selectedIdx = indexOfRole(m, "slow")
+	m.selectedIdx = indexOfRole(m, "deep")
 	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	m.selectedIdx = indexOfModel(m, "claude-opus-4-1")
@@ -245,8 +247,8 @@ func TestAssigningModelWritesTheRole(t *testing.T) {
 	if !ok {
 		t.Fatalf("message = %T, want providerRoleAssignedMsg", cmd())
 	}
-	if msg.Role != "slow" || msg.Ref != "anthropic/claude-opus-4-1" || msg.Effort != "" {
-		t.Fatalf("assigned %+v, want slow -> anthropic/claude-opus-4-1 at the model's default", msg)
+	if msg.Role != "deep" || msg.Ref != "anthropic/claude-opus-4-1" || msg.Effort != "" {
+		t.Fatalf("assigned %+v, want deep -> anthropic/claude-opus-4-1 at the model's default", msg)
 	}
 	if m.assignRole != "" || m.activeTab != providerTabRoles {
 		t.Fatalf("after the pick: assignRole=%q tab=%v, want Roles", m.assignRole, m.activeTab)
@@ -254,18 +256,18 @@ func TestAssigningModelWritesTheRole(t *testing.T) {
 
 	state := &ProviderState{Selector: *m}
 	UpdateProvider(OverlayDeps{}, state, msg)
-	if len(src.set) != 1 || src.set[0] != "slow=anthropic/claude-opus-4-1" {
-		t.Fatalf("writes = %v, want one write for slow", src.set)
+	if len(src.set) != 1 || src.set[0] != "deep=anthropic/claude-opus-4-1" {
+		t.Fatalf("writes = %v, want one write for deep", src.set)
 	}
 	// A model that does not reason has no effort step, and the empty effort is
 	// still written so a binding left on the previous model cannot survive.
-	if len(src.effort) != 1 || src.effort[0] != "slow=" {
-		t.Fatalf("effort writes = %v, want one clear for slow", src.effort)
+	if len(src.effort) != 1 || src.effort[0] != "deep=" {
+		t.Fatalf("effort writes = %v, want one clear for deep", src.effort)
 	}
 	if state.Selector.roleNotice != "" {
 		t.Fatalf("unexpected notice: %q", state.Selector.roleNotice)
 	}
-	if ref := roleRowNamed(&state.Selector, "slow").Role.Ref; ref != "anthropic/claude-opus-4-1" {
+	if ref := roleRowNamed(&state.Selector, "deep").Role.Ref; ref != "anthropic/claude-opus-4-1" {
 		t.Fatalf("row still reads %q after the write", ref)
 	}
 }
@@ -299,7 +301,7 @@ func registerLadderProvider(t *testing.T) llm.ProviderID {
 }
 
 // reasoningSelector builds a Roles-tab selector whose borrowed model list holds
-// one model that reasons, and walks it to the effort step for "slow".
+// one model that reasons, and walks it to the effort step for "deep".
 func reasoningSelector(t *testing.T, providerName llm.ProviderID, src *fakeRoleSource) *ProviderSelector {
 	t.Helper()
 	m := rolesSelector(t, src.info, src)
@@ -309,7 +311,7 @@ func reasoningSelector(t *testing.T, providerName llm.ProviderID, src *fakeRoleS
 	}}
 	m.connectedProviders = []providerProviderItem{{Provider: providerName, DisplayName: "Effort Test"}}
 
-	m.selectedIdx = indexOfRole(m, "slow")
+	m.selectedIdx = indexOfRole(m, "deep")
 	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.selectedIdx = indexOfModel(m, "thinker")
 	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -366,22 +368,22 @@ func TestAssigningReasoningModelAsksForEffort(t *testing.T) {
 		t.Fatal("picking an effort emitted nothing")
 	}
 	msg, ok := cmd().(providerRoleAssignedMsg)
-	if !ok || msg.Role != "slow" || msg.Ref != string(providerName)+"/thinker" || msg.Effort != "high" {
-		t.Fatalf("message = %#v, want slow bound to the thinking model at high", cmd())
+	if !ok || msg.Role != "deep" || msg.Ref != string(providerName)+"/thinker" || msg.Effort != "high" {
+		t.Fatalf("message = %#v, want deep bound to the thinking model at high", cmd())
 	}
 
 	state := &ProviderState{Selector: *m}
 	UpdateProvider(OverlayDeps{}, state, msg)
-	if len(src.set) != 1 || src.set[0] != "slow="+string(providerName)+"/thinker" {
+	if len(src.set) != 1 || src.set[0] != "deep="+string(providerName)+"/thinker" {
 		t.Fatalf("model writes = %v, want the chosen model", src.set)
 	}
-	if len(src.effort) != 1 || src.effort[0] != "slow=high" {
-		t.Fatalf("effort writes = %v, want slow=high", src.effort)
+	if len(src.effort) != 1 || src.effort[0] != "deep=high" {
+		t.Fatalf("effort writes = %v, want deep=high", src.effort)
 	}
 	if state.Selector.roleNotice != "" {
 		t.Fatalf("unexpected notice: %q", state.Selector.roleNotice)
 	}
-	row := roleRowNamed(&state.Selector, "slow")
+	row := roleRowNamed(&state.Selector, "deep")
 	if row.Role.Ref != string(providerName)+"/thinker" || row.Role.Effort != "high" {
 		t.Fatalf("row reads %+v after the write", row.Role)
 	}
@@ -426,15 +428,15 @@ func TestEscInEffortStepOnlyBacksOut(t *testing.T) {
 // qualifies, and shows the session's own effort on the default row.
 func TestRoleRowsShowBoundEffort(t *testing.T) {
 	m := rolesSelector(t, ModelRoleInfo{
-		Roles:         map[string]string{"slow": "anthropic/claude-opus-4-1"},
-		Efforts:       map[string]string{"slow": "high"},
+		Roles:         map[string]string{"deep": "anthropic/claude-opus-4-1"},
+		Efforts:       map[string]string{"deep": "high"},
 		Session:       "claude-sonnet-4-6",
 		SessionEffort: "low",
 	}, nil)
 
-	slow := xansi.Strip(m.renderRoleRow(roleRowNamed(m, "slow"), false))
-	if !strings.Contains(slow, "high") || !strings.Contains(slow, "anthropic/claude-opus-4-1") {
-		t.Errorf("slow row = %q, want its model and effort", slow)
+	deep := xansi.Strip(m.renderRoleRow(roleRowNamed(m, "deep"), false))
+	if !strings.Contains(deep, "high") || !strings.Contains(deep, "anthropic/claude-opus-4-1") {
+		t.Errorf("deep row = %q, want its model and effort", deep)
 	}
 	def := xansi.Strip(m.renderRoleRow(roleRowNamed(m, "default"), false))
 	if !strings.Contains(def, "low") {
@@ -448,9 +450,9 @@ func TestEscCancelsAssignWithoutWriting(t *testing.T) {
 	src := &fakeRoleSource{info: ModelRoleInfo{Session: "claude-sonnet-4-6"}}
 	m := rolesSelector(t, src.info, src)
 
-	m.selectedIdx = indexOfRole(m, "slow")
+	m.selectedIdx = indexOfRole(m, "deep")
 	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.assignRole != "slow" {
+	if m.assignRole != "deep" {
 		t.Fatal("assign mode did not start")
 	}
 	if cmd := m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEscape}); cmd != nil {
@@ -471,29 +473,29 @@ func TestEscCancelsAssignWithoutWriting(t *testing.T) {
 // session model, and the default row — which has no binding — is left alone.
 func TestCtrlDClearsRole(t *testing.T) {
 	src := &fakeRoleSource{info: ModelRoleInfo{
-		Roles:   map[string]string{"slow": "anthropic/claude-opus-4-1"},
-		Efforts: map[string]string{"slow": "high"},
+		Roles:   map[string]string{"deep": "anthropic/claude-opus-4-1"},
+		Efforts: map[string]string{"deep": "high"},
 		Session: "claude-sonnet-4-6",
 	}}
 	m := rolesSelector(t, src.info, src)
 
-	m.selectedIdx = indexOfRole(m, "slow")
+	m.selectedIdx = indexOfRole(m, "deep")
 	cmd := m.HandleKeypress(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 	if cmd == nil {
 		t.Fatal("Ctrl+D on a bound role emitted nothing")
 	}
 	msg, ok := cmd().(providerRoleClearedMsg)
-	if !ok || msg.Role != "slow" {
-		t.Fatalf("message = %#v, want clearing slow", cmd())
+	if !ok || msg.Role != "deep" {
+		t.Fatalf("message = %#v, want clearing deep", cmd())
 	}
 	state := &ProviderState{Selector: *m}
 	UpdateProvider(OverlayDeps{}, state, msg)
-	if len(src.clear) != 1 || src.clear[0] != "slow" {
-		t.Fatalf("clears = %v, want slow", src.clear)
+	if len(src.clear) != 1 || src.clear[0] != "deep" {
+		t.Fatalf("clears = %v, want deep", src.clear)
 	}
 	// One clear drops the model and the effort together: the next binding must
 	// not inherit the previous model's depth.
-	if row := roleRowNamed(&state.Selector, "slow"); row.Role.Ref != "" || row.Role.Effort != "" {
+	if row := roleRowNamed(&state.Selector, "deep"); row.Role.Ref != "" || row.Role.Effort != "" {
 		t.Fatalf("row still reads %+v after clearing", row.Role)
 	}
 
@@ -509,7 +511,7 @@ func TestCtrlDClearsRole(t *testing.T) {
 func TestRoleWriteFailureStaysOnScreen(t *testing.T) {
 	src := &fakeRoleSource{info: ModelRoleInfo{Session: "claude-sonnet-4-6"}, err: errors.New("disk is read-only")}
 	m := rolesSelector(t, src.info, src)
-	m.selectedIdx = indexOfRole(m, "slow")
+	m.selectedIdx = indexOfRole(m, "deep")
 	m.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.selectedIdx = indexOfModel(m, "claude-opus-4-1")
 
@@ -550,13 +552,13 @@ func TestDefaultRoleRowOpensModelsTab(t *testing.T) {
 func TestRolesTabSearchFilters(t *testing.T) {
 	m := rolesSelector(t, ModelRoleInfo{Session: "claude-sonnet-4-6"}, nil)
 
-	m.appendModelSearch("slo")
+	m.appendModelSearch("dee")
 	rows := 0
 	for _, item := range m.visibleItems {
 		if item.Kind == providerItemRole {
 			rows++
-			if item.Role.Role != "slow" {
-				t.Errorf("filter matched %q, want only slow", item.Role.Role)
+			if item.Role.Role != "deep" {
+				t.Errorf("filter matched %q, want only deep", item.Role.Role)
 			}
 		}
 	}
@@ -630,19 +632,22 @@ func TestRoleSourceWritesUserScopeAndReloads(t *testing.T) {
 	if info.Session != "claude-sonnet-4-6" {
 		t.Errorf("session model = %q, want the connection's model", info.Session)
 	}
-	if info.Roles["plan"] != "anthropic/claude-opus-4-1" || info.Project["plan"] != "anthropic/claude-opus-4-1" {
+	// The project file binds plan, which loads as the deep rung.
+	if info.Roles["deep"] != "anthropic/claude-opus-4-1" || info.Project["deep"] != "anthropic/claude-opus-4-1" {
 		t.Fatalf("project role not read: roles=%v project=%v", info.Roles, info.Project)
 	}
-	if info.ProjectEfforts["plan"] != "high" {
-		t.Fatalf("project efforts = %v, want plan=high", info.ProjectEfforts)
+	if info.ProjectEfforts["deep"] != "high" {
+		t.Fatalf("project efforts = %v, want the deep rung at high", info.ProjectEfforts)
 	}
 
-	if err := src.Set("slow", "anthropic/claude-opus-4-1"); err != nil {
+	// The assignment is written at user scope under its rung, so the project's
+	// deep binding does not hide it.
+	if err := src.Set("fast", "anthropic/claude-haiku-4-5"); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	userFile := filepath.Join(confdir.Dir(home), "settings.json")
-	if roles := readRoles(userFile); roles["slow"] != "anthropic/claude-opus-4-1" {
-		t.Fatalf("user settings = %v, want the slow assignment", roles)
+	if roles := readRoles(userFile); roles["fast"] != "anthropic/claude-haiku-4-5" {
+		t.Fatalf("user settings = %v, want the fast assignment", roles)
 	}
 	if roles := readRoles(filepath.Join(confdir.Dir(project), "settings.json")); len(roles) != 1 || roles["plan"] == "" {
 		t.Fatalf("the project file was rewritten: %v", roles)
@@ -650,42 +655,45 @@ func TestRoleSourceWritesUserScopeAndReloads(t *testing.T) {
 	if reconfigured != 1 {
 		t.Errorf("worker rebuilt %d times after a write, want 1", reconfigured)
 	}
-	if got := src.Info().Roles["slow"]; got != "anthropic/claude-opus-4-1" {
-		t.Errorf("reloaded slow = %q, want the assignment", got)
+	if got := src.Info().Roles["fast"]; got != "anthropic/claude-haiku-4-5" {
+		t.Errorf("reloaded fast = %q, want the assignment", got)
 	}
 
 	// The effort is a second write at the same scope, and the empty effort is
 	// how "model default" is stored.
-	if err := src.SetEffort("slow", "high"); err != nil {
+	if err := src.SetEffort("fast", "high"); err != nil {
 		t.Fatalf("SetEffort: %v", err)
 	}
-	if efforts := readEfforts(userFile); efforts["slow"] != "high" {
-		t.Fatalf("user efforts = %v, want slow=high", efforts)
+	if efforts := readEfforts(userFile); efforts["fast"] != "high" {
+		t.Fatalf("user efforts = %v, want fast=high", efforts)
 	}
-	if got := src.Info().Efforts["slow"]; got != "high" {
-		t.Errorf("reloaded slow effort = %q, want high", got)
+	if got := src.Info().Efforts["fast"]; got != "high" {
+		t.Errorf("reloaded fast effort = %q, want high", got)
 	}
 	if reconfigured != 2 {
 		t.Errorf("worker rebuilt %d times after the effort write, want 2", reconfigured)
 	}
-	if err := src.SetEffort("slow", ""); err != nil {
+	if err := src.SetEffort("fast", ""); err != nil {
 		t.Fatalf("SetEffort(clear): %v", err)
 	}
-	if efforts := readEfforts(userFile); efforts["slow"] != "" {
-		t.Fatalf("user efforts still bind slow: %v", efforts)
+	if efforts := readEfforts(userFile); efforts["fast"] != "" {
+		t.Fatalf("user efforts still bind fast: %v", efforts)
 	}
-	if got := src.Info().Efforts["slow"]; got != "" {
-		t.Errorf("slow effort still reads %q after clearing", got)
+	if got := src.Info().Efforts["fast"]; got != "" {
+		t.Errorf("fast effort still reads %q after clearing", got)
 	}
 
-	if err := src.Clear("slow"); err != nil {
+	if err := src.Clear("fast"); err != nil {
 		t.Fatalf("Clear: %v", err)
 	}
-	if roles := readRoles(userFile); roles["slow"] != "" {
-		t.Fatalf("user settings still bind slow: %v", roles)
+	if roles := readRoles(userFile); roles["fast"] != "" {
+		t.Fatalf("user settings still bind fast: %v", roles)
 	}
-	if got := src.Info().Roles["slow"]; got != "" {
-		t.Errorf("slow still resolves to %q after clearing", got)
+	if got := src.Info().Roles["fast"]; got != "" {
+		t.Errorf("fast still resolves to %q after clearing", got)
+	}
+	if roles := readRoles(userFile); len(roles) != 0 {
+		t.Fatalf("a retired key survived the writes: %v", roles)
 	}
 	if reconfigured != 4 {
 		t.Errorf("worker rebuilt %d times, want 4", reconfigured)

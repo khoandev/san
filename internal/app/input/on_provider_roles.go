@@ -101,9 +101,12 @@ func roleRows(info ModelRoleInfo) []providerRoleItem {
 	}
 	var custom []string
 	for role := range seen {
-		if role != "" && !known[role] {
-			custom = append(custom, role)
+		// A retired per-agent name folds onto a rung, so it occupies no row of
+		// its own: its binding is shown on the rung it now answers for.
+		if role == "" || known[role] || llm.LegacyRoleAlias(role) != role {
+			continue
 		}
+		custom = append(custom, role)
 	}
 	sort.Strings(custom)
 	for _, role := range custom {
@@ -133,16 +136,11 @@ func roleRow(info ModelRoleInfo, role, description, consumer string) providerRol
 	return row
 }
 
-// roleRef reads a binding by role name, folding case: modelRoles and
-// modelRoleEfforts are hand-edited, so a key written as "Slow" still fills the
-// slow role.
+// roleRef reads a binding by role name through the resolver's own lookup rule,
+// so a rung row shows the binding its work actually runs on — including one
+// written under a retired name.
 func roleRef(roles map[string]string, role string) string {
-	for name, ref := range roles {
-		if strings.EqualFold(strings.TrimSpace(name), role) {
-			return strings.TrimSpace(ref)
-		}
-	}
-	return ""
+	return llm.RoleBinding(roles, role)
 }
 
 // refreshRoleInfo re-reads the injected snapshot. It is called when a role

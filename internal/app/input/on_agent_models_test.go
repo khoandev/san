@@ -43,7 +43,9 @@ func fakeAgentModelsWithEfforts(assigned, efforts map[string]string, session str
 			}
 			return target.ModelID, target.Effort, target.Inherited
 		},
-		Worker: func() string { return assigned["task"] },
+		// The default worker follows the standard rung, the role the retired
+		// task name folds onto.
+		Worker: func() string { return assigned["standard"] },
 	}
 }
 
@@ -87,8 +89,8 @@ func TestAgentListShowsBundledDefinitions(t *testing.T) {
 	}
 
 	got := len(selector.list.filtered)
-	if got != 6 {
-		t.Fatalf("built-in rows = %d, want 1 preview + 5 bundled", got)
+	if got != 5 {
+		t.Fatalf("built-in rows = %d, want 1 preview + 4 bundled", got)
 	}
 	if first := selector.list.filtered[0]; !first.BuiltinPreview || first.Name != "Agent" {
 		t.Fatalf("first row = %+v, want the default worker's preview", first)
@@ -104,7 +106,7 @@ func TestAgentListShowsBundledDefinitions(t *testing.T) {
 		}
 		names = append(names, item.Name)
 	}
-	want := []string{"designer", "explore", "librarian", "reviewer", "task"}
+	want := []string{"explore", "quick", "reviewer", "task"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("bundled rows = %v, want %v (stable order, no duplicates)", names, want)
 	}
@@ -113,8 +115,8 @@ func TestAgentListShowsBundledDefinitions(t *testing.T) {
 			t.Errorf("%s has no model reference", name)
 		}
 	}
-	if selector.list.tabCount(int(agentTabBuiltin)) != 6 {
-		t.Fatalf("built-in tab count = %d, want 6", selector.list.tabCount(int(agentTabBuiltin)))
+	if selector.list.tabCount(int(agentTabBuiltin)) != 5 {
+		t.Fatalf("built-in tab count = %d, want 5", selector.list.tabCount(int(agentTabBuiltin)))
 	}
 
 	// Where the definition came from is stated on the row: a bundled agent has
@@ -160,7 +162,8 @@ func TestAgentListShowsBundledDefinitions(t *testing.T) {
 // assigned role names its model, an unassigned one says the session model
 // answers, and the detail line names which one that is.
 func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
-	src := fakeAgentModels(map[string]string{"reviewer": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6")
+	// The reviewer runs on the deep rung, so binding deep moves it.
+	src := fakeAgentModels(map[string]string{"deep": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6")
 	selector, _ := bundledAgentSelector(t, src, 120)
 	// The role column is what this test reads, so it must fit the panel at the
 	// widths /agents is actually used at.
@@ -177,24 +180,24 @@ func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
 	if !ok {
 		t.Fatal("reviewer not listed")
 	}
-	if reviewer.Model != "@reviewer" {
-		t.Errorf("reviewer model reference = %q, want the definition's own @reviewer", reviewer.Model)
+	if reviewer.Model != "@deep" {
+		t.Errorf("reviewer model reference = %q, want the definition's own @deep", reviewer.Model)
 	}
 	if reviewer.EffectiveModel != "claude-opus-4-1" || reviewer.InheritedModel {
 		t.Fatalf("reviewer resolves to %q inherited=%v, want claude-opus-4-1", reviewer.EffectiveModel, reviewer.InheritedModel)
 	}
 
 	view := xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@reviewer → claude-opus-4-1") {
+	if !strings.Contains(view, "@deep → claude-opus-4-1") {
 		t.Errorf("assigned role row does not name its model:\n%s", view)
 	}
-	if strings.Contains(view, "@reviewer → session model") {
+	if strings.Contains(view, "@deep → session model") {
 		t.Errorf("assigned role claims the session model:\n%s", view)
 	}
 
-	// explore's own "@explore" is unassigned in this map, and so is the smol it
-	// falls back to: the session model answers, and the row says so instead of
-	// showing a model that will not run.
+	// explore's own "@fast" is unassigned in this map: the session model
+	// answers, and the row says so instead of showing a model that will not
+	// run.
 	explore, _ := agentItemNamed(selector, "explore")
 	if !explore.InheritedModel || explore.EffectiveModel != "claude-sonnet-4-6" {
 		t.Fatalf("unassigned role = %q inherited=%v, want the session model", explore.EffectiveModel, explore.InheritedModel)
@@ -206,7 +209,7 @@ func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
 		}
 	}
 	view = xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@explore → session model") {
+	if !strings.Contains(view, "@fast → session model") {
 		t.Errorf("unassigned role row does not say session model:\n%s", view)
 	}
 	if !strings.Contains(view, "session model: claude-sonnet-4-6") {
@@ -219,8 +222,8 @@ func TestAgentRowsShowTheModelThatWillRun(t *testing.T) {
 // user sees what the run will send rather than only where it routes.
 func TestAgentRowNamesTheRoleEffort(t *testing.T) {
 	src := fakeAgentModelsWithEfforts(
-		map[string]string{"reviewer": "anthropic/claude-opus-4-1"},
-		map[string]string{"reviewer": "high"},
+		map[string]string{"deep": "anthropic/claude-opus-4-1"},
+		map[string]string{"deep": "high"},
 		"claude-sonnet-4-6",
 	)
 	selector, _ := bundledAgentSelector(t, src, 120)
@@ -233,13 +236,13 @@ func TestAgentRowNamesTheRoleEffort(t *testing.T) {
 		t.Fatalf("reviewer effort = %q, want the role's high", reviewer.EffectiveEffort)
 	}
 	view := xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@reviewer → claude-opus-4-1 (high)") {
+	if !strings.Contains(view, "@deep → claude-opus-4-1 (high)") {
 		t.Errorf("role row does not name its effort:\n%s", view)
 	}
 
 	// A role with no effort bound shows the model alone: "(default)" would be
 	// a claim the list cannot make, since the rung belongs to the model.
-	plain, _ := bundledAgentSelector(t, fakeAgentModels(map[string]string{"reviewer": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6"), 120)
+	plain, _ := bundledAgentSelector(t, fakeAgentModels(map[string]string{"deep": "anthropic/claude-opus-4-1"}, "claude-sonnet-4-6"), 120)
 	view = xansi.Strip(plain.Render())
 	if strings.Contains(view, "claude-opus-4-1 (") {
 		t.Errorf("unbound effort rendered a suffix:\n%s", view)
@@ -247,9 +250,10 @@ func TestAgentRowNamesTheRoleEffort(t *testing.T) {
 }
 
 // TestAgentWorkerRowNamesTheTaskModel covers the default worker: it follows the
-// task role, so the preview row names whatever that role resolves to.
+// standard rung (the retired task name folds onto it), so the preview row names
+// whatever that binding resolves to.
 func TestAgentWorkerRowNamesTheTaskModel(t *testing.T) {
-	src := fakeAgentModels(map[string]string{"task": "openai/gpt-5"}, "claude-sonnet-4-6")
+	src := fakeAgentModels(map[string]string{"standard": "openai/gpt-5"}, "claude-sonnet-4-6")
 	selector, _ := bundledAgentSelector(t, src, 120)
 
 	worker := selector.list.filtered[0]
@@ -257,7 +261,7 @@ func TestAgentWorkerRowNamesTheTaskModel(t *testing.T) {
 		t.Fatalf("first row = %+v, want the default worker", worker)
 	}
 	if worker.EffectiveModel != "gpt-5" || worker.InheritedModel {
-		t.Fatalf("worker model = %q inherited=%v, want gpt-5 from the task role", worker.EffectiveModel, worker.InheritedModel)
+		t.Fatalf("worker model = %q inherited=%v, want gpt-5 from the standard rung", worker.EffectiveModel, worker.InheritedModel)
 	}
 	view := xansi.Strip(selector.Render())
 	if !strings.Contains(view, "read-only sessions run as explore") || !strings.Contains(view, "gpt-5") {
@@ -282,10 +286,10 @@ func TestAgentRowsWithoutResolverKeepTheReference(t *testing.T) {
 		t.Fatalf("reviewer model = %q, want nothing resolved", reviewer.EffectiveModel)
 	}
 	view := xansi.Strip(selector.Render())
-	if !strings.Contains(view, "@reviewer") {
+	if !strings.Contains(view, "@deep") {
 		t.Errorf("row lost its configured reference:\n%s", view)
 	}
-	if strings.Contains(view, "@reviewer →") || strings.Contains(view, "session model:") {
+	if strings.Contains(view, "@deep →") || strings.Contains(view, "session model:") {
 		t.Errorf("row claims a resolution it does not have:\n%s", view)
 	}
 }

@@ -47,6 +47,37 @@ func GetMessagesGetter(ctx context.Context) MessagesGetter {
 	return nil
 }
 
+// AgentRouteRequest asks the host what an Agent call will run as before it
+// runs. Name and Tier are the call's own signals: a call that names a
+// definition or asks for a depth has already decided, so only a call that
+// leaves both open is classified. Resume marks a continuation, which keeps the
+// policy it was approved under instead of being routed again.
+type AgentRouteRequest struct {
+	Name   string
+	Tier   string
+	Prompt string
+	Resume bool
+}
+
+// AgentRoute is the routing decision pinned onto a call so approval and
+// execution agree: the rung the brief is for, the definition the call runs as,
+// and the exact configuration execution must use. A decision made at approval
+// is pinned, so a registry reload, a settings change or a mode change while the
+// approval is pending cannot move what the user approved.
+type AgentRoute struct {
+	// Tier is the depth this call asked for: fast, standard or deep. Empty
+	// keeps the definition's own rung.
+	Tier string
+	// Agent is the definition the call runs as. Empty keeps the default
+	// worker, which is what an unnamed call runs anyway.
+	Agent string
+	// Info is the approval-time projection: the name, model and posture the
+	// user is shown. It is never consulted during execution.
+	Info AgentConfigInfo
+	// Raw is the exact configuration to pin for execution.
+	Raw any
+}
+
 // AgentExecutor is the interface for executing agents.
 // This allows the Agent tool to be decoupled from the agent package.
 type AgentExecutor interface {
@@ -57,6 +88,17 @@ type AgentExecutor interface {
 	AgentConfig(name string) (AgentConfigInfo, bool)
 	ResolveAgentSelection(name string) (AgentConfigInfo, any, bool)
 	ParentModelID() string
+}
+
+// AgentRouter is the optional capability of answering "what will this call run
+// as" for a call that names neither a definition nor a tier. It is separate
+// from AgentExecutor so a host without a classifier keeps the old behavior: no
+// router, no routing, and every call runs exactly what it asked for.
+type AgentRouter interface {
+	// RouteAgent returns the pinned decision for req. ok reports that the host
+	// made one at all; false means the call keeps the definition it named (or
+	// the default worker) and routes nowhere.
+	RouteAgent(ctx context.Context, req AgentRouteRequest) (AgentRoute, bool)
 }
 
 // ActivityFunc is called when the agent reports activity.
@@ -75,12 +117,18 @@ type AgentExecRequest struct {
 	Workflow            *WorkflowOrigin                // internal workflow attribution; never model-facing
 	Agent               string
 	ResolvedAgentConfig any // exact approval-time configuration; never model-facing
-	Prompt              string
-	Description         string
-	Background          bool
-	Model               string
-	MaxSteps            int
-	Mode                string
+	// Route is the routing decision this call was approved with. Execution
+	// uses it verbatim; only a call approved without one is routed again.
+	Route AgentRoute
+	// Tier is the depth the call asked for, mirrored from Route.Tier so a run
+	// can read it without knowing how approval pinned it.
+	Tier        string
+	Prompt      string
+	Description string
+	Background  bool
+	Model       string
+	MaxSteps    int
+	Mode        string
 	// TaskID is the stable task address for foreground and background runs.
 	// The executor registers its inbox only while an execution is active.
 	TaskID     string

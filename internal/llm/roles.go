@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"strings"
+
+	"github.com/genai-io/san/internal/core"
 )
 
 // Model roles route a kind of work to a model without naming that model where
@@ -14,14 +16,13 @@ import (
 // setting, while agent definitions keep referring to their role and stay
 // unchanged.
 //
-// Resolution has one rule and one escape hatch:
+// Resolution has one rule and no fallback chain:
 //
-//   - An unassigned role follows its catalog fallback role (explore and
-//     librarian follow smol, reviewer follows slow), and falls through to the
-//     session's own model when that fallback is unassigned too. A reference
-//     that cannot be resolved — an unknown role, a vendor that is not
-//     connected — uses the session model. Work never fails because
-//     configuration is incomplete or stale.
+//   - A role is one rung of a three-step ladder — fast, standard, deep — plus
+//     default, which is the session's own model. An unassigned role uses the
+//     session model. A reference that cannot be resolved — an unknown role, a
+//     vendor that is not connected — uses the session model too. Work never
+//     fails because configuration is incomplete or stale.
 //   - An assigned reference wins over the session model. A bare model id stays
 //     on the session's provider; "vendor/model" routes to that connected vendor.
 //   - A role's effort travels with whichever model answered it: the effort
@@ -32,6 +33,12 @@ import (
 // The session model answers an unassigned role on purpose rather than guessing
 // from a catalog: which of several authenticated models is "cheap" depends on
 // the plan behind it, and a wrong guess spends the user's money silently.
+//
+// Retired per-agent role names still route: LegacyRoleAlias maps smol, explore
+// and librarian onto fast, task and designer onto standard, and plan, slow and
+// reviewer onto deep, so a settings file or an agent definition written before
+// the ladder existed keeps resolving. A name that is not in the catalog and not
+// retired stays a custom role: an agent definition may still declare its own.
 type ModelRole string
 
 const (
@@ -41,38 +48,62 @@ const (
 	// is honoured only when it is resolved explicitly.
 	RoleDefault ModelRole = "default"
 
-	// RoleSmol is fast, inexpensive utility work: the permission judge, the
-	// autopilot judge, hook completions and the self-learning review.
+	// RoleFast is fast, inexpensive work: work triage, the permission and
+	// autopilot judges, hook completions, the self-learning review, and the
+	// quick and explore agents. It is the rung a simple task lands on.
+	RoleFast ModelRole = "fast"
+
+	// RoleStandard is general subagent work with a clear definition of done:
+	// the task agent and standard-tier delegation.
+	RoleStandard ModelRole = "standard"
+
+	// RoleDeep is thorough work where extra latency pays: Plan Mode's
+	// architect, the advisor's review of a completed turn, the reviewer agent
+	// and deep-tier delegation. Unassigned, the session's own model answers,
+	// which is the strongest model the user already chose.
+	RoleDeep ModelRole = "deep"
+
+	// RoleSmol is a retired name for RoleFast.
+	// Deprecated: use RoleFast; LegacyRoleAlias still routes it.
 	RoleSmol ModelRole = "smol"
 
-	// RoleSlow is thorough review where extra latency is acceptable: the
-	// advisor's review of a completed turn.
+	// RoleSlow is a retired name for RoleDeep.
+	// Deprecated: use RoleDeep; LegacyRoleAlias still routes it.
 	RoleSlow ModelRole = "slow"
 
-	// RoleTask is general subagent work with no specialist definition.
+	// RoleTask is a retired name for RoleStandard.
+	// Deprecated: use RoleStandard; LegacyRoleAlias still routes it.
 	RoleTask ModelRole = "task"
 
-	// RolePlan is Plan Mode's architect: the model that investigates and
-	// proposes a plan while the session is read-only.
+	// RolePlan is a retired name for RoleDeep.
+	// Deprecated: use RoleDeep; LegacyRoleAlias still routes it.
 	RolePlan ModelRole = "plan"
 
-	// RoleExplore is read-only codebase investigation, used by the bundled
-	// explore agent. Unassigned, it follows the smol role, which is the model
-	// that answered investigation before this slot existed.
+	// RoleExplore is a retired name for RoleFast.
+	// Deprecated: use RoleFast; LegacyRoleAlias still routes it.
 	RoleExplore ModelRole = "explore"
 
-	// RoleLibrarian is upstream documentation and API research, used by the
-	// bundled librarian agent. Unassigned, it follows the smol role.
+	// RoleLibrarian is a retired name for RoleFast.
+	// Deprecated: use RoleFast; LegacyRoleAlias still routes it.
 	RoleLibrarian ModelRole = "librarian"
 
-	// RoleReviewer is independent review of a diff or a design, used by the
-	// bundled reviewer agent. Unassigned, it follows the slow role.
+	// RoleReviewer is a retired name for RoleDeep.
+	// Deprecated: use RoleDeep; LegacyRoleAlias still routes it.
 	RoleReviewer ModelRole = "reviewer"
 
-	// RoleDesigner is interface and visual work, used by the bundled designer
-	// agent.
+	// RoleDesigner is a retired name for RoleStandard.
+	// Deprecated: use RoleStandard; LegacyRoleAlias still routes it.
 	RoleDesigner ModelRole = "designer"
 )
+
+// LegacyRoleAlias returns the role that took over a retired name, or the
+// trimmed, lowercased name unchanged when it is not retired. The table lives in
+// core so settings can fold the same names without importing this package; it
+// is the compatibility promise of the collapse from per-agent slots to a
+// three-step ladder, so a settings file and an agent definition written before
+// the ladder keep routing instead of silently falling back to the session
+// model.
+func LegacyRoleAlias(name string) string { return core.CanonicalModelRole(name) }
 
 // ModelInherit is the reference that means "the session model", the same
 // spelling a subagent's model field uses. An empty reference means the same.
@@ -87,28 +118,19 @@ type RoleSpec struct {
 	// Consumer names the work routed through it, so a user choosing a model
 	// knows what it will actually answer.
 	Consumer string
-	// Fallback is the role an unassigned role follows, so a new per-agent slot
-	// does not change behaviour for users who never bind it: explore and
-	// librarian fall back to smol, reviewer to slow. "" means the session model
-	// answers, which is what default and the utility roles do.
-	Fallback ModelRole
 }
 
-// roleCatalog is the built-in set in display order. Roles are added here only
-// when san already has work to route through them: a slot nothing consumes is a
-// setting that changes nothing. The per-agent slots come first after the
-// session's own model, because they are what a user tunes; the utility roles
-// they fall back to come last.
+// roleCatalog is the built-in set in display order: the session's own model,
+// then the ladder from cheapest work to hardest. Roles are added here only when
+// san already has work to route through them: a slot nothing consumes is a
+// setting that changes nothing. Every rung is a slot a user tunes, and a
+// retired per-agent name is folded onto one of them by LegacyRoleAlias rather
+// than occupying a row of its own.
 var roleCatalog = []RoleSpec{
 	{Name: RoleDefault, Description: "Normal interactive work and the session's own model.", Consumer: "the main conversation's turns"},
-	{Name: RolePlan, Description: "Plan-mode architecture and read-only investigation.", Consumer: "turns while Plan Mode is on"},
-	{Name: RoleTask, Description: "General subagent work with no specialist defined.", Consumer: "the default worker the Agent tool spawns"},
-	{Name: RoleExplore, Description: "Fast read-only codebase investigation.", Consumer: "the bundled explore agent, which investigates before the main conversation works", Fallback: RoleSmol},
-	{Name: RoleLibrarian, Description: "Read-only upstream documentation and API research.", Consumer: "the bundled librarian agent, which reads vendor docs and changelogs", Fallback: RoleSmol},
-	{Name: RoleReviewer, Description: "Thorough independent review of a diff or a design.", Consumer: "the bundled reviewer agent, which reviews without editing", Fallback: RoleSlow},
-	{Name: RoleDesigner, Description: "Interface and visual work.", Consumer: "the bundled designer agent"},
-	{Name: RoleSmol, Description: "Fast, inexpensive utility work.", Consumer: "the permission judge, autopilot judge, hook completions and the self-learning review"},
-	{Name: RoleSlow, Description: "Thorough review where extra latency is acceptable.", Consumer: "the advisor's review of a completed turn, and the reviewer agent while its own slot is unbound"},
+	{Name: RoleFast, Description: "Fast, inexpensive work: triage, judges, utilities and simple delegated tasks.", Consumer: "work triage, the permission and autopilot judges, hook completions, the self-learning review, and the quick and explore agents"},
+	{Name: RoleStandard, Description: "General subagent work with a clear definition of done.", Consumer: "the bundled task agent and standard-tier delegation"},
+	{Name: RoleDeep, Description: "Thorough work where extra latency pays: planning, review and hard tasks.", Consumer: "Plan Mode's architect, the advisor's review of a completed turn, the bundled reviewer agent and deep-tier delegation"},
 }
 
 // RoleCatalog returns the built-in roles in display order. The caller owns the
@@ -174,8 +196,8 @@ func ParseRoleAlias(ref string) (string, bool) {
 
 // RoleBindings is a user's routing configuration: modelRoles decides which
 // model fills a role, modelRoleEfforts decides how hard that model is asked to
-// think for it. A role missing from both maps is unassigned and follows its
-// catalog fallback, then the session model.
+// think for it. A role missing from both maps is unassigned and the session
+// model answers.
 type RoleBindings struct {
 	// Refs is role name to the model reference that fills it.
 	Refs map[string]string
@@ -196,17 +218,20 @@ func BindingsOf(roles, efforts map[string]string) RoleBindings {
 }
 
 // Ref returns the reference bound to role, trimmed, or "" when the role is
-// unassigned. The map is hand-edited in settings.json, so a key written as
-// "Slow" still fills the slow role: role names are one namespace, not two
-// spellings of one namespace.
-func (b RoleBindings) Ref(role string) string { return b.lookup(b.Refs, role) }
+// unassigned.
+func (b RoleBindings) Ref(role string) string { return RoleBinding(b.Refs, role) }
 
 // Effort returns the effort bound to role, trimmed, or "" when the role
-// answers at its model's default. The lookup folds case exactly like Ref.
-func (b RoleBindings) Effort(role string) string { return b.lookup(b.Efforts, role) }
+// answers at its model's default.
+func (b RoleBindings) Effort(role string) string { return RoleBinding(b.Efforts, role) }
 
-// lookup reads one role from a hand-edited map, folding the key's case.
-func (b RoleBindings) lookup(entries map[string]string, role string) string {
+// RoleBinding reads one role's value from a hand-edited settings map. It is the
+// single lookup rule for modelRoles, modelRoleEfforts and the Roles tab: the
+// name asked for, then the rung a retired name folds onto, then the retired
+// siblings of that rung in core's inheritance order. A canonical key therefore
+// wins over a retired one, while asking for "explore" still honours an
+// "explore" entry before a shared "smol". "" means the role is unassigned.
+func RoleBinding(entries map[string]string, role string) string {
 	if len(entries) == 0 {
 		return ""
 	}
@@ -214,15 +239,37 @@ func (b RoleBindings) lookup(entries map[string]string, role string) string {
 	if name == "" {
 		return ""
 	}
-	if value, ok := entries[name]; ok {
-		return strings.TrimSpace(value)
+	if value, ok := foldLookup(entries, name); ok {
+		return value
 	}
-	for key, value := range entries {
-		if strings.ToLower(strings.TrimSpace(key)) == name {
-			return strings.TrimSpace(value)
+	rung := LegacyRoleAlias(name)
+	if rung != name {
+		if value, ok := foldLookup(entries, rung); ok {
+			return value
+		}
+	}
+	for _, retired := range core.RetiredModelRoles() {
+		if retired.Role != rung {
+			continue
+		}
+		if value, ok := foldLookup(entries, retired.Name); ok {
+			return value
 		}
 	}
 	return ""
+}
+
+// foldLookup reads one key from a hand-edited map, folding case and trimming.
+func foldLookup(entries map[string]string, name string) (string, bool) {
+	if value, ok := entries[name]; ok {
+		return strings.TrimSpace(value), true
+	}
+	for key, value := range entries {
+		if strings.ToLower(strings.TrimSpace(key)) == name {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", false
 }
 
 // RoleProviderResolver resolves a connected vendor to its provider, the way a
@@ -273,34 +320,27 @@ func NewStoreRoleResolver(store *Store) *RoleResolver {
 	return NewRoleResolver(NewProviderPool(store))
 }
 
-// Resolve answers the model and effort for role. An unassigned role follows its
-// catalog fallback role, then the session model; an assigned one is resolved
-// through its reference, including a reference that is itself another role.
+// Resolve answers the model and effort for role. An unassigned role uses the
+// session model; an assigned one is resolved through its reference, including a
+// reference that is itself another role. The returned Role names the rung that
+// answered, so a retired name reports the slot it folded onto.
 func (r *RoleResolver) Resolve(ctx context.Context, bindings RoleBindings, role string, fallback Provider, fallbackModel string) RoleTarget {
-	name := strings.ToLower(strings.TrimSpace(role))
-	target := r.resolveRole(ctx, bindings, name, fallback, fallbackModel, 0)
-	target.Role = ModelRole(name)
+	target := r.resolveRole(ctx, bindings, role, fallback, fallbackModel, 0)
+	target.Role = ModelRole(LegacyRoleAlias(role))
 	return target
 }
 
-// resolveRole answers role, walking the catalog fallback chain when nothing is
-// bound to it, and applies the effort that belongs to the role the caller
-// named. depth bounds both an "@role" chain and a fallback chain so a
-// hand-edited cycle resolves to the session model instead of looping.
+// resolveRole answers role and applies the effort that belongs to it. The role
+// is asked for under the name the caller used, so a binding written under that
+// name still wins; RoleBinding then folds a retired name onto its rung. depth
+// bounds an "@role" chain so a hand-edited cycle resolves to the session model
+// instead of looping.
 func (r *RoleResolver) resolveRole(ctx context.Context, bindings RoleBindings, role string, fallback Provider, fallbackModel string, depth int) RoleTarget {
 	inherited := RoleTarget{Provider: fallback, ModelID: strings.TrimSpace(fallbackModel), Inherited: true}
 	if depth >= maxRoleAliasDepth {
 		return inherited
 	}
-	ref := bindings.Ref(role)
-	target := r.resolve(ctx, bindings, ref, fallback, fallbackModel, depth)
-	if ref == "" {
-		// Nothing fills this role: follow its catalog fallback, which is how a
-		// per-agent slot keeps the behaviour it had before it existed.
-		if spec, ok := RoleSpecFor(role); ok && spec.Fallback != "" {
-			target = r.resolveRole(ctx, bindings, string(spec.Fallback), fallback, fallbackModel, depth+1)
-		}
-	}
+	target := r.resolve(ctx, bindings, bindings.Ref(role), fallback, fallbackModel, depth)
 	// The effort of the role the caller named wins; otherwise the effort that
 	// came with the role which supplied the model stands.
 	if effort := bindings.Effort(role); effort != "" {
@@ -336,8 +376,9 @@ func (r *RoleResolver) resolve(ctx context.Context, bindings RoleBindings, ref s
 		if !ok || depth >= maxRoleAliasDepth {
 			return inherited
 		}
-		// A nested alias is another role, so it follows the same fallback and
+		// A nested alias is another role, so it follows the same alias and
 		// effort rules as the caller's own role.
+		role = LegacyRoleAlias(role)
 		target := r.resolveRole(ctx, bindings, role, fallback, fallbackModel, depth+1)
 		target.Role = ModelRole(role)
 		return target

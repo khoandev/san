@@ -47,15 +47,35 @@ func (r *Registry) Get(name string) (*AgentConfig, bool) {
 	return config, ok
 }
 
+// retiredAgentNames maps a definition that no longer ships to the one that took
+// over its work: the upstream-docs half of librarian is now explore's, and the
+// interface half of designer is now task's. It is the compatibility promise of
+// the four-agent set — an Agent call, an agents.json entry or a persona written
+// before the collapse still names something real — and it is deliberately not
+// in AgentCatalog, because a retired name is an old spelling, not a choice.
+var retiredAgentNames = map[string]string{
+	"librarian": "explore",
+	"designer":  "task",
+}
+
 // LookupAgent returns an agent definition together with whether it exists and
 // is enabled. Keeping the two states separate lets callers reject an explicitly
 // disabled definition while treating an unknown name as a display-only label.
+// A retired name resolves to the definition that absorbed its work, unless the
+// user defined one under that name themselves — a file always wins over an
+// alias.
 func (r *Registry) LookupAgent(name string) (config *AgentConfig, exists, enabled bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	lowerName := strings.ToLower(strings.TrimSpace(name))
 	config, exists = r.agents[lowerName]
+	if !exists {
+		if canonical, retired := retiredAgentNames[lowerName]; retired {
+			lowerName = canonical
+			config, exists = r.agents[lowerName]
+		}
+	}
 	if !exists {
 		return nil, false, false
 	}
@@ -204,8 +224,9 @@ func (r *Registry) isDisabledInternal(name string) bool {
 // Only enabled definitions are listed, sorted by name. Each entry names the
 // definition, the write boundary it runs behind, and — when it runs on one —
 // the role whose model and effort its work uses, because that last pair is
-// what a user tunes in /models. Full prompts, tool rules and exact model ids
-// are not included.
+// what a user tunes in /models, plus the tier of work the definition is for,
+// which is what a delegating model choosing on cost alone reads. Full prompts,
+// tool rules and exact model ids are not included.
 func (r *Registry) AgentCatalog() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -249,15 +270,18 @@ func (r *Registry) AgentCatalog() string {
 	return sb.String()
 }
 
-// catalogLabel summarises what a definition declares: the mode its author set
-// and the role whose model and effort the work is billed to when the
-// definition names one. It is the declared mode, not the boundary the runtime
-// ends up enforcing — mode "default" still asks before a mutation, and asks
-// resolve against the parent's posture.
+// catalogLabel summarises what a definition declares: the mode its author set,
+// the role whose model and effort the work is billed to when it names one, and
+// the tier of work it is for. It is the declared mode, not the boundary the
+// runtime ends up enforcing — mode "default" still asks before a mutation, and
+// asks resolve against the parent's posture.
 func catalogLabel(config *AgentConfig) string {
 	label := modeLabel(config.PermissionMode)
 	if role, ok := llm.ParseRoleAlias(config.Model); ok {
 		label += ", @" + role
+	}
+	if tier := NormalizeAgentTier(string(config.Tier)); tier != "" {
+		label += ", " + string(tier)
 	}
 	return label
 }

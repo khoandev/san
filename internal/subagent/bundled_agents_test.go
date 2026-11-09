@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/genai-io/san/internal/llm"
+	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool"
 
 	// Register the built-in tools so the bundled agents' allow_tools lists are
@@ -16,11 +17,12 @@ import (
 	_ "github.com/genai-io/san/internal/tool/register"
 )
 
-// bundledNames is the default set a fresh install must have.
-var bundledNames = []string{"designer", "explore", "librarian", "reviewer", "task"}
+// bundledNames is the default set a fresh install must have: one definition per
+// rung of work, plus the read-only reviewer.
+var bundledNames = []string{"explore", "quick", "reviewer", "task"}
 
 // TestBundledAgentsLoadOnAFreshInstall covers the promise of the embedded set:
-// a new install has five usable agents, each carrying its charter and a source
+// a new install has four usable agents, each carrying its charter and a source
 // that says where it came from.
 func TestBundledAgentsLoadOnAFreshInstall(t *testing.T) {
 	home, cwd := t.TempDir(), t.TempDir()
@@ -63,16 +65,19 @@ func TestBundledAgentsLoadOnAFreshInstall(t *testing.T) {
 		if config.PermissionMode == "" || len(config.AllowTools) == 0 {
 			t.Errorf("%s is missing its mode or tool list: %+v", name, config)
 		}
-		// A bundled model is a role reference: an "@" prefix and a role name,
-		// so a typo cannot silently become a model id nobody serves. Each
-		// definition owns the role of its own name, so tuning one in /models
-		// cannot move another's model or effort.
+		// Every bundled definition declares the rung of work it is for, and
+		// runs on that rung's role: an "@" prefix and a role name, so a typo
+		// cannot silently become a model id nobody serves, and moving one rung
+		// in /models cannot move another's model or effort.
+		if config.Tier == "" || !ValidAgentTier(config.Tier) {
+			t.Errorf("%s tier = %q, want a declared rung", name, config.Tier)
+		}
 		if role, ok := llm.ParseRoleAlias(config.Model); !ok {
 			t.Errorf("%s model = %q, want an @role reference", name, config.Model)
 		} else if !llm.IsRoleName(role) {
 			t.Errorf("%s model names an invalid role: %q", name, config.Model)
-		} else if want := "@" + name; config.Model != want {
-			t.Errorf("%s model = %q, want its own role %q", name, config.Model, want)
+		} else if want := "@" + string(config.Tier); config.Model != want {
+			t.Errorf("%s model = %q, want @%s so its model matches its tier", name, config.Model, config.Tier)
 		}
 		// Discovery metadata is what the delegating model reads before it
 		// picks: one line of scope, then when to use it and when not to.
@@ -88,15 +93,85 @@ func TestBundledAgentsLoadOnAFreshInstall(t *testing.T) {
 	// only thing the delegating model sees.
 	catalog := r.AgentCatalog()
 	for _, want := range []string{
-		"- explore [read-only, @explore]: ",
-		"- librarian [read-only, @librarian]: ",
-		"- reviewer [read-only, @reviewer]: ",
-		"- designer [edit, @designer]: ",
-		"- task [edit, @task]: ",
+		"- explore [read-only, @fast, fast]: ",
+		"- quick [edit, @fast, fast]: ",
+		"- reviewer [read-only, @deep, deep]: ",
+		"- task [edit, @standard, standard]: ",
 	} {
 		if !strings.Contains(catalog, want) {
 			t.Errorf("catalog does not tell the delegating model %q:\n%s", want, catalog)
 		}
+	}
+	// A retired name is an old spelling, not a choice: the four real
+	// definitions are all the delegating model is offered.
+	for _, retired := range []string{"- librarian", "- designer"} {
+		if strings.Contains(catalog, retired) {
+			t.Errorf("catalog offers the retired definition %q:\n%s", retired, catalog)
+		}
+	}
+}
+
+// TestRetiredAgentNamesResolveToTheirSuccessor pins the compatibility promise:
+// a call, an agents.json entry or a persona written before the collapse still
+// names work that runs, and it runs as the definition that absorbed it.
+func TestRetiredAgentNamesResolveToTheirSuccessor(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	r, err := Load(cwd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"librarian":  "explore",
+		"designer":   "task",
+		" Librarian": "explore",
+	} {
+		config, exists, enabled := r.LookupAgent(name)
+		if !exists || !enabled || config.Name != want {
+			t.Errorf("LookupAgent(%q) = %+v, exists=%v enabled=%v; want %s", name, config, exists, enabled, want)
+			continue
+		}
+		// The Agent call path resolves through the same lookup, so the call
+		// runs the successor's charter, tools and mode.
+		if config, ok := resolveAgentConfigFrom(r, name); !ok || config.Name != want {
+			t.Errorf("resolveAgentConfigFrom(%q) = %+v, %v; want %s", name, config, ok, want)
+		}
+	}
+	// Disabling the successor disables the alias with it: a retired name must
+	// not be a way around agents.json.
+	if err := r.SetEnabled("explore", false, setting.ScopeUser); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, enabled := r.LookupAgent("librarian"); enabled {
+		t.Error("librarian still runs while the definition that absorbed it is disabled")
+	}
+	if _, _, enabled := r.LookupAgent("task"); !enabled {
+		t.Error("one alias's disable leaked onto another definition")
+	}
+}
+
+// TestUserFileWinsOverARetiredName keeps an alias honest: a user who writes
+// their own librarian.md gets it run, because a file is a real definition and
+// an alias is only a fallback for a name nothing defines.
+func TestUserFileWinsOverARetiredName(t *testing.T) {
+	home, cwd := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	writeAgentFile(t, filepath.Join(home, ".san", "agents"), "librarian",
+		"name: librarian\ndescription: my own librarian")
+
+	r, err := Load(cwd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, exists, enabled := r.LookupAgent("librarian")
+	if !exists || !enabled || config.Description != "my own librarian" {
+		t.Fatalf("LookupAgent(librarian) = %+v, exists=%v enabled=%v; want the user's file", config, exists, enabled)
+	}
+	if _, exists := r.Get("explore"); !exists {
+		t.Fatal("the bundled explore definition should still be registered")
 	}
 }
 
@@ -277,5 +352,30 @@ func TestParseAgentFileAcceptsCamelPermissionModeAlias(t *testing.T) {
 	}
 	if config.PermissionMode != PermissionExplore {
 		t.Fatalf("permissionMode alias = %q, want explore", config.PermissionMode)
+	}
+}
+
+// TestTierIsNormalizedAndValidated covers the frontmatter contract of the new
+// field: a retired per-agent name folds onto its rung, and a label that is not
+// a rung fails the definition instead of being reported as a tier the
+// delegating model cannot act on.
+func TestTierIsNormalizedAndValidated(t *testing.T) {
+	config, err := parseAgentBytes("old.md", []byte("---\nname: old\ntier: reviewer\n---\n\nBody.\n"))
+	if err != nil || config == nil {
+		t.Fatalf("parseAgentBytes: %v", err)
+	}
+	if config.Tier != TierDeep {
+		t.Fatalf("tier = %q, want the reviewer name folded onto deep", config.Tier)
+	}
+
+	if _, err := parseAgentBytes("bad.md", []byte("---\nname: bad\ntier: enormous\n---\n\nBody.\n")); err == nil {
+		t.Fatal("an unknown tier parsed as a valid definition")
+	}
+
+	// A definition that declares no tier is valid and reports none, so an
+	// existing user file keeps loading.
+	config, err = parseAgentBytes("plain.md", []byte("---\nname: plain\n---\n\nBody.\n"))
+	if err != nil || config == nil || config.Tier != "" {
+		t.Fatalf("tierless definition = %+v, %v; want no tier", config, err)
 	}
 }

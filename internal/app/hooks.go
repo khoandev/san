@@ -110,13 +110,13 @@ func (m *model) switchProvider(p llm.Provider) {
 	m.wireHookCompleter()
 }
 
-// wireHookCompleter points prompt and agent hooks at the smol role. A hook
+// wireHookCompleter points prompt and agent hooks at the fast role. A hook
 // completion is a one-shot utility call, repeated for every event and invisible
 // to the conversation — exactly what a cheap role exists for. An unassigned
 // role, an unconnected vendor or settings that are not wired all leave the
 // session provider and model in charge.
 func (m *model) wireHookCompleter() {
-	target := m.resolveRole(llm.RoleSmol)
+	target := m.resolveRole(llm.RoleFast)
 	provider, modelID := target.Provider, target.ModelID
 	if provider == nil {
 		provider = m.env.LLMProvider
@@ -151,7 +151,7 @@ func hookModelFor(settings *setting.Data, fallback llm.Provider, fallbackModel s
 	if conn := llm.Default(); conn != nil {
 		store = conn.Store()
 	}
-	return resolveRoleModelOver(roles, store, llm.RoleSmol, fallback, fallbackModel)
+	return resolveRoleModelOver(roles, store, llm.RoleFast, fallback, fallbackModel)
 }
 
 func (m *model) refreshMemoryContext(cwd, loadReason string) {

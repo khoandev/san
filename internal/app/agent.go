@@ -382,7 +382,7 @@ func (m *model) roleModelInfo(target llm.RoleTarget) *llm.CurrentModelInfo {
 
 // planModelTarget is the model Plan Mode runs on, reported only when it differs
 // from the session model. False — the session model answers — when Plan Mode is
-// off, the plan store or settings are not wired, the plan role is unassigned, or
+// off, the plan store or settings are not wired, the deep role is unassigned, or
 // its reference resolves back to the session model (an "@role" chain that loops,
 // a vendor this session has not connected). Plan Mode never fails a turn over an
 // unassigned role; it just runs where the conversation already runs.
@@ -390,10 +390,10 @@ func (m *model) planModelTarget() (llm.RoleTarget, bool) {
 	if m.plan == nil || m.plan.Mode() != plan.ModePlan || m.services.Setting == nil {
 		return llm.RoleTarget{}, false
 	}
-	if strings.TrimSpace(m.services.Setting.ModelRole(string(llm.RolePlan))) == "" {
+	if strings.TrimSpace(m.services.Setting.ModelRole(string(llm.RoleDeep))) == "" {
 		return llm.RoleTarget{}, false
 	}
-	target := m.resolveRole(llm.RolePlan)
+	target := m.resolveRole(llm.RoleDeep)
 	if target.Inherited || target.ModelID == "" {
 		return llm.RoleTarget{}, false
 	}
@@ -453,7 +453,7 @@ func providerName(p llm.Provider) string {
 }
 
 // resolveJudgeModel picks the provider and model for the autopilot judge:
-// the caller's ref (autoPilot.model) when set, otherwise the smol role,
+// the caller's ref (autoPilot.model) when set, otherwise the fast role,
 // otherwise the session model.
 func (m *model) resolveJudgeModel(ref string) (llm.Provider, string) {
 	p, info := m.resolveJudge(ref)
@@ -461,7 +461,7 @@ func (m *model) resolveJudgeModel(ref string) (llm.Provider, string) {
 }
 
 // resolveJudge resolves a judge model ref to its provider and model, the
-// autopilot/smol path. The info names whichever provider was actually picked,
+// autopilot/fast path. The info names whichever provider was actually picked,
 // for capability lookups.
 func (m *model) resolveJudge(ref string) (llm.Provider, *llm.CurrentModelInfo) {
 	target := m.resolveJudgeTarget(ref)
@@ -472,7 +472,7 @@ func (m *model) resolveJudge(ref string) (llm.Provider, *llm.CurrentModelInfo) {
 // caller that also sends an effort validates the role's label against the model
 // that actually answers.
 func (m *model) resolveJudgeTarget(ref string) llm.RoleTarget {
-	return m.resolveRoleWithOverride(llm.RoleSmol, ref)
+	return m.resolveRoleWithOverride(llm.RoleFast, ref)
 }
 
 // autopilotJudgeEffort is the precedence the autopilot judge follows: its own
@@ -488,7 +488,7 @@ func autopilotJudgeEffort(saved string, provider llm.Provider, store *llm.Store,
 
 // workerModel is the model the Agent tool's default worker runs on: the
 // subagentModel setting when the user set one (including an explicit "inherit"),
-// otherwise the task role's binding, otherwise "" — which leaves the executor
+// otherwise the standard role's binding, otherwise "" — which leaves the executor
 // inheriting the parent's model. The binding is returned as a reference, not a
 // resolved model id, so the executor still routes a "vendor/model" binding to
 // that vendor.
@@ -496,7 +496,7 @@ func (m *model) workerModel() string {
 	if m.services.Setting == nil {
 		return ""
 	}
-	return effectiveWorkerModel(m.services.Setting.SubagentModel(), m.services.Setting.ModelRole(string(llm.RoleTask)))
+	return effectiveWorkerModel(m.services.Setting.SubagentModel(), m.services.Setting.ModelRole(string(llm.RoleStandard)))
 }
 
 // effectiveWorkerModel is workerModel's precedence rule, shared with the
@@ -972,7 +972,8 @@ func (m *model) ReconfigureAgentTool() {
 	executor.SetInteractions(m.conv.AgentToUI)
 	executor.SetDefaultModel(m.workerModel())
 	executor.SetResolver(llm.NewProviderPool(m.services.LLM.Store()))
-	executor.SetRoleResolver(roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID()))
+	resolver := roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID())
+	executor.SetRoleResolver(resolver)
 	perms := m.env.SessionPermissions
 	executor.SetParentPermissionMode(func() subagent.PermissionMode {
 		return parentPosture(perms)
@@ -986,6 +987,7 @@ func (m *model) ReconfigureAgentTool() {
 	executor.SetDisabledTools(m.services.Setting.DisabledTools())
 
 	adapter := subagent.NewExecutorAdapter(executor)
+	installAutoTier(adapter, executor.AgentRegistry(), m.autoTierEnabled(), resolver)
 	type executorSetter interface{ SetExecutor(tool.AgentExecutor) }
 	type searchPathSetter interface{ SetSearchPaths([]string) }
 	home, _ := os.UserHomeDir()

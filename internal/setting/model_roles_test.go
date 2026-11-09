@@ -100,7 +100,9 @@ func TestSetModelRolePersistsAndPreservesOtherSettings(t *testing.T) {
 	if d.Model != "claude-x" || d.Theme != "dark" {
 		t.Fatalf("unrelated settings clobbered: model=%q theme=%q", d.Model, d.Theme)
 	}
-	if d.ModelRoles["smol"] != "anthropic/claude-haiku-4-5" || d.ModelRoles["plan"] != "openai/gpt-5" {
+	// Both keys are rungs: the one written through a retired name, and the one
+	// the file already held under its own retired name.
+	if d.ModelRoles["fast"] != "anthropic/claude-haiku-4-5" || d.ModelRoles["deep"] != "openai/gpt-5" {
 		t.Fatalf("modelRoles = %v", d.ModelRoles)
 	}
 
@@ -110,15 +112,15 @@ func TestSetModelRolePersistsAndPreservesOtherSettings(t *testing.T) {
 		t.Fatalf("rebind: %v", err)
 	}
 	d = readData(t, file)
-	if len(d.ModelRoles) != 2 || d.ModelRoles["smol"] != "inherit" {
-		t.Fatalf("after rebind modelRoles = %v, want smol=inherit and plan kept", d.ModelRoles)
+	if len(d.ModelRoles) != 2 || d.ModelRoles["fast"] != "inherit" {
+		t.Fatalf("after rebind modelRoles = %v, want fast=inherit and the deep rung kept", d.ModelRoles)
 	}
 
 	if err := ClearModelRole("plan", ScopeUser); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	d = readData(t, file)
-	if _, ok := d.ModelRoles["plan"]; ok || d.ModelRoles["smol"] != "inherit" {
+	if _, ok := d.ModelRoles["deep"]; ok || d.ModelRoles["fast"] != "inherit" {
 		t.Fatalf("after clear modelRoles = %v", d.ModelRoles)
 	}
 }
@@ -133,8 +135,12 @@ func TestSetModelRoleEmptyRefMeansInherit(t *testing.T) {
 	if err := SetModelRole("task", "   ", ScopeUser); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if ref := readData(t, userSettingsFile(home)).ModelRoles["task"]; ref != ModelInheritRef {
-		t.Fatalf("task = %q, want %q", ref, ModelInheritRef)
+	roles := readData(t, userSettingsFile(home)).ModelRoles
+	if roles["standard"] != ModelInheritRef {
+		t.Fatalf("modelRoles = %v, want the standard rung stored as %q", roles, ModelInheritRef)
+	}
+	if _, stale := roles["task"]; stale {
+		t.Fatalf("a retired key reached disk: %v", roles)
 	}
 }
 
@@ -156,11 +162,8 @@ func TestUpdateModelRolesAtReplacesBlock(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	d := readData(t, file)
-	if _, ok := d.ModelRoles["smol"]; ok {
-		t.Fatalf("removed role survived: %v", d.ModelRoles)
-	}
-	if d.ModelRoles["plan"] != "openai/gpt-5" {
-		t.Fatalf("plan = %q, want canonical lowercase key", d.ModelRoles["plan"])
+	if len(d.ModelRoles) != 1 || d.ModelRoles["deep"] != "openai/gpt-5" {
+		t.Fatalf("modelRoles = %v, want only the deep rung the update kept", d.ModelRoles)
 	}
 }
 
@@ -185,7 +188,7 @@ func TestUpdateModelRolesAtProjectScope(t *testing.T) {
 		t.Fatalf("set: %v", err)
 	}
 	d := readData(t, projectFile)
-	if d.ModelRoles["designer"] != "anthropic/claude-opus-4-7" || d.Theme != "light" {
+	if d.ModelRoles["standard"] != "anthropic/claude-opus-4-7" || d.Theme != "light" {
 		t.Fatalf("project file = %+v", d)
 	}
 	if _, err := os.Stat(userSettingsFile(home)); err == nil {
@@ -207,27 +210,27 @@ func TestModelRolesAtReadsOneScope(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(userFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(userFile, []byte(`{"modelRoles":{"smol":"user-smol"}}`), 0o644); err != nil {
+	if err := os.WriteFile(userFile, []byte(`{"modelRoles":{"task":"user-task"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	projectFile := filepath.Join(work, ".san", "settings.json")
 	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(projectFile, []byte(`{"modelRoles":{"Slow":"project-slow","plan":"project-plan"}}`), 0o644); err != nil {
+	if err := os.WriteFile(projectFile, []byte(`{"modelRoles":{"Slow":"project-deep","fast":"project-fast"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	project := ModelRolesAt(work, ScopeProject)
-	if len(project) != 2 || project["slow"] != "project-slow" || project["plan"] != "project-plan" {
-		t.Fatalf("project roles = %v, want the file's bindings keyed canonically", project)
+	if len(project) != 2 || project["deep"] != "project-deep" || project["fast"] != "project-fast" {
+		t.Fatalf("project roles = %v, want the file's bindings keyed by rung", project)
 	}
-	if _, inherited := project["smol"]; inherited {
-		t.Fatalf("project roles include the user's smol: %v", project)
+	if _, inherited := project["standard"]; inherited {
+		t.Fatalf("project roles include the user's task binding: %v", project)
 	}
 
 	user := ModelRolesAt(work, ScopeUser)
-	if len(user) != 1 || user["smol"] != "user-smol" {
+	if len(user) != 1 || user["standard"] != "user-task" {
 		t.Fatalf("user roles = %v", user)
 	}
 
@@ -245,9 +248,9 @@ func TestModelRoleValidation(t *testing.T) {
 			t.Errorf("ModelRoleName(%q) accepted an invalid name", name)
 		}
 	}
-	// Case and padding are folded rather than rejected: the stored key is what
-	// has to be lowercase, and a hand-typed "Slow" names the same role.
-	for name, want := range map[string]string{"smol": "smol", " Designer ": "designer", "SMOL": "smol", "code-review-2": "code-review-2"} {
+	// Case and padding are folded rather than rejected, and a retired per-agent
+	// name is stored under the rung that answers its work.
+	for name, want := range map[string]string{"smol": "fast", " Designer ": "standard", "SMOL": "fast", "code-review-2": "code-review-2"} {
 		if got, err := ModelRoleName(name); err != nil || got != want {
 			t.Errorf("ModelRoleName(%q) = %q, %v", name, got, err)
 		}
@@ -283,8 +286,9 @@ func TestModelRoleValidation(t *testing.T) {
 	if err := SetModelRole("smol", "", ScopeUser); err != nil {
 		t.Fatalf("empty reference must mean inherit, got %v", err)
 	}
-	if ref := readData(t, file).ModelRoles["smol"]; ref != ModelInheritRef {
-		t.Fatalf("smol = %q, want %q", ref, ModelInheritRef)
+	roles := readData(t, file).ModelRoles
+	if roles["fast"] != ModelInheritRef || len(roles) != 1 {
+		t.Fatalf("modelRoles = %v, want only fast=%q", roles, ModelInheritRef)
 	}
 }
 
@@ -364,18 +368,18 @@ func TestSetModelRoleEffortPersistsAndPreservesOtherSettings(t *testing.T) {
 		t.Fatalf("set: %v", err)
 	}
 	d := readData(t, file)
-	if d.Model != "claude-x" || d.Theme != "dark" || d.ModelRoles["plan"] != "openai/gpt-5" {
+	if d.Model != "claude-x" || d.Theme != "dark" || d.ModelRoles["deep"] != "openai/gpt-5" {
 		t.Fatalf("unrelated settings clobbered: %+v", d)
 	}
-	if d.ModelRoleEfforts["plan"] != "high" {
-		t.Fatalf("modelRoleEfforts = %v, want canonical lowercase key and label", d.ModelRoleEfforts)
+	if d.ModelRoleEfforts["deep"] != "high" {
+		t.Fatalf("modelRoleEfforts = %v, want the deep rung and a lowercase label", d.ModelRoleEfforts)
 	}
 
 	// Rebinding replaces the label instead of adding a second spelling.
 	if err := SetModelRoleEffort("plan", "xhigh", ScopeUser); err != nil {
 		t.Fatalf("rebind: %v", err)
 	}
-	if got := readData(t, file).ModelRoleEfforts; len(got) != 1 || got["plan"] != "xhigh" {
+	if got := readData(t, file).ModelRoleEfforts; len(got) != 1 || got["deep"] != "xhigh" {
 		t.Fatalf("after rebind modelRoleEfforts = %v", got)
 	}
 
@@ -395,7 +399,7 @@ func TestSetModelRoleEffortPersistsAndPreservesOtherSettings(t *testing.T) {
 	if got := readData(t, file).ModelRoleEfforts; len(got) != 0 {
 		t.Fatalf("empty effort did not clear the binding: %v", got)
 	}
-	if got := readData(t, file).ModelRoles["plan"]; got != "openai/gpt-5" {
+	if got := readData(t, file).ModelRoles["deep"]; got != "openai/gpt-5" {
 		t.Fatalf("clearing an effort disturbed the model binding: %q", got)
 	}
 }
@@ -416,10 +420,10 @@ func TestClearModelRoleClearsEffort(t *testing.T) {
 		t.Fatalf("clear role: %v", err)
 	}
 	d := readData(t, userSettingsFile(home))
-	if _, ok := d.ModelRoles["reviewer"]; ok {
+	if _, ok := d.ModelRoles["deep"]; ok {
 		t.Fatalf("role survived: %v", d.ModelRoles)
 	}
-	if _, ok := d.ModelRoleEfforts["reviewer"]; ok {
+	if _, ok := d.ModelRoleEfforts["deep"]; ok {
 		t.Fatalf("effort survived the role it belonged to: %v", d.ModelRoleEfforts)
 	}
 }
@@ -492,18 +496,18 @@ func TestModelRoleEffortsAtReadsOneScope(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(projectFile, []byte(`{"modelRoleEfforts":{"Slow":"High","plan":"xhigh","Bad Name":"low"}}`), 0o644); err != nil {
+	if err := os.WriteFile(projectFile, []byte(`{"modelRoleEfforts":{"Slow":"High","task":"XHigh","Bad Name":"low"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	project := ModelRoleEffortsAt(work, ScopeProject)
-	if len(project) != 2 || project["slow"] != "high" || project["plan"] != "xhigh" {
-		t.Fatalf("project efforts = %v, want the file's bindings keyed canonically", project)
+	if len(project) != 2 || project["deep"] != "high" || project["standard"] != "xhigh" {
+		t.Fatalf("project efforts = %v, want the file's bindings keyed by rung", project)
 	}
-	if _, inherited := project["smol"]; inherited {
-		t.Fatalf("project efforts include the user's smol: %v", project)
+	if _, inherited := project["fast"]; inherited {
+		t.Fatalf("project efforts include the user's smol binding: %v", project)
 	}
-	if user := ModelRoleEffortsAt(work, ScopeUser); len(user) != 1 || user["smol"] != "low" {
+	if user := ModelRoleEffortsAt(work, ScopeUser); len(user) != 1 || user["fast"] != "low" {
 		t.Fatalf("user efforts = %v", user)
 	}
 	if efforts := ModelRoleEffortsAt(t.TempDir(), ScopeProject); len(efforts) != 0 {
@@ -570,5 +574,124 @@ func TestModelRolesJSONRoundTrip(t *testing.T) {
 	// An empty map is omitted, so a file with no bindings stays clean.
 	if out, err := json.Marshal(NewData()); err != nil || string(out) != `{}` {
 		t.Fatalf("empty Data encoded as %s, %v", out, err)
+	}
+}
+
+// TestLoadFoldsRetiredRoleKeys pins the migration: a file written before the
+// ladder existed binds six per-agent roles, and loading it yields the three
+// rungs they collapsed onto, each with the model and the depth it had.
+func TestLoadFoldsRetiredRoleKeys(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Chdir(work)
+
+	userFile := userSettingsFile(home)
+	if err := os.MkdirAll(filepath.Dir(userFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	user := `{"modelRoles":{
+		"explore":"opencode-zen/crouton-alpha-free",
+		"librarian":"opencode-zen/crouton-alpha-free",
+		"smol":"opencode-zen/crouton-alpha-free",
+		"task":"opencode-zen/crouton-alpha-free",
+		"plan":"opencode-zen/deepseek-v4.1-flash-free",
+		"slow":"opencode-zen/deepseek-v4.1-flash-free"
+	},"modelRoleEfforts":{"librarian":"medium","plan":"max","slow":"max"}}`
+	if err := os.WriteFile(userFile, []byte(user), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := TrustWorkspace(work); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := NewLoaderForCwd(work).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"fast":     "opencode-zen/crouton-alpha-free",
+		"standard": "opencode-zen/crouton-alpha-free",
+		"deep":     "opencode-zen/deepseek-v4.1-flash-free",
+	}
+	if len(loaded.ModelRoles) != len(want) {
+		t.Fatalf("modelRoles = %v, want only the three rungs", loaded.ModelRoles)
+	}
+	for role, ref := range want {
+		if got := loaded.ModelRole(role); got != ref {
+			t.Errorf("%s = %q, want %q", role, got, ref)
+		}
+	}
+	// The effort travels with the role it was bound to: the librarian's medium
+	// and the two deepest roles' max fold onto fast and deep.
+	if got := loaded.ModelRoleEffort("fast"); got != "medium" {
+		t.Errorf("fast effort = %q, want the librarian's medium", got)
+	}
+	if got := loaded.ModelRoleEffort("deep"); got != "max" {
+		t.Errorf("deep effort = %q, want max", got)
+	}
+	if got := loaded.ModelRoleEffort("standard"); got != "" {
+		t.Errorf("standard effort = %q, want none", got)
+	}
+
+	// The project's rung outranks the user's, even though each file wrote a
+	// different retired name for it.
+	projectFile := filepath.Join(work, ".san", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectFile, []byte(`{"modelRoles":{"task":"anthropic/claude-sonnet-4-6"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = NewLoaderForCwd(work).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.ModelRole("standard"); got != "anthropic/claude-sonnet-4-6" {
+		t.Fatalf("standard = %q, want the project's binding", got)
+	}
+	if got := loaded.ModelRole("fast"); got != "opencode-zen/crouton-alpha-free" {
+		t.Fatalf("fast = %q, want the user's binding kept", got)
+	}
+}
+
+// TestSaveFromModelsWritesOnlyRungs drives the /models write path over a file
+// still holding retired names: the assignment lands on its rung and no dead key
+// survives the save.
+func TestSaveFromModelsWritesOnlyRungs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	file := userSettingsFile(home)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := `{"modelRoles":{"slow":"old-slow","task":"old-task"},"modelRoleEfforts":{"plan":"max"}}`
+	if err := os.WriteFile(file, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetModelRole("deep", "anthropic/claude-opus-4-7", ScopeUser); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := SetModelRoleEffort("fast", "low", ScopeUser); err != nil {
+		t.Fatalf("set effort: %v", err)
+	}
+	d := readData(t, file)
+	wantRoles := map[string]string{
+		"deep":     "anthropic/claude-opus-4-7",
+		"standard": "old-task",
+	}
+	if len(d.ModelRoles) != len(wantRoles) {
+		t.Fatalf("modelRoles = %v, want only rung keys", d.ModelRoles)
+	}
+	for role, ref := range wantRoles {
+		if got := d.ModelRoles[role]; got != ref {
+			t.Errorf("%s = %q, want %q", role, got, ref)
+		}
+	}
+	if got := d.ModelRoleEfforts; len(got) != 2 || got["deep"] != "max" || got["fast"] != "low" {
+		t.Fatalf("modelRoleEfforts = %v, want the plan effort folded onto deep", got)
 	}
 }

@@ -35,6 +35,9 @@ func mergeSettings(base, overlay *Data) *Data {
 	result.AllowBypass = coalescePtr(overlay.AllowBypass, base.AllowBypass)
 	result.AutoUpdate = coalescePtr(overlay.AutoUpdate, base.AutoUpdate)
 	result.AutoMemory = coalescePtr(overlay.AutoMemory, base.AutoMemory)
+	// An explicit false must survive a project layer that says nothing, which
+	// is why the switch is a pointer and the merge coalesces it.
+	result.Agents.AutoTier = coalescePtr(overlay.Agents.AutoTier, base.Agents.AutoTier)
 	result.AutoMemoryDirectory = coalesce(overlay.AutoMemoryDirectory, base.AutoMemoryDirectory)
 	result.ContextBar = coalescePtr(overlay.ContextBar, base.ContextBar)
 	result.GitBar = coalescePtr(overlay.GitBar, base.GitBar)

@@ -81,7 +81,7 @@ func (h *acpHost) setConfig(ctx context.Context, request protocol.SetSessionConf
 		if conn := llm.Default(); conn != nil {
 			hookStore = conn.Store()
 		}
-		hookProvider, hookModel, hookEffort := resolveRoleModelOver(hookRoles, hookStore, llm.RoleSmol, s.runtimeBuildParams.Provider, id)
+		hookProvider, hookModel, hookEffort := resolveRoleModelOver(hookRoles, hookStore, llm.RoleFast, s.runtimeBuildParams.Provider, id)
 		s.hooks.SetLLMCompleter(buildHookCompleter(hookProvider, hookModel, hookEffort), hookModel)
 	}
 	return protocol.SetSessionConfigOptionResponse{ConfigOptions: s.configOptions()}, nil

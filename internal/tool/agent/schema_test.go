@@ -3,6 +3,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/genai-io/san/internal/tool"
 )
 
 func TestAgentToolSchemaMatchesBuilder(t *testing.T) {
@@ -32,16 +34,94 @@ func TestAgentSchemaRetainsDelegationGuidance(t *testing.T) {
 	description := agentSchema("").Description
 	for _, want := range []string{
 		"only task-local context",
-		"Include the validation plan",
-		"report the failed tool and reason",
-		"When delegating multiple independent tasks, launch them concurrently",
-		"use foreground execution when you need the result to proceed",
-		"background execution when you can continue independent work",
+		"the validation plan",
+		"Report a failed tool and its reason",
+		"Launch independent tasks concurrently",
+		"foreground when you need the result to proceed",
+		"background when you can continue useful work",
 		"Do not duplicate delegated work",
-		"Verify the result before reporting it",
+		"verify the result before reporting it",
+		"SendMessage to the returned Task ID continues the same session, model and tier",
 	} {
 		if !strings.Contains(description, want) {
 			t.Errorf("Agent description should retain %q guidance", want)
+		}
+	}
+}
+
+// sampleCatalog is a four-entry catalog in the shape the registry renders: one
+// line per definition, no when-to-use lines. It stands in for the real catalog
+// so the length guard measures this package's prose against a fixed cost rather
+// than whatever a user's descriptions happen to weigh.
+const sampleCatalog = "Available predefined agents:\n\n" +
+	"- explore [read-only, @fast, fast]: Read-only investigation — where code lives, how it behaves, and what a dependency actually guarantees.\n" +
+	"- quick [edit, @fast, fast]: Fast, inexpensive work — one small, well-specified change or a quick lookup.\n" +
+	"- reviewer [read-only, @deep, deep]: Independent review of a diff, a design or a proposed change — findings only, never edits.\n" +
+	"- task [edit, @standard, standard]: Bounded implementation work in this repository — a few files with a clear definition of done."
+
+// TestAgentSchemaTeachesTiersAndStaysLean pins the two things the delegating
+// model needs and the one thing this description kept losing: the four
+// definitions, the three tiers with the brief each one buys, and a length that
+// cannot creep back into a wall of prose.
+func TestAgentSchemaTeachesTiersAndStaysLean(t *testing.T) {
+	// The prose without a catalog is what this package owns, so it carries the
+	// tighter bound; the catalog is the registry's to size.
+	if base := len(agentSchema("").Description); base > 950 {
+		t.Errorf("catalog-free description = %d chars, want <= 950", base)
+	}
+	full := agentSchema(sampleCatalog).Description
+	if len(full) > 1800 {
+		t.Errorf("description with a four-entry catalog = %d chars, want <= 1800", len(full))
+	}
+	for _, want := range []string{
+		"- explore [read-only, @fast, fast]",
+		"- quick [edit, @fast, fast]",
+		"- reviewer [read-only, @deep, deep]",
+		"- task [edit, @standard, standard]",
+		"- fast: one sentence of goal",
+		"- standard: the goal, the paths involved, and the definition of done",
+		"- deep: the goal, exact files, constraints, acceptance criteria",
+		"Omit name and tier for routine work and san routes it",
+	} {
+		if !strings.Contains(full, want) {
+			t.Errorf("description should teach %q:\n%s", want, full)
+		}
+	}
+	// A catalog-free schema cannot point at a definition that may not exist,
+	// and the tier rubric still applies to the unnamed default worker.
+	if strings.Contains(agentSchema("").Description, "Pick the narrowest definition") {
+		t.Error("catalog-free description advises a choice it cannot offer")
+	}
+	if !strings.Contains(agentSchema("").Description, "- fast: one sentence of goal") {
+		t.Error("catalog-free description lost the brief rubric")
+	}
+}
+
+// TestAgentTierParameter pins the routing knob: three rungs, optional, and
+// omitted means san decides rather than the model guessing a model id.
+func TestAgentTierParameter(t *testing.T) {
+	properties := agentToolParameters["properties"].(map[string]any)
+	property, ok := properties["tier"].(map[string]any)
+	if !ok {
+		t.Fatal("Agent schema should expose tier")
+	}
+	if property["type"] != "string" {
+		t.Errorf("tier type = %v, want string", property["type"])
+	}
+	want := []string{"fast", "standard", "deep"}
+	got, ok := property["enum"].([]string)
+	if !ok || len(got) != len(want) {
+		t.Fatalf("tier enum = %v, want %v", property["enum"], want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tier enum = %v, want %v", got, want)
+		}
+	}
+	description, _ := property["description"].(string)
+	for _, phrase := range []string{"Omit it to let san route", "a named definition supplies its own tier"} {
+		if !strings.Contains(description, phrase) {
+			t.Errorf("tier description should say %q: %q", phrase, description)
 		}
 	}
 }
@@ -84,9 +164,26 @@ func TestReadOnlyDelegationTreatsAnUnnamedCallAsReadOnly(t *testing.T) {
 	}
 }
 
+// A call approval already routed must be judged by the definition it will run,
+// not by the name it omitted: a route to an edit worker is not read-only even
+// though the call itself named nothing.
+func TestReadOnlyDelegationJudgesTheRoutedDefinition(t *testing.T) {
+	readOnly := func(name string) bool { return name == "explore" || name == "reviewer" }
+	for agent, want := range map[string]bool{"quick": false, "task": false, "explore": true, "reviewer": true} {
+		args := map[string]any{"prompt": "brief", "_route": tool.AgentRoute{Tier: "fast", Agent: agent}}
+		if got := ReadOnlyDelegation(args, readOnly); got != want {
+			t.Errorf("ReadOnlyDelegation(routed to %s) = %v, want %v", agent, got, want)
+		}
+	}
+	// A pin that routed nothing is still the unnamed default worker.
+	if !ReadOnlyDelegation(map[string]any{"prompt": "brief", "_route": tool.AgentRoute{}}, readOnly) {
+		t.Error("an unrouted pin made an unnamed call look like an edit")
+	}
+}
+
 func TestReadOnlyDelegationFollowsTheRegistry(t *testing.T) {
-	readOnly := func(name string) bool { return name == "explore" || name == "librarian" }
-	cases := map[string]bool{"explore": true, "librarian": true, "task": false, "designer": false, "unknown": false}
+	readOnly := func(name string) bool { return name == "explore" || name == "reviewer" }
+	cases := map[string]bool{"explore": true, "reviewer": true, "task": false, "quick": false, "unknown": false}
 	for name, want := range cases {
 		if got := ReadOnlyDelegation(map[string]any{"name": name, "prompt": "brief"}, readOnly); got != want {
 			t.Errorf("ReadOnlyDelegation(%q) = %v, want %v", name, got, want)

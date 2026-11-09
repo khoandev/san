@@ -60,12 +60,13 @@ func (s *acpSession) configureAgents() {
 	// A definition's "@role" model — and the effort bound to that role — resolves
 	// through this session's settings. s.permissions holds the loaded settings
 	// for the session's CWD.
-	e.SetRoleResolver(roleResolverFor(func() llm.RoleBindings {
+	resolver := roleResolverFor(func() llm.RoleBindings {
 		if s.permissions == nil || s.permissions.settings == nil {
 			return llm.RoleBindings{}
 		}
 		return llm.BindingsOf(s.permissions.settings.ModelRoles, s.permissions.settings.ModelRoleEfforts)
-	}, llm.Default().Store(), s.runtimeBuildParams.Provider, s.runtimeBuildParams.ModelID))
+	}, llm.Default().Store(), s.runtimeBuildParams.Provider, s.runtimeBuildParams.ModelID)
+	e.SetRoleResolver(resolver)
 	e.SetProjectInstructions(strings.Join(instructions, "\n\n"))
 	e.SetSessionStore(s.nativeSession.Store, s.runtimeBuildParams.SessionID)
 	e.SetDisabledTools(s.runtimeBuildParams.DisabledTools)
@@ -73,8 +74,12 @@ func (s *acpSession) configureAgents() {
 	e.SetSkillsDirectory(s.runtimeBuildParams.Skills.PromptSection())
 	e.SetSkillResolver(s.runtimeBuildParams.Skills.SkillInvocationPrompt)
 	e.SetParentPermissionMode(func() subagent.PermissionMode { return parentPosture(s.permissions.SessionPermissions) })
+	// Same automatic-routing wiring the TUI installs, reading the same setting,
+	// so a delegation behaves alike on both surfaces.
+	adapter := subagent.NewExecutorAdapter(e)
+	installAutoTier(adapter, e.AgentRegistry(), s.autoTierEnabled(), resolver)
 	worker := agenttool.NewAgentTool()
-	worker.SetExecutor(subagent.NewExecutorAdapter(e))
+	worker.SetExecutor(adapter)
 	schema := worker.Schema()
 	schema.Description += " ACP supports foreground workers and session-owned background workers. Background requests requiring human approval are denied; use TaskOutput and TaskStop to inspect or cancel."
 	// Only foreground workers inherit the prompt responder; RunBackground starts a fresh context.

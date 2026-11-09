@@ -1,11 +1,33 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/tool"
 )
+
+// tierNames is the depth vocabulary in one place: the schema advertises exactly
+// these, and the tool validates a call against the same list, so a call cannot
+// ask for a depth the model never saw.
+var tierNames = []string{"fast", "standard", "deep"}
+
+// parseTier normalizes the tier a call asked for. An unknown label is an error
+// rather than a silent fallback: a typo would otherwise spend the session model
+// on work the caller meant to route, with nothing reporting the mistake.
+func parseTier(raw string) (string, error) {
+	tier := strings.ToLower(strings.TrimSpace(raw))
+	if tier == "" {
+		return "", nil
+	}
+	for _, name := range tierNames {
+		if tier == name {
+			return tier, nil
+		}
+	}
+	return "", fmt.Errorf("unknown tier %q: must be fast, standard, or deep", raw)
+}
 
 var _ tool.AgentCatalogAwareTool = (*AgentTool)(nil)
 
@@ -23,12 +45,20 @@ func (t *AgentTool) SchemaWithAgentCatalog(agentCatalog string) core.ToolSchema 
 // a definition that cannot write, which is what Plan Mode is willing to
 // delegate. An omitted name is the default worker: a read-only session resolves
 // that to the bundled explore definition, so it counts as read-only. A named
-// call is read-only only when the registry vouches for it.
+// call is read-only only when the registry vouches for it — and so is a call
+// approval already routed, which is judged by the definition it will run rather
+// than the name it omitted.
 func ReadOnlyDelegation(args map[string]any, isReadOnly func(name string) bool) bool {
-	if strings.TrimSpace(tool.GetString(args, "name")) == "" {
+	name := strings.TrimSpace(tool.GetString(args, "name"))
+	if name == "" {
+		if route, pinned := pinnedRoute(args); pinned {
+			name = strings.TrimSpace(route.Agent)
+		}
+	}
+	if name == "" {
 		return true
 	}
-	return isReadOnly != nil && isReadOnly(tool.GetString(args, "name"))
+	return isReadOnly != nil && isReadOnly(name)
 }
 
 func agentSchema(agentCatalog string) core.ToolSchema {
@@ -36,11 +66,14 @@ func agentSchema(agentCatalog string) core.ToolSchema {
 	sb.WriteString("Work directly by default. Delegate only when it offers a clear benefit and needs little prior conversation context.\n\n")
 	if catalog := strings.TrimSpace(agentCatalog); catalog != "" {
 		sb.WriteString(catalog)
-		sb.WriteString("\n\nPick the narrowest definition that covers the work: internal investigation → explore; upstream documentation or API research → librarian; review of finished work → reviewer; user-facing look and feel → designer; a bounded change with a clear definition of done → task. A mapping applies only while the entry it names is listed above; a persona or a disabled definition can remove it, so never name an entry the list does not carry. A read-only entry investigates and reports but never edits, so do not send it a fix. After deciding to delegate, use name to select a predefined agent or omit it for the default Agent. If no definition fits, omit name and describe the work in the prompt. Catalog matches describe suitability, not invocation requirements.\n\n")
+		sb.WriteString("\n\nPick the narrowest definition: investigation, including a dependency's upstream docs, → explore; review → reviewer; a bounded change → task; one small edit the brief spells out → quick. Never name an entry the catalog lacks, and never send a fix to a read-only definition: it never edits. Omit name and tier for routine work and san routes it.\n\n")
 	}
-	sb.WriteString("Brief the agent with only task-local context: the goal, relevant paths, constraints, and known findings. Include the validation plan in the brief. Do not retry denied commands; report the failed tool and reason to the parent.\n\n")
-	sb.WriteString("When delegating multiple independent tasks, launch them concurrently. For new work, use foreground execution when you need the result to proceed, and background execution when you can continue independent work. Do not duplicate delegated work. Verify the result before reporting it.\n\n")
-	sb.WriteString("Use SendMessage with the returned Task ID for follow-up; it keeps the original session and policy. Check uncertain side effects before retrying failed work.")
+	sb.WriteString("Brief by tier — a thicker brief buys a deeper run:\n")
+	sb.WriteString("- fast: one sentence of goal and the command that proves it.\n")
+	sb.WriteString("- standard: the goal, the paths involved, and the definition of done.\n")
+	sb.WriteString("- deep: the goal, exact files, constraints, acceptance criteria, and the risks to weigh.\n\n")
+	sb.WriteString("Brief the agent with only task-local context: the goal, relevant paths, constraints, known findings, and the validation plan. Report a failed tool and its reason instead of retrying a denied command.\n\n")
+	sb.WriteString("Launch independent tasks concurrently: foreground when you need the result to proceed, background when you can continue useful work. Do not duplicate delegated work, and verify the result before reporting it. SendMessage to the returned Task ID continues the same session, model and tier.")
 
 	return core.ToolSchema{
 		Name:        "Agent",
@@ -54,7 +87,7 @@ var agentToolParameters = map[string]any{
 	"properties": map[string]any{
 		"prompt": map[string]any{
 			"type":        "string",
-			"description": "A self-contained task brief with the goal, relevant paths, constraints, known findings, and validation plan.",
+			"description": "A self-contained task brief with the goal, relevant paths, constraints, known findings, and validation plan. Its depth should match the tier.",
 		},
 		"description": map[string]any{
 			"type":        "string",
@@ -63,6 +96,11 @@ var agentToolParameters = map[string]any{
 		"name": map[string]any{
 			"type":        "string",
 			"description": "Optional name for this agent. New names label the task; an existing custom definition supplies its configuration.",
+		},
+		"tier": map[string]any{
+			"type":        "string",
+			"enum":        tierNames,
+			"description": "Optional depth for this call: fast is one small change or lookup, deep is work where extra latency pays. Omit it to let san route the call; a named definition supplies its own tier.",
 		},
 		"run_in_background": map[string]any{
 			"type":        "boolean",

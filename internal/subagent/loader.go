@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -276,6 +277,12 @@ func parseAgentFrontmatter(frontmatter, fallbackName string) (*AgentConfig, erro
 	}
 
 	config.PermissionMode = NormalizePermissionMode(string(config.PermissionMode))
+	// A tier the catalog cannot name is a claim the delegating model cannot act
+	// on, so a definition that declares one declares a real rung.
+	config.Tier = NormalizeAgentTier(string(config.Tier))
+	if !ValidAgentTier(config.Tier) {
+		return nil, fmt.Errorf("invalid tier %q: use fast, standard or deep", config.Tier)
+	}
 
 	if config.Name == "" {
 		config.Name = fallbackName

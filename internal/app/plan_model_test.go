@@ -39,7 +39,7 @@ func startPlanRuntime(t *testing.T, m *model) {
 	}
 }
 
-// Plan Mode builds with the plan role's model when one is assigned, and with the
+// Plan Mode builds with the deep role's model when one is assigned, and with the
 // session model when the role is not — never moving the session's own choice.
 func TestBuildAgentParamsUsesPlanRole(t *testing.T) {
 	cases := []struct {
@@ -47,8 +47,8 @@ func TestBuildAgentParamsUsesPlanRole(t *testing.T) {
 		roles map[string]string
 		want  string
 	}{
-		{name: "assigned plan role answers the turn", roles: map[string]string{"plan": "plan-model"}, want: "plan-model"},
-		{name: "unassigned plan role keeps the session model", want: "m"},
+		{name: "assigned deep role answers the turn", roles: map[string]string{"deep": "plan-model"}, want: "plan-model"},
+		{name: "unassigned deep role keeps the session model", want: "m"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,17 +91,17 @@ func TestBuildAgentParamsUsesPlanRole(t *testing.T) {
 	}
 }
 
-// Plan Mode sends the plan role's own reasoning effort. The session's selection
+// Plan Mode sends the deep role's own reasoning effort. The session's selection
 // belongs to the session model, so it is not carried to a different model the
-// plan role routes the turn to; without a role effort it is rescaled to that
+// deep role routes the turn to; without a role effort it is rescaled to that
 // model's ladder instead of being dropped.
 func TestBuildAgentParamsUsesPlanRoleEffort(t *testing.T) {
 	ladder := &testThinkingProvider{efforts: []string{"low", "medium", "high"}, def: "medium"}
 	build := func(t *testing.T, efforts map[string]string) agent.BuildParams {
 		t.Helper()
-		m := planModeModel(t, map[string]string{"plan": "plan-model"})
+		m := planModeModel(t, map[string]string{"deep": "plan-model"})
 		m.services.Setting = setting.New(&setting.Data{
-			ModelRoles:       map[string]string{"plan": "plan-model"},
+			ModelRoles:       map[string]string{"deep": "plan-model"},
 			ModelRoleEfforts: efforts,
 		})
 		m.env.LLMProvider = ladder
@@ -117,7 +117,7 @@ func TestBuildAgentParamsUsesPlanRoleEffort(t *testing.T) {
 		return params
 	}
 
-	if got := build(t, map[string]string{"plan": "high"}).ThinkingEffort; got != "high" {
+	if got := build(t, map[string]string{"deep": "high"}).ThinkingEffort; got != "high" {
 		t.Fatalf("plan effort = %q, want the role's high over the session's low", got)
 	}
 	if got := build(t, nil).ThinkingEffort; got != "low" {
@@ -125,13 +125,13 @@ func TestBuildAgentParamsUsesPlanRoleEffort(t *testing.T) {
 	}
 }
 
-// Toggling Plan Mode restarts the runtime only when the plan role moves the turn
+// Toggling Plan Mode restarts the runtime only when the deep role moves the turn
 // to a different model and nothing is in flight.
 func TestPlanModeToggleRestartsIdleRuntimeOnly(t *testing.T) {
 	const planModel = "plan-model"
 
 	t.Run("idle runtime restarts for the plan model", func(t *testing.T) {
-		m := planModeModel(t, map[string]string{"plan": planModel})
+		m := planModeModel(t, map[string]string{"deep": planModel})
 		startPlanRuntime(t, m)
 		m.enterPlanMode()
 		if m.services.Agent.Active() {
@@ -143,7 +143,7 @@ func TestPlanModeToggleRestartsIdleRuntimeOnly(t *testing.T) {
 	})
 
 	t.Run("busy runtime keeps the turn it started", func(t *testing.T) {
-		m := planModeModel(t, map[string]string{"plan": planModel})
+		m := planModeModel(t, map[string]string{"deep": planModel})
 		startPlanRuntime(t, m)
 		m.conv.Stream.Active = true
 		m.enterPlanMode()
@@ -162,7 +162,7 @@ func TestPlanModeToggleRestartsIdleRuntimeOnly(t *testing.T) {
 	})
 
 	t.Run("leaving plan mode returns to the session model", func(t *testing.T) {
-		m := planModeModel(t, map[string]string{"plan": planModel})
+		m := planModeModel(t, map[string]string{"deep": planModel})
 		m.enterPlanMode()
 		startPlanRuntime(t, m)
 		// The runtime was built under Plan Mode, on the plan model.
@@ -174,14 +174,14 @@ func TestPlanModeToggleRestartsIdleRuntimeOnly(t *testing.T) {
 	})
 }
 
-// A session resumed while planning builds on the plan role's model, and its
+// A session resumed while planning builds on the deep role's model, and its
 // stored model is still the session's own.
 func TestResumedPlanModeBuildsPlanModel(t *testing.T) {
-	m := planModeModel(t, map[string]string{"plan": "plan-model"})
+	m := planModeModel(t, map[string]string{"deep": "plan-model"})
 	m.plan.EnterPlanMode()
 	state := m.plan.Snapshot()
 
-	resumed := planModeModel(t, map[string]string{"plan": "plan-model"})
+	resumed := planModeModel(t, map[string]string{"deep": "plan-model"})
 	resumed.restorePlanState(state)
 	if resumed.plan.Mode() != plan.ModePlan {
 		t.Fatalf("restored mode = %q, want plan", resumed.plan.Mode())
@@ -192,7 +192,7 @@ func TestResumedPlanModeBuildsPlanModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	if params.ModelID != "plan-model" {
-		t.Fatalf("resumed plan-mode model = %q, want the plan role's model", params.ModelID)
+		t.Fatalf("resumed plan-mode model = %q, want the deep role's model", params.ModelID)
 	}
 	if got := resumed.env.GetModelID(); got != "m" {
 		t.Fatalf("resume moved the session model to %q", got)

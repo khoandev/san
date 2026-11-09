@@ -2,7 +2,8 @@
 name: reviewer
 description: Independent review of a diff, a design or a proposed change — findings only, never edits.
 when-to-use: "When: a change already exists and needs an outside check before merge. Not when: the change still has to be written or fixed (use task) or the question is how existing code works (use explore)."
-model: "@reviewer"
+model: "@deep"
+tier: deep
 mode: explore
 allow_tools: [Read, Bash, WebFetch, WebSearch]
 ---
