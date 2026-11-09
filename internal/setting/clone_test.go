@@ -41,7 +41,7 @@ func TestCloneCopiesEveryField(t *testing.T) {
 		SelfLearn:               SelfLearnSettings{Skills: SelfLearnSkills{DenyCreate: true}, Strategy: "custom"},
 		AutoPilot:               AutoPilotSettings{Model: "openai/gpt"},
 		Advisor:                 AdvisorSettings{Enable: &yes, Model: "openai/gpt-mini"},
-		Agents:                  AgentsSettings{AutoTier: &no},
+		Agents:                  AgentsSettings{AutoTier: &no, Roles: map[string]string{AgentReviewer: "deep"}},
 		LastOperationMode:       "auto",
 	}
 	v := reflect.ValueOf(*src)
@@ -62,12 +62,14 @@ func TestCloneCopiesEveryField(t *testing.T) {
 	dst.ModelRoleEfforts["smol"] = "changed"
 	*dst.Advisor.Enable = false
 	dst.Agents.AutoTier = &yes
+	dst.Agents.Roles[AgentReviewer] = "changed"
 	dst.Hooks["PreToolUse"][0].Hooks[0].Command = "changed"
 	if *src.BashPreviewLines != 3 || src.Permissions.Allow[0] != "Read" || src.Env["K"] != "v" ||
 		src.Hooks["PreToolUse"][0].Hooks[0].Command != "true" ||
 		src.ModelRoles["smol"] != "anthropic/claude-haiku-4-5" ||
 		src.ModelRoleEfforts["smol"] != "low" ||
 		src.Agents.AutoTierOn() ||
+		src.Agents.Roles[AgentReviewer] != "deep" ||
 		!src.Advisor.Enabled() {
 		t.Fatal("Clone shares storage with its source")
 	}

@@ -41,9 +41,10 @@ type Executor struct {
 	interactions               tool.AgentInteractions
 	provider                   llm.Provider
 	registry                   *Registry
-	resolver                   ProviderResolver // resolves "vendor/model" overrides; nil = same-provider only
-	roleResolver               RoleResolver     // resolves "@role" models; nil = the parent model answers
-	router                     Router           // classifies an unnamed call's brief; nil = no routing
+	resolver                   ProviderResolver    // resolves "vendor/model" overrides; nil = same-provider only
+	roleResolver               RoleResolver        // resolves "@role" models; nil = the parent model answers
+	agentRoles                 func(string) string // agents.roles: the role assigned to a definition; nil = its own
+	router                     Router              // classifies an unnamed call's brief; nil = no routing
 	cwd                        string
 	parentModelID              string // Parent conversation's model ID (used when inheriting)
 	defaultModel               string // Configured model for the default worker; empty inherits.
@@ -179,6 +180,16 @@ type RoleResolver func(role string) RoleAssignment
 // never fail a run.
 func (e *Executor) SetRoleResolver(r RoleResolver) {
 	e.roleResolver = r
+}
+
+// SetAgentRoleSource enables per-agent role overrides: a definition runs on the
+// role the user assigned it (agents.roles, edited in /settings) instead of the
+// role its file declares. The function is called on every launch rather than
+// read once, so a settings save reaches an executor that is already running.
+// "" means the definition keeps the role it declared; a nil function keeps
+// every definition on its own role, which is what a host without settings does.
+func (e *Executor) SetAgentRoleSource(roles func(name string) string) {
+	e.agentRoles = roles
 }
 
 // SetSkillsDirectory provides the skills directory section so subagents
@@ -956,13 +967,54 @@ func (e *Executor) fireSubagentStop(req tool.AgentExecRequest, agentHookID, agen
 // routeModelRef is the model reference a run asks for after routing. A tier is
 // a per-call request for depth, so it moves the run onto that rung even when a
 // worker setting or a definition named a model for the general case; the
-// definition still supplies the charter, tools and mode it declared.
+// definition still supplies the charter, tools and mode it declared. The one
+// thing a tier does not move is a definition the user pinned in /settings: the
+// assignment names both the model and the depth that definition's work asks
+// for, so it outranks a rung — including the one automatic routing inferred
+// from the brief.
 func (e *Executor) routeModelRef(config *AgentConfig, req tool.AgentExecRequest) string {
-	ref := e.configuredModel(config, req.Agent)
-	if tier := strings.TrimSpace(req.Tier); tier != "" {
+	return e.requestedModelRef(config, req.Agent, req.Tier)
+}
+
+// requestedModelRef is the one precedence every model lookup shares, so
+// execution (routeModelRef) and the approval preview
+// (effectiveModelNameAtTier) can never advertise different models:
+//
+//  1. the user's per-agent role assignment (agents.roles), as "@role"
+//  2. a per-call tier request, as "@tier"
+//  3. the definition's own model, or the default worker's configured model
+//
+// An explicit model in the request (req.Model) is not part of this list: it is
+// resolved ahead of all three, in resolveModel.
+func (e *Executor) requestedModelRef(config *AgentConfig, name, tier string) string {
+	if ref := e.assignedRoleRef(config); ref != "" {
+		return ref
+	}
+	if tier = strings.TrimSpace(tier); tier != "" {
 		return "@" + tier
 	}
-	return ref
+	return e.configuredModel(config, name)
+}
+
+// assignedRoleRef is the role the user assigned to the definition a run
+// resolved to, spelled as the "@role" reference the resolver understands, or ""
+// when the definition keeps the role it declared. The source is read on every
+// launch rather than captured, so a settings save reaches an executor that is
+// already running. A display-only row describes the default worker, which is
+// configured through subagentModel instead, so it is never overridden here.
+func (e *Executor) assignedRoleRef(config *AgentConfig) string {
+	if e.agentRoles == nil || config == nil || config.displayOnly {
+		return ""
+	}
+	name := strings.ToLower(strings.TrimSpace(config.Name))
+	if name == "" {
+		return ""
+	}
+	role := strings.TrimPrefix(strings.TrimSpace(e.agentRoles(name)), "@")
+	if role == "" {
+		return ""
+	}
+	return "@" + role
 }
 
 // resolveModel picks the provider, model id and reasoning effort for a run, by
@@ -1044,12 +1096,11 @@ func (e *Executor) effectiveModelName(config *AgentConfig, name string) string {
 
 // effectiveModelNameAtTier is effectiveModelName for a call that asked for a
 // depth: approval must show the model the tier sends the work to, not the
-// definition's own rung, or the user approves a model that never runs.
+// definition's own rung, or the user approves a model that never runs. It goes
+// through requestedModelRef so a definition the user pinned in /settings shows
+// the model its assignment sends the work to, not one the tier would have.
 func (e *Executor) effectiveModelNameAtTier(config *AgentConfig, name, tier string) string {
-	ref := e.configuredModel(config, name)
-	if strings.TrimSpace(tier) != "" {
-		ref = "@" + strings.TrimSpace(tier)
-	}
+	ref := e.requestedModelRef(config, name, tier)
 	role, ok := llm.ParseRoleAlias(ref)
 	if !ok {
 		return ref

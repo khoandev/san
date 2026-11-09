@@ -145,27 +145,72 @@ func (m *model) teardownAdvisor() {
 	m.services.Advisor = nil
 }
 
-// resolveAdvisorModel picks the review provider and model: the advisor's own
-// model when the user set one, otherwise the deep role's binding, otherwise the
-// session model. The advisor is what the deep role exists for — a thorough
-// review where the extra latency is acceptable. A nil provider means nothing is
-// connected and no review can run.
+// advisorRole answers the model role a review runs on: the role the agents tab
+// assigns to the advisor (agents.roles.advisor), otherwise the deep rung — the
+// role the advisor exists for, a thorough review where the extra latency is
+// acceptable. A legacy advisor.model written as "@role" names the same slot;
+// loading and saving settings fold it onto agents.roles, so this reads it only
+// for settings built without that fold (a test, or a file edited mid-session).
+func (m *model) advisorRole(cfg setting.AdvisorSettings) llm.ModelRole {
+	if m.services.Setting != nil {
+		if assigned := m.services.Setting.AgentRole(setting.AgentAdvisor); assigned != "" {
+			return llm.ModelRole(assigned)
+		}
+	}
+	if role, isRole := llm.ParseRoleAlias(cfg.Model); isRole {
+		return llm.ModelRole(role)
+	}
+	return llm.RoleDeep
+}
+
+// advisorModelPin answers the concrete model reference that pins a review, if
+// one applies: advisor.model's old shape, which the agents tab has no control
+// for. A role reference is not a pin — advisorRole reads it — and an assigned
+// role supersedes a pin, the same precedence UpdateAgentsAt writes.
+func (m *model) advisorModelPin(cfg setting.AdvisorSettings) (string, bool) {
+	ref := strings.TrimSpace(cfg.Model)
+	if ref == "" {
+		return "", false
+	}
+	if _, isRole := llm.ParseRoleAlias(ref); isRole {
+		return "", false
+	}
+	if m.services.Setting != nil && m.services.Setting.AgentRole(setting.AgentAdvisor) != "" {
+		return "", false
+	}
+	return ref, true
+}
+
+// resolveAdvisorModel picks the review provider and model: a concrete
+// advisor.model pin when the file still carries one, else the role assigned to
+// the advisor resolved through the live modelRoles bindings, else the session
+// model. A nil provider means nothing is connected and no review can run.
 func (m *model) resolveAdvisorModel(cfg setting.AdvisorSettings) (llm.Provider, string) {
-	target := m.resolveRoleWithOverride(llm.RoleDeep, cfg.Model)
+	if ref, pinned := m.advisorModelPin(cfg); pinned {
+		target := m.resolveRoleWithOverride(llm.RoleDeep, ref)
+		return target.Provider, target.ModelID
+	}
+	target := m.resolveRole(m.advisorRole(cfg))
 	return target.Provider, target.ModelID
 }
 
 // advisorSignature is a stable fingerprint of everything that changes what a
-// review does: whether it runs and which model answers. ensureAgentRuntime
-// compares it against the live runner's value, so an /advisor save, a
-// settings-file edit or a model switch rebuilds the runner on the next turn.
+// review does: whether it runs, which role answers it, and the model that role
+// resolves to. ensureAgentRuntime compares it against the live runner's value,
+// so an /advisor save, a role change in the agents tab, a settings-file edit or
+// a model switch rebuilds the runner on the next turn.
 func (m *model) advisorSignature() string {
 	cfg := m.env.Advisor
 	if !cfg.Enabled() {
 		return ""
 	}
-	_, modelID := m.resolveAdvisorModel(cfg)
-	return cfg.Model + "\x00" + modelID
+	if ref, pinned := m.advisorModelPin(cfg); pinned {
+		target := m.resolveRoleWithOverride(llm.RoleDeep, ref)
+		return "pin:" + ref + "\x00" + target.ModelID
+	}
+	role := m.advisorRole(cfg)
+	_, modelID := m.resolveRoleModel(role)
+	return "role:" + string(role) + "\x00" + modelID
 }
 
 // reviewCompletedTurn starts a review of what this turn added to the

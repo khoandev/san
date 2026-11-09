@@ -130,7 +130,7 @@ func (l *Loader) Load() (*Data, error) {
 		// onto their rung here, so the later file's rung outranks the earlier
 		// one's the way every other setting does. Folding the merged map would
 		// instead let the user's retired name beat the project's new one.
-		foldModelRoles(&s)
+		foldSettings(&s)
 		if src.project && l.untrusted && !(src.local && UntrackedInRepo(src.path)) {
 			s = Data{Permissions: PermissionSettings{Deny: s.Permissions.Deny, Ask: s.Permissions.Ask}}
 		}
@@ -228,7 +228,7 @@ func (l *Loader) LoadFile(path string) (*Data, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
-	foldModelRoles(&s)
+	foldSettings(&s)
 	return &s, nil
 }
 
@@ -243,7 +243,7 @@ func (l *Loader) saveToFile(path string, settings *Data) error {
 		return err
 	}
 	merged := mergeSettings(existing, settings)
-	foldModelRoles(merged)
+	foldSettings(merged)
 	return atomicfile.WriteJSON(path, merged, 0o644)
 }
 
@@ -315,10 +315,16 @@ func updateSettingsFile(scope Scope, mutate func(*Data)) error {
 	if err := atomicfile.ReadJSON(path, existing); err != nil {
 		return err
 	}
+	// Fold before the mutator, not only after it: a mutator that replaces a
+	// block must see the file's legacy spellings already migrated, or replacing
+	// advisor would drop a model pin the fold would have moved onto
+	// agents.roles. The fold after the write stays, for whatever the mutator
+	// writes in a retired spelling.
+	foldSettings(existing)
 	mutate(existing)
 	// Every write folds too, so a legacy key left in the file by an older san
 	// is migrated by any save instead of waiting for a hand edit.
-	foldModelRoles(existing)
+	foldSettings(existing)
 	if err := atomicfile.WriteJSON(path, existing, 0o644); err != nil {
 		return err
 	}
@@ -529,6 +535,68 @@ func UpdateAdvisorAt(cfg AdvisorSettings, scope Scope) error {
 		return err
 	}
 	return updateSettingsFile(scope, func(d *Data) { d.Advisor = cfg })
+}
+
+// ValidateAgentRoles checks an agents.roles map before it is written: every
+// value must be a role name, with the "@" an agent definition's model field
+// carries allowed but not required, and every key must name an agent. An agent
+// whose role is unknown is rejected here rather than stored as a slot that
+// silently resolves nothing; an agent name is only required to be non-empty,
+// because a hand-edited file may route a plugin agent whose name the built-ins
+// do not describe.
+func ValidateAgentRoles(roles map[string]string) error {
+	for name, value := range roles {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("agents.roles: an agent name is required")
+		}
+		role := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "@"))
+		if _, err := ModelRoleName(role); err != nil {
+			return fmt.Errorf("agent %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// UpdateAgentsAt persists the agents tab's settings at the requested level in
+// one read-modify-write: the agents.roles bindings and the advisor block, so a
+// save that turns the advisor on and moves an agent's role cannot land half
+// applied. It rewrites only those two blocks, leaving every other setting in
+// the file untouched, and it replaces agent roles wholesale at this level the
+// way UpdateModelRolesAt does — a role removed from the map must stop being
+// assigned, which a merge could not express. Cross-level layering still merges
+// per key on Load, so a project may pin the agents it cares about.
+//
+// It takes the roles map rather than an AgentsSettings: the tab does not own
+// agents.autoTier, and a signature that accepted the whole block would let a
+// caller believe it had saved that switch. updateSettingsFile folds the file
+// before this mutator runs, so a legacy advisor.model has already moved onto
+// agents.roles.advisor by the time the block is replaced; a caller passing the
+// effective bindings (as the panel does) therefore keeps the assignment.
+func UpdateAgentsAt(roles map[string]string, advisor AdvisorSettings, scope Scope) error {
+	if err := ValidateAgentRoles(roles); err != nil {
+		return err
+	}
+	if err := advisor.Validate(); err != nil {
+		return err
+	}
+	// Fold before writing, so the file holds canonical role names — a retired
+	// name lands on the rung that answers its work, the same way a modelRoles
+	// write folds.
+	folded := foldAgentRoleMap(roles)
+	return updateSettingsFile(scope, func(d *Data) {
+		// A saved advisor role supersedes a legacy concrete pin: the pin can no
+		// longer decide what answers, so keeping it would only mislead a reader
+		// of the file. With no advisor role assigned and no model passed, the
+		// file's own pin stands — the tab assigns roles and has no control for
+		// a concrete model, so its absence is "no opinion", not "clear it".
+		if _, assigned := folded[AgentAdvisor]; assigned {
+			advisor.Model = ""
+		} else if strings.TrimSpace(advisor.Model) == "" {
+			advisor.Model = d.Advisor.Model
+		}
+		d.Agents.Roles = folded
+		d.Advisor = advisor
+	})
 }
 
 // UpdateLastOperationMode persists the user-wide mode restored when a new

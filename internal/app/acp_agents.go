@@ -67,6 +67,18 @@ func (s *acpSession) configureAgents() {
 		return llm.BindingsOf(s.permissions.settings.ModelRoles, s.permissions.settings.ModelRoleEfforts)
 	}, llm.Default().Store(), s.runtimeBuildParams.Provider, s.runtimeBuildParams.ModelID)
 	e.SetRoleResolver(resolver)
+	// The role /settings assigns to a definition outranks the one its file
+	// declares, read from this session's settings on every launch.
+	agentRole := func(name string) string {
+		if s.permissions == nil || s.permissions.settings == nil {
+			return ""
+		}
+		return s.permissions.settings.AgentRole(name)
+	}
+	e.SetAgentRoleSource(agentRole)
+	// The Agent tool's catalog advertises the role a definition will actually
+	// run on, so a delegating model reads the same answer the executor uses.
+	s.agents.SetAgentRoleSource(agentRole)
 	e.SetProjectInstructions(strings.Join(instructions, "\n\n"))
 	e.SetSessionStore(s.nativeSession.Store, s.runtimeBuildParams.SessionID)
 	e.SetDisabledTools(s.runtimeBuildParams.DisabledTools)

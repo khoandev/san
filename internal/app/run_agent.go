@@ -79,6 +79,9 @@ func RunAgent(opts AgentRunOptions) error {
 	executor.SetRoleResolver(roleResolverFor(func() llm.RoleBindings {
 		return llm.BindingsOf(workerSettings.ModelRoles, workerSettings.ModelRoleEfforts)
 	}, llm.Default().Store(), provider, modelID))
+	// A role assigned to a definition in /settings outranks the role its file
+	// declares, so a headless run answers on the same model the tab shows.
+	executor.SetAgentRoleSource(workerSettings.AgentRole)
 
 	if opts.Name != "" {
 		fmt.Printf("Agent: %s\n", opts.Name)

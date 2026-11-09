@@ -17,6 +17,7 @@ import (
 	"github.com/genai-io/san/internal/app/trigger"
 	"github.com/genai-io/san/internal/broker"
 	"github.com/genai-io/san/internal/hook"
+	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/task"
@@ -55,9 +56,10 @@ func newModel(opts setting.RunOptions) (*model, error) {
 	m.userInput.Autopilot.SetEngagedSource(m.autopilotEngaged)
 	m.userInput.Autopilot.SetModelSource(m.connectedModelRefs)
 	m.userInput.Autopilot.SetEffortSource(m.autopilotModelEfforts)
-	// The /settings Advisor tab picks its review model from the same connected
-	// providers, so both pickers answer the same list.
-	m.userInput.Settings.SetModelSource(m.connectedModelRefs)
+	// The /settings agents tab assigns model roles, so its rows show which
+	// model each role resolves to and which role a definition declares by
+	// itself — the same answers the executor and /agents use.
+	m.userInput.Settings.SetAgentRoleSource(m.agentsRoleSource())
 	// /agents shows which model each definition will run: the bundled ones name
 	// a role, so the list resolves it through the same bindings the executor
 	// reads instead of echoing "@slow" back at the user.
@@ -73,6 +75,40 @@ func newModel(opts setting.RunOptions) (*model, error) {
 	// an empty tasks/<startup-id>/ behind and kept writing there.
 	m.initTaskStorage(m.sessionID())
 	return m, nil
+}
+
+// agentsRoleSource feeds the /settings agents tab: the role a bundled definition
+// declares in its own file, and what a role resolves to. The tab never reads
+// settings or the provider store itself, so it cannot drift from what the
+// executor will actually use.
+func (m *model) agentsRoleSource() input.AgentRoleSource {
+	return input.AgentRoleSource{
+		Effective: m.effectiveAgentRole,
+		Resolve: func(role string) (string, string) {
+			target := m.resolveRole(llm.ModelRole(role))
+			return target.ModelID, m.resolveRoleEffort(target)
+		},
+	}
+}
+
+// effectiveAgentRole answers the role a definition declares and the model and
+// effort that role resolves to. A definition that names a concrete model, or a
+// name the registry does not know, reports no role: the tab then shows that the
+// definition is not role-routed instead of inventing one.
+func (m *model) effectiveAgentRole(agent string) (string, string, string) {
+	if m.services.Subagent == nil {
+		return "", "", ""
+	}
+	config, exists, _ := m.services.Subagent.LookupAgent(agent)
+	if !exists || config == nil {
+		return "", "", ""
+	}
+	role, isRole := llm.ParseRoleAlias(config.Model)
+	if !isRole {
+		return "", "", ""
+	}
+	model, effort, _ := m.agentModelForRef(config.Model)
+	return role, model, effort
 }
 
 func newBaseModel() model {

@@ -499,6 +499,17 @@ func (m *model) workerModel() string {
 	return effectiveWorkerModel(m.services.Setting.SubagentModel(), m.services.Setting.ModelRole(string(llm.RoleStandard)))
 }
 
+// agentRoleFor answers the role /settings assigns to a built-in agent
+// (agents.roles), or "" when the agent keeps the role its definition declared.
+// It reads live settings on every launch, so a save reaches an executor that is
+// already running; the executor calls it per run rather than capturing a map.
+func (m *model) agentRoleFor(name string) string {
+	if m.services.Setting == nil {
+		return ""
+	}
+	return m.services.Setting.AgentRole(name)
+}
+
 // effectiveWorkerModel is workerModel's precedence rule, shared with the
 // headless runner, which holds a *setting.Data rather than a TUI model.
 func effectiveWorkerModel(subagentModel, taskRole string) string {
@@ -549,8 +560,8 @@ func (m *model) autopilotModelEfforts(ref string) []string {
 }
 
 // connectedModelRefs lists "vendor/model" refs for the model pickers (the
-// /autopilot judge and the /settings Advisor tab): the cached models of each
-// connected provider under its connected auth method.
+// /autopilot judge and /models): the cached models of each connected provider
+// under its connected auth method.
 func (m *model) connectedModelRefs() []string {
 	store := m.services.LLM.Store()
 	if store == nil {
@@ -974,6 +985,11 @@ func (m *model) ReconfigureAgentTool() {
 	executor.SetResolver(llm.NewProviderPool(m.services.LLM.Store()))
 	resolver := roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID())
 	executor.SetRoleResolver(resolver)
+	executor.SetAgentRoleSource(m.agentRoleFor)
+	// The Agent tool's catalog advertises the role each definition will run on,
+	// so a model choosing an agent reads what /settings configured rather than
+	// what the definition file alone declares.
+	m.services.Subagent.SetAgentRoleSource(m.agentRoleFor)
 	perms := m.env.SessionPermissions
 	executor.SetParentPermissionMode(func() subagent.PermissionMode {
 		return parentPosture(perms)

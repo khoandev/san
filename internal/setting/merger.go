@@ -38,6 +38,9 @@ func mergeSettings(base, overlay *Data) *Data {
 	// An explicit false must survive a project layer that says nothing, which
 	// is why the switch is a pointer and the merge coalesces it.
 	result.Agents.AutoTier = coalescePtr(overlay.Agents.AutoTier, base.Agents.AutoTier)
+	// Agent roles merge per key the way the model-role maps do: a project may
+	// pin the agents it cares about and leave the rest to the user's file.
+	result.Agents.Roles = mergeMaps(base.Agents.Roles, overlay.Agents.Roles)
 	result.AutoMemoryDirectory = coalesce(overlay.AutoMemoryDirectory, base.AutoMemoryDirectory)
 	result.ContextBar = coalescePtr(overlay.ContextBar, base.ContextBar)
 	result.GitBar = coalescePtr(overlay.GitBar, base.GitBar)

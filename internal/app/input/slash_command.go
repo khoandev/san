@@ -428,7 +428,7 @@ func (c *SlashCommandController) handleResumeCommand(_ context.Context, _ string
 }
 
 // handleSettingsCommand opens the /settings popup (Appearance, Permissions,
-// Advisor and General). Self-learning lives in its own /evolve popup.
+// Agents and General). Self-learning lives in its own /evolve popup.
 func (c *SlashCommandController) handleSettingsCommand(_ context.Context, _ string) (string, tea.Cmd, error) {
 	c.env.Input.Settings.Enter(c.env.Width, c.env.Height)
 	return "", nil, nil

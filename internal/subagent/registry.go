@@ -17,6 +17,11 @@ type Registry struct {
 	projectStore *AgentStore     // Project-level enabled/disabled states
 	personaAllow map[string]bool // active persona's visible-agent allow-list (nil = no restriction)
 	cwd          string          // Current working directory
+
+	// agentRoles answers the model role /settings assigns to a definition, or ""
+	// when it keeps the one its own file declares. The catalog reads it per
+	// build, so the resolver must read live settings rather than a snapshot.
+	agentRoles func(name string) string
 }
 
 // NewRegistry creates an empty registry for user, project, and plugin-defined agents.
@@ -27,6 +32,15 @@ func NewRegistry() *Registry {
 // defaultRegistry is the package-level agent registry.
 // Layer-two initialization replaces it atomically when loading definitions.
 var defaultRegistry = NewRegistry()
+
+// SetAgentRoleSource wires the resolver that answers which model role /settings
+// assigns to a definition. Passing nil returns the catalog to what each
+// definition declares itself.
+func (r *Registry) SetAgentRoleSource(fn func(name string) string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.agentRoles = fn
+}
 
 // Register adds an agent configuration to the registry
 func (r *Registry) Register(config *AgentConfig) {
@@ -244,7 +258,7 @@ func (r *Registry) AgentCatalog() string {
 			name:      config.Name,
 			desc:      strings.Join(strings.Fields(config.Description), " "),
 			whenToUse: strings.Join(strings.Fields(config.WhenToUse), " "),
-			label:     catalogLabel(config),
+			label:     catalogLabel(config, r.modelRefFor(config)),
 		})
 	}
 
@@ -270,14 +284,29 @@ func (r *Registry) AgentCatalog() string {
 	return sb.String()
 }
 
+// modelRefFor is the model reference the definition's work will actually run on:
+// the role /settings assigns to it when one is set, otherwise the one its own
+// file declares. AgentCatalog calls it with r.mu held, so it reads the resolver
+// field without taking the lock again.
+func (r *Registry) modelRefFor(config *AgentConfig) string {
+	if r.agentRoles != nil {
+		if role := strings.TrimSpace(r.agentRoles(config.Name)); role != "" {
+			return "@" + strings.TrimPrefix(role, "@")
+		}
+	}
+	return config.Model
+}
+
 // catalogLabel summarises what a definition declares: the mode its author set,
-// the role whose model and effort the work is billed to when it names one, and
-// the tier of work it is for. It is the declared mode, not the boundary the
-// runtime ends up enforcing — mode "default" still asks before a mutation, and
-// asks resolve against the parent's posture.
-func catalogLabel(config *AgentConfig) string {
+// the role whose model and effort the work is billed to, and the tier of work it
+// is for. The role is the effective one — an assignment in /settings replaces the
+// one the file declares, and a delegating model reads this catalog before it
+// picks an agent, so the two must not disagree. It is the declared mode, not the
+// boundary the runtime ends up enforcing — mode "default" still asks before a
+// mutation, and asks resolve against the parent's posture.
+func catalogLabel(config *AgentConfig, modelRef string) string {
 	label := modeLabel(config.PermissionMode)
-	if role, ok := llm.ParseRoleAlias(config.Model); ok {
+	if role, ok := llm.ParseRoleAlias(modelRef); ok {
 		label += ", @" + role
 	}
 	if tier := NormalizeAgentTier(string(config.Tier)); tier != "" {

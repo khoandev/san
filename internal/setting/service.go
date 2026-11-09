@@ -162,6 +162,29 @@ func (s *Settings) SubagentModel() string {
 	return s.data.SubagentModel
 }
 
+// AgentRole returns the role agents.roles assigns to the named built-in agent,
+// or "" when the agent keeps the role its definition declared. See
+// Data.AgentRole for the case-folding lookup.
+func (s *Settings) AgentRole(name string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.AgentRole(name)
+}
+
+// AgentRoles returns a copy of the agent→role bindings, so a resolver can hold
+// them without reaching into live settings. An agent with no entry keeps the
+// role its definition declared.
+func (s *Settings) AgentRoles() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data == nil || len(s.data.Agents.Roles) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(s.data.Agents.Roles))
+	maps.Copy(out, s.data.Agents.Roles)
+	return out
+}
+
 // ModelRoles returns a copy of the role→model-reference bindings, so a
 // resolver can hold them without reaching into live settings. An unassigned
 // role has no key.
@@ -278,8 +301,8 @@ func (s *Settings) Hooks() map[string][]Hook {
 // Advisor returns just the advisor configuration, cloned under the read lock.
 // It clones because the type carries tri-state pointers and pattern slices, so
 // a caller could otherwise reach into live settings. Used by the review runner
-// and the /advisor panel, which would pay for a whole Snapshot() to read this
-// one block.
+// and the /settings agents tab, which would pay for a whole Snapshot() to read
+// this one block.
 func (s *Settings) Advisor() AdvisorSettings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

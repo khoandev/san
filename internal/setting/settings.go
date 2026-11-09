@@ -155,17 +155,49 @@ type Data struct {
 	LastOperationMode string `json:"lastOperationMode,omitempty"`
 }
 
-// AgentsSettings tunes how the Agent tool picks a worker.
+// AgentsSettings tunes how the Agent tool picks a worker, and which model role
+// a built-in agent runs on.
 type AgentsSettings struct {
 	// AutoTier lets san choose the definition and depth for a delegation that
 	// named neither (JSON key "agents.autoTier"). Opt-out: nil/absent means on;
 	// false keeps every unnamed call on the plain default worker and spends no
 	// inference classifying it. Read via Settings.AutoTier.
 	AutoTier *bool `json:"autoTier,omitempty"`
+	// Roles assigns a model role to a built-in agent (JSON key "agents.roles"):
+	// "advisor", "quick", "explore", "task" and "reviewer", the names the
+	// /settings agents tab and the bundled definitions share. Keys are agent
+	// names; a value is a role name (lowercase letters, digits and hyphens,
+	// without the "@" an agent definition's model field carries). An agent with
+	// no entry keeps the role its definition declared; an unassigned role still
+	// falls back to the session model, so the map never makes a run fail.
+	// Read via Settings.AgentRole.
+	Roles map[string]string `json:"roles,omitempty"`
 }
+
+// Agent names whose model role agents.roles may assign. They are the bundled
+// definitions the /settings agents tab lists plus the advisor, which is not a
+// definition but is routed the same way.
+const (
+	// AgentAdvisor is the independent reviewer's name in agents.roles.
+	AgentAdvisor = "advisor"
+	// AgentQuick is the bundled quick definition's name.
+	AgentQuick = "quick"
+	// AgentExplore is the bundled explore definition's name.
+	AgentExplore = "explore"
+	// AgentTask is the bundled task definition's name.
+	AgentTask = "task"
+	// AgentReviewer is the bundled reviewer definition's name.
+	AgentReviewer = "reviewer"
+)
 
 // AutoTierOn reports whether automatic routing is enabled. Unset counts as on.
 func (a AgentsSettings) AutoTierOn() bool { return a.AutoTier == nil || *a.AutoTier }
+
+// IsZero reports whether the block configures nothing, so settings.json omits
+// an empty "agents" object. It is needed because NewData and Clone give Roles
+// storage: without the method a non-nil empty map would count as a value and
+// every file would carry "agents":{}.
+func (a AgentsSettings) IsZero() bool { return a.AutoTier == nil && len(a.Roles) == 0 }
 
 // AutoPilotSettings tunes the autopilot copilot. Every field is optional;
 // empty keeps the built-in defaults (session model + built-in system prompt, no
@@ -363,8 +395,10 @@ type AdvisorSettings struct {
 	// Enable turns the advisor on. Opt-in: nil/absent means off, because a
 	// review costs model calls. Read via Enabled().
 	Enable *bool `json:"enable,omitempty"`
-	// Model is the "vendor/model" ref the advisor reviews with. Empty uses the
-	// session model, the same way a subagent with no model set does.
+	// Model is a concrete "vendor/model" ref that pins the review, a spelling
+	// from before agents.roles existed. Empty reviews on the role agents.roles
+	// assigns to the advisor — deep unless the agents tab moved it. A "@role"
+	// value is folded onto agents.roles when settings load. See Data.AgentRole.
 	Model string `json:"model,omitempty"`
 }
 
@@ -913,6 +947,7 @@ func NewData() *Data {
 		DisabledTools:    make(map[string]bool),
 		ModelRoles:       make(map[string]string),
 		ModelRoleEfforts: make(map[string]string),
+		Agents:           AgentsSettings{Roles: make(map[string]string)},
 	}
 }
 
@@ -979,6 +1014,7 @@ func (s *Data) Clone() *Data {
 	dst.AutoUpdate = clonePtr(s.AutoUpdate)
 	dst.AutoMemory = clonePtr(s.AutoMemory)
 	dst.Agents.AutoTier = clonePtr(s.Agents.AutoTier)
+	dst.Agents.Roles = maps.Clone(s.Agents.Roles) // nil stays nil: omitempty
 	dst.ContextBar = clonePtr(s.ContextBar)
 	dst.GitBar = clonePtr(s.GitBar)
 	dst.SkillCommands = clonePtr(s.SkillCommands)
@@ -1017,6 +1053,29 @@ func clonePtr[T any](p *T) *T {
 	}
 	v := *p
 	return &v
+}
+
+// AgentRole returns the role agents.roles assigns to the built-in agent name,
+// or "" when the agent keeps the role its definition declared. Lookup folds
+// case and trims, the same reading foldAgentRoleMap takes of the map, so a
+// hand-edited "Reviewer" still answers for "reviewer".
+func (s *Data) AgentRole(name string) string {
+	if s == nil {
+		return ""
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	if role, ok := s.Agents.Roles[name]; ok {
+		return strings.TrimSpace(role)
+	}
+	for key, role := range s.Agents.Roles {
+		if strings.ToLower(strings.TrimSpace(key)) == name {
+			return strings.TrimSpace(role)
+		}
+	}
+	return ""
 }
 
 // ModelRole returns the reference bound to the role name in this Data, or ""

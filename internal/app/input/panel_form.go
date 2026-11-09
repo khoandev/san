@@ -512,22 +512,34 @@ func (f *configForm[T]) renderChoiceRow(i int, row configRow[T], width int) stri
 // The label is an uppercase muted-bold header (the same level as a sub-header),
 // with a muted description and a right-aligned value hint; enter-to-open is in
 // the bottom hint.
+//
+// A narrow card gives up the description before the summary, and then clips the
+// summary's tail: a wrapped settings row explains less than a clipped hint, and
+// the summary is the value the user came to read.
 func (f *configForm[T]) renderEntryRow(i int, row configRow[T], width int) string {
 	left := f.cursorPad(i, row.indent) + selflearnSubHeaderStyle.Render(strings.ToUpper(row.label))
-	if row.desc != "" {
-		left += "  " + selflearnMutedStyle.Render(row.desc)
-	}
-	right := ""
+	summary := ""
 	if row.summary != nil {
-		right = selflearnEntrySummaryStyle.Render(row.summary(&f.snap))
+		summary = row.summary(&f.snap)
 	}
-	if right == "" {
+	if row.desc != "" {
+		withDesc := left + "  " + selflearnMutedStyle.Render(row.desc)
+		if summary == "" || lipgloss.Width(withDesc)+lipgloss.Width(summary)+3 <= width {
+			left = withDesc
+		}
+	}
+	if summary == "" {
 		return left
 	}
 	// Leave a 2-col margin before the card edge so the rail-prefixed row never
-	// spills the summary onto a wrapped line.
-	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right)-2, 1)
-	return left + strings.Repeat(" ", gap) + right
+	// spills the summary onto a wrapped line, plus one column of gap.
+	avail := width - lipgloss.Width(left) - 3
+	if avail < 6 {
+		return left
+	}
+	shown := kit.TruncateText(summary, avail)
+	gap := max(width-lipgloss.Width(left)-lipgloss.Width(shown)-2, 1)
+	return left + strings.Repeat(" ", gap) + selflearnEntrySummaryStyle.Render(shown)
 }
 
 func (f *configForm[T]) renderIntRow(i int, row configRow[T], _ int) string {

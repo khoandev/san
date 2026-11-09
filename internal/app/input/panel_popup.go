@@ -4,7 +4,7 @@
 // panel's body + hint. Each sub-panel implements Panel and owns its body.
 //
 // Two popups are built on this shell today:
-//   - /settings → Appearance, Permissions, Advisor and General panels.
+//   - /settings → Appearance, Permissions, Agents and General panels.
 //   - /evolve   → the skill self-learning panel.
 //
 // To add a panel to either, implement Panel and append it in the popup's
@@ -68,9 +68,9 @@ type PanelPopup struct {
 	panels []Panel
 	index  int
 
-	// modelRefs supplies the Advisor tab's model picker with the connected
-	// "vendor/model" refs. The app injects it after construction.
-	modelRefs func() []string
+	// roleSource tells the Agents tab which role each definition declares and
+	// what a role resolves to. The app injects it after construction.
+	roleSource AgentRoleSource
 
 	active bool
 	width  int
@@ -84,34 +84,34 @@ func newPanelPopup(glyph, title, tagline string, panels ...Panel) PanelPopup {
 }
 
 // NewSettingsSelector builds the /settings popup: Appearance, Permissions,
-// Advisor and General.
+// Agents and General.
 func NewSettingsSelector(settings *setting.Settings) PanelPopup {
-	return newPanelPopup("⚙", "Settings", "appearance, permissions, advisor & general",
+	return newPanelPopup("⚙", "Settings", "appearance, permissions, agents & general",
 		newAppearancePanel(settings), newPermissionsPanel(settings),
-		newAdvisorPanel(settings), newGeneralPanel(settings))
+		newAgentsPanel(settings), newGeneralPanel(settings))
 }
 
 // SetSettings rebinds the Settings panels while keeping the active tab and popup state.
 func (c *PanelPopup) SetSettings(settings *setting.Settings) {
 	c.panels = NewSettingsSelector(settings).panels
-	c.applyModelSource()
+	c.applyRoleSource()
 	if c.active {
 		c.activePanel().Enter()
 	}
 }
 
-// SetModelSource wires the connected "vendor/model" refs the Advisor tab's model
-// picker lists. It is kept on the popup so a rebind through SetSettings does not
-// leave the fresh panel without a list.
-func (c *PanelPopup) SetModelSource(fn func() []string) {
-	c.modelRefs = fn
-	c.applyModelSource()
+// SetAgentRoleSource wires the role resolver behind the Agents tab's rows. It is
+// kept on the popup so a rebind through SetSettings does not leave the fresh
+// panel without one.
+func (c *PanelPopup) SetAgentRoleSource(src AgentRoleSource) {
+	c.roleSource = src
+	c.applyRoleSource()
 }
 
-func (c *PanelPopup) applyModelSource() {
+func (c *PanelPopup) applyRoleSource() {
 	for _, p := range c.panels {
-		if ap, ok := p.(*advisorPanel); ok {
-			ap.SetModelSource(c.modelRefs)
+		if ap, ok := p.(*agentsPanel); ok {
+			ap.SetRoleSource(c.roleSource)
 		}
 	}
 }
