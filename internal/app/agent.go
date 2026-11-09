@@ -199,7 +199,7 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 
 	// Build the autopilot judge into the atomic slot so /autopilot Save can
 	// hot-swap it mid-session; the closures below Load it per call.
-	m.rebuildAutopilotReviewer()
+	m.rebuildAutopilotJudge()
 
 	// Stream timeout overrides. Priority: SAN_* env var > settings.json > core
 	// default (zero value => core picks FirstChunkTimeout=5m, IdleTimeout=60s).
@@ -228,7 +228,7 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		// Interactive answering is opt-in via the Bash steer, read live (via
 		// the synchronized snapshot — this runs on the agent goroutine) so a
 		// mid-session toggle takes effect: without it, bash stays on the
-		// normal non-tty path even in auto-review.
+		// normal non-tty path even in autopilot.
 		if !m.autopilotEngaged() || !m.liveAutopilotConfig().Steers.BashPrompt {
 			return nil
 		}
@@ -258,12 +258,12 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 	}
 	params.PermissionRules = policy.Decide
 	params.CanApproveByHook = policy.CanApproveByHook
-	params.PermissionReview = func(ctx context.Context, name string, args map[string]any, reason string) agent.PermReviewResult {
+	params.PermissionJudge = func(ctx context.Context, name string, args map[string]any, reason string) agent.PermJudgeResult {
 		rt := m.autopilot.Load()
 		if rt == nil {
-			return agent.PermReviewResult{}
+			return agent.PermJudgeResult{}
 		}
-		return policy.Review(ctx, name, args, reason, agent.PermissionReview{
+		return policy.Judge(ctx, name, args, reason, agent.JudgeSnapshot{
 			Engaged: m.autopilotEngaged(), Enabled: rt.cfg.Steers.PermissionOn(),
 			CWD: rt.cwd, UnderGit: rt.underGit, Mission: rt.cfg.ActiveMission(),
 			Judge: rt.judge.Permission, Observe: m.recordDecision,
@@ -452,26 +452,26 @@ func providerName(p llm.Provider) string {
 	return p.Name()
 }
 
-// resolveReviewerModel picks the provider and model for the auto-review judge:
+// resolveJudgeModel picks the provider and model for the autopilot judge:
 // the caller's ref (autoPilot.model) when set, otherwise the smol role,
 // otherwise the session model.
-func (m *model) resolveReviewerModel(ref string) (llm.Provider, string) {
-	p, info := m.resolveReviewer(ref)
+func (m *model) resolveJudgeModel(ref string) (llm.Provider, string) {
+	p, info := m.resolveJudge(ref)
 	return p, info.ModelID
 }
 
-// resolveReviewer resolves a judge model ref to its provider and model, the
-// auto-review/smol path. The info names whichever provider was actually picked,
+// resolveJudge resolves a judge model ref to its provider and model, the
+// autopilot/smol path. The info names whichever provider was actually picked,
 // for capability lookups.
-func (m *model) resolveReviewer(ref string) (llm.Provider, *llm.CurrentModelInfo) {
-	target := m.resolveReviewerTarget(ref)
+func (m *model) resolveJudge(ref string) (llm.Provider, *llm.CurrentModelInfo) {
+	target := m.resolveJudgeTarget(ref)
 	return target.Provider, m.roleModelInfo(target)
 }
 
-// resolveReviewerTarget is the same resolution with its provenance kept, so a
+// resolveJudgeTarget is the same resolution with its provenance kept, so a
 // caller that also sends an effort validates the role's label against the model
 // that actually answers.
-func (m *model) resolveReviewerTarget(ref string) llm.RoleTarget {
+func (m *model) resolveJudgeTarget(ref string) llm.RoleTarget {
 	return m.resolveRoleWithOverride(llm.RoleSmol, ref)
 }
 
@@ -544,7 +544,7 @@ func (m *model) autopilotModelEfforts(ref string) []string {
 	if _, _, ok := llm.ParseVendorModel(ref); !ok {
 		return nil
 	}
-	p, info := m.resolveReviewer(ref)
+	p, info := m.resolveJudge(ref)
 	return llm.ThinkingEffortsForModel(p, m.services.LLM.Store(), info)
 }
 
@@ -567,37 +567,37 @@ func (m *model) connectedModelRefs() []string {
 	return refs
 }
 
-// recordDecision tallies one auto-review decision for the status-bar count and
+// recordDecision tallies one judge decision for the status-bar count and
 // stashes it for the renderer, keyed by the tool call ID carried in ctx and
-// consumed (load + delete) in TakeReviewDecision — so the handoff map only ever
+// consumed (load + delete) in TakeJudgeDecision — so the handoff map only ever
 // holds calls whose result has not arrived yet. The approved flag
 // picks the counter, so the count and the inline annotations can never drift.
 // The count is bumped even when ctx carries no tool call ID; only the stash
 // needs one.
 func (m *model) recordDecision(ctx context.Context, approved bool, reason string) {
 	if approved {
-		m.reviewerApprovals.Add(1)
+		m.judgeApprovals.Add(1)
 	} else {
-		m.reviewerEscalations.Add(1)
+		m.judgeEscalations.Add(1)
 	}
 	if id := core.ToolCallIDFromContext(ctx); id != "" {
-		m.pendingDecisions.Store(id, core.ReviewDecision{Approved: approved, Reason: reason})
+		m.pendingDecisions.Store(id, core.JudgeDecision{Approved: approved, Reason: reason})
 	}
 }
 
-// TakeReviewDecision consumes the decision stashed for a tool call (load + delete),
+// TakeJudgeDecision consumes the decision stashed for a tool call (load + delete),
 // so it stamps exactly one rendered result and the handoff map holds only
-// in-flight calls. Returns nil when the call was not auto-reviewed. Mirrors the
+// in-flight calls. Returns nil when the call was not judged. Mirrors the
 // tool side-effect handoff (Tool.PopSideEffect), consumed at the same point in
 // OnToolResult.
-func (m *model) TakeReviewDecision(callID string) *core.ReviewDecision {
+func (m *model) TakeJudgeDecision(callID string) *core.JudgeDecision {
 	// No empty-callID guard: recordDecision never stores under an empty key, so
 	// LoadAndDelete("") already misses and returns nil.
 	v, ok := m.pendingDecisions.LoadAndDelete(callID)
 	if !ok {
 		return nil
 	}
-	decision := v.(core.ReviewDecision)
+	decision := v.(core.JudgeDecision)
 	return &decision
 }
 
@@ -889,7 +889,7 @@ func (m *model) ResetAgentRuntime() error {
 	m.services.Reminder.ResetConversation()
 	// Compaction must not restore the old conversation's files.
 	m.env.FileCache.Clear()
-	// Stop feeding the L1 reviewer AND cancel the session-scoped context
+	// Stop feeding the L1 judge AND cancel the session-scoped context
 	// so an in-flight fork unblocks immediately instead of holding tokens /
 	// HTTP for up to forkDeadline.
 	m.teardownSelfLearn()

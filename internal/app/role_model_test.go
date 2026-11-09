@@ -90,7 +90,7 @@ func TestRoleModelPrecedence(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m, provider := roleModel(tc.roles, tc.worker)
 
-			smolProvider, smolModel := m.resolveReviewerModel(tc.smol)
+			smolProvider, smolModel := m.resolveJudgeModel(tc.smol)
 			if smolModel != tc.want["smol"] {
 				t.Errorf("smol model = %q, want %q", smolModel, tc.want["smol"])
 			}
@@ -197,8 +197,8 @@ func TestRoleModelWithoutSettings(t *testing.T) {
 			CurrentModel: &llm.CurrentModelInfo{ModelID: "session-model"},
 		},
 	}
-	if p, id := m.resolveReviewerModel(""); p != provider || id != "session-model" {
-		t.Fatalf("resolveReviewerModel = %v, %q; want the session model", p, id)
+	if p, id := m.resolveJudgeModel(""); p != provider || id != "session-model" {
+		t.Fatalf("resolveJudgeModel = %v, %q; want the session model", p, id)
 	}
 	if got := m.workerModel(); got != "" {
 		t.Fatalf("workerModel = %q, want empty (inherit)", got)

@@ -213,7 +213,7 @@ func TestAdvisorPanelFitsTheNarrowestCard(t *testing.T) {
 }
 
 // The model row opens a picker over the connected providers and stores the pick
-// as a "vendor/model" ref the app resolves through resolveReviewer.
+// as a "vendor/model" ref the app resolves through resolveJudge.
 func TestAdvisorPanelPicksAModel(t *testing.T) {
 	p := newTestAdvisorPanel(t)
 	p.SetModelSource(func() []string {

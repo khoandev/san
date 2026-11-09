@@ -44,7 +44,7 @@ func TestFilePermissionsFollowSensitiveSymlinks(t *testing.T) {
 	for _, tool := range []string{"Write", "Edit"} {
 		for _, path := range []string{target, link, dangling, traversal, filepath.Join(dirLink, "new-dir", "new-file")} {
 			decision := d.HasPermissionToUseTool(tool, map[string]any{"file_path": path}, s)
-			if decision.Behavior != perm.Prompt || decision.Reviewable {
+			if decision.Behavior != perm.Prompt || decision.Judgeable {
 				t.Errorf("%s(%s) = %+v, want human confirmation", tool, path, decision)
 			}
 		}
@@ -95,7 +95,7 @@ func TestIsReadOnlyBashCommand(t *testing.T) {
 		"jq -r '.name' package.json",
 		"date",
 		// A file inventory: find | xargs | sort | tail is one inspection.
-		`cd /repo && find internal/reviewer internal/plan -type f -name '*.go' | xargs wc -l | sort -n | tail -60`,
+		`cd /repo && find internal/judge internal/plan -type f -name '*.go' | xargs wc -l | sort -n | tail -60`,
 		// Reading a range out of a file is the other half of surveying code.
 		`cd /repo && sed -n 120,175p internal/llm/registry.go`,
 	}
