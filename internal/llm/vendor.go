@@ -97,11 +97,21 @@ func openCodeOnly(vendorID string, models []ai.Model) []ai.Model {
 	}
 	out := make([]ai.Model, 0, len(models))
 	for _, m := range models {
-		if opencodeFreeModel(m.ID) {
+		if openCodeExposed(m) {
 			out = append(out, m)
 		}
 	}
 	return out
+}
+
+// openCodeExposed reports whether Zen still exposes a model to San. The free
+// tier is the only one San offers, and a free model the data marks deprecated
+// is one the rotation has moved past: Zen keeps answering it until the
+// announced end date, but it is a dead end rather than a choice, so it is not
+// offered. Nothing else about the model changes — a role already routed to one
+// keeps inferring.
+func openCodeExposed(m ai.Model) bool {
+	return opencodeFreeModel(m.ID) && m.Stage.Available() && m.Stage != ai.StageDeprecated
 }
 
 // Name returns San's provider identity, e.g. "anthropic:api_key".
@@ -242,7 +252,9 @@ func (p *vendorProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	listed := slices.DeleteFunc(p.endpoint.Models(), func(m ai.Model) bool { return !m.Stage.Available() })
 	out := make([]ModelInfo, 0, len(listed))
 	for _, m := range listed {
-		if p.vendor.ID == opencodeVendorID && !opencodeFreeModel(m.ID) {
+		// The listing is filtered on the same rule the seed is: Zen's deprecated
+		// free models are still served, and the picker has no use for them.
+		if p.vendor.ID == opencodeVendorID && !openCodeExposed(m) {
 			continue
 		}
 		out = append(out, toModelInfo(p.models.resolve(m)))

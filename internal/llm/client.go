@@ -108,6 +108,14 @@ func resolveModelLimits(p Provider, model string) (contextWindow, maxOutput int,
 			break
 		}
 	}
+	// The listing is not the only source. A model the picker hides — Zen's
+	// deprecated free ones — is still described by San's data, and a role
+	// pinned to one must keep its window rather than fall to 0 and lose
+	// compaction.
+	if vp, ok := p.(*vendorProvider); ok {
+		known := vp.model(model)
+		contextWindow, maxOutput = max(contextWindow, known.ContextWindow), max(maxOutput, known.MaxOutput)
+	}
 
 	// Either the listing stated everything, or it is all there is to ask.
 	fetcher, ok := p.(ModelLimitsFetcher)

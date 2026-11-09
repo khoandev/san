@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/genai-io/sdk-go/pkg/ai"
 	"github.com/genai-io/sdk-go/pkg/ai/catalog"
 	"github.com/genai-io/sdk-go/pkg/ai/endpoint"
 	utls "github.com/refraction-networking/utls"
@@ -60,6 +61,35 @@ func TestOpenCodeFreeModelMatchesTheLineup(t *testing.T) {
 		if opencodeFreeModel(id) {
 			t.Errorf("%q was taken for a free model", id)
 		}
+	}
+}
+
+// Zen rotates its free lineup and keeps the models it retired from it, so the
+// data still carries them. None of them is a choice San offers: a billed model
+// is unreachable by policy, and a deprecated free one is a dead end.
+func TestOpenCodeExposureKeepsCurrentFreeModelsOnly(t *testing.T) {
+	models := []ai.Model{
+		{ID: "big-pickle"},
+		{ID: "glm-5.3-flash-free"},
+		{ID: "glm-5-free", Stage: ai.StageDeprecated},
+		{ID: "nemotron-3-super-free", Stage: ai.StageDeprecated},
+		{ID: "claude-opus-5"},
+		{ID: "gemini-3-pro", Stage: ai.StageDeprecated},
+	}
+
+	var kept []string
+	for _, m := range openCodeOnly(opencodeVendorID, models) {
+		kept = append(kept, m.ID)
+	}
+	want := []string{"big-pickle", "glm-5.3-flash-free"}
+	if strings.Join(kept, ",") != strings.Join(want, ",") {
+		t.Errorf("exposed %v, want %v", kept, want)
+	}
+
+	// Every other vendor keeps its deprecated models: there they are a warning
+	// the picker states, not a dead end.
+	if got := openCodeOnly("deepseek", models); len(got) != len(models) {
+		t.Errorf("a non-Zen vendor lost models: %d of %d kept", len(got), len(models))
 	}
 }
 
