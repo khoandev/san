@@ -2,8 +2,12 @@ package llm
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -149,21 +153,58 @@ func TestOpenCodeShapeRequestKeepsAnExistingRoster(t *testing.T) {
 }
 
 func TestOpenCodeSessionHeadersForAFreeModel(t *testing.T) {
-	headers := opencodeSessionHeaders("big-pickle", "conv-1")
-	if got := headers["User-Agent"]; !strings.HasPrefix(got, opencodeUserAgent) {
-		t.Errorf("User-Agent = %q, want it to lead with %q", got, opencodeUserAgent)
+	const cwd = "/tmp/project"
+	headers := opencodeSessionHeaders("big-pickle", "conv-1", cwd)
+	if got := headers["User-Agent"]; got != opencodeUserAgent {
+		t.Errorf("User-Agent = %q, want %q", got, opencodeUserAgent)
 	}
-	if got := headers["x-opencode-client"]; got != "cli" {
-		t.Errorf("x-opencode-client = %q, want cli", got)
+	if got := headers["x-opencode-client"]; got != opencodeClientName {
+		t.Errorf("x-opencode-client = %q, want %q", got, opencodeClientName)
 	}
-	if got := headers["x-opencode-session"]; !opencodeSessionPattern.MatchString(got) {
-		t.Errorf("x-opencode-session = %q, want the canonical shape", got)
+	session := headers["x-opencode-session"]
+	if !opencodeSessionPattern.MatchString(session) {
+		t.Errorf("x-opencode-session = %q, want the canonical shape", session)
+	}
+	// The 2.2.6 CLI answers to four spellings of the affinity token, and the
+	// gate reads the same token from each.
+	for _, name := range []string{"x-opencode-session-id", "x-session-affinity", "X-Session-Id"} {
+		if got := headers[name]; got != session {
+			t.Errorf("%s = %q, want the session token %q", name, got, session)
+		}
+	}
+	if got := headers["x-opencode-project"]; got != opencodeProjectID(cwd) {
+		t.Errorf("x-opencode-project = %q, want the project's SHA-1", got)
 	}
 
 	// Traffic outside any conversation still carries the header, on this
 	// installation's identity.
-	if got := opencodeSessionHeaders("beam-free", "")["x-opencode-session"]; !opencodeSessionPattern.MatchString(got) {
+	if got := opencodeSessionHeaders("beam-free", "", cwd)["x-opencode-session"]; !opencodeSessionPattern.MatchString(got) {
 		t.Errorf("a conversation-less session header = %q, want the canonical shape", got)
+	}
+}
+
+// The project identity has to match what the CLI sends: SHA-1 of the canonical
+// worktree root, not of the directory a turn happens to start in.
+func TestOpenCodeProjectIDIsTheCanonicalRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "internal", "llm")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha1.Sum([]byte(realRoot))
+	want := hex.EncodeToString(sum[:])
+	if got := opencodeProjectID(sub); got != want {
+		t.Errorf("project ID from a subdirectory = %q, want %q", got, want)
+	}
+	if got := opencodeProjectID(root); got != want {
+		t.Errorf("project ID from the root = %q, want %q", got, want)
 	}
 }
 

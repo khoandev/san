@@ -735,14 +735,23 @@ func TestOpenCodeFreeWire(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if got := headers.Get("User-Agent"); !strings.HasPrefix(got, opencodeUserAgent) {
-		t.Errorf("User-Agent = %q, want it to lead with %q", got, opencodeUserAgent)
+	if got := headers.Get("User-Agent"); got != opencodeUserAgent {
+		t.Errorf("User-Agent = %q, want %q", got, opencodeUserAgent)
 	}
-	if got := headers.Get("x-opencode-client"); got != "cli" {
-		t.Errorf("x-opencode-client = %q, want cli", got)
+	if got := headers.Get("x-opencode-client"); got != opencodeClientName {
+		t.Errorf("x-opencode-client = %q, want %q", got, opencodeClientName)
 	}
-	if got := headers.Get("x-opencode-session"); !opencodeSessionPattern.MatchString(got) {
-		t.Errorf("x-opencode-session = %q, want the canonical ses_ shape", got)
+	session := headers.Get("x-opencode-session")
+	if !opencodeSessionPattern.MatchString(session) {
+		t.Errorf("x-opencode-session = %q, want the canonical ses_ shape", session)
+	}
+	for _, name := range []string{"x-opencode-session-id", "x-session-affinity", "X-Session-Id"} {
+		if got := headers.Get(name); got != session {
+			t.Errorf("%s = %q, want %q", name, got, session)
+		}
+	}
+	if got, want := headers.Get("x-opencode-project"), opencodeProjectID("/tmp/project"); got != want {
+		t.Errorf("x-opencode-project = %q, want %q", got, want)
 	}
 	if got := headers.Get("Authorization"); got != "Bearer "+opencodePublicKey {
 		t.Errorf("Authorization = %q, want the free tier's own spelling", got)

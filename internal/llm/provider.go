@@ -180,7 +180,7 @@ func Complete(ctx context.Context, provider Provider, opts CompletionOptions) (C
 	// the body's own shape whether it serves a request at all, and prefers to
 	// say so in the response than in a header.
 	ShapeRequest(provider, opts.Model, opts.SessionID, opts.WorkingDir, &opts.SystemPrompt, &opts.Tools)
-	headers := mergeHeaders(TurnHeaders(provider, opts.Messages), SessionHeaders(provider, opts.Model, opts.SessionID))
+	headers := mergeHeaders(TurnHeaders(provider, opts.Messages), SessionHeaders(provider, opts.Model, opts.SessionID, opts.WorkingDir))
 	client, err := provider.Client(opts.Model, headers)
 	if err != nil {
 		return CompletionResponse{}, err
@@ -258,19 +258,20 @@ func TurnHeaders(p Provider, msgs []core.Message) map[string]string {
 }
 
 // SessionHeaderProvider is implemented by an endpoint whose headers depend on
-// the conversation a call answers for. Nil for every other provider.
+// the conversation a call answers for and the directory it runs in. Nil for
+// every other provider.
 type SessionHeaderProvider interface {
-	SessionHeaders(modelID, sessionID string) map[string]string
+	SessionHeaders(modelID, sessionID, cwd string) map[string]string
 }
 
 // SessionHeaders returns the headers this conversation needs beyond the
 // endpoint's fixed ones and the turn's own.
-func SessionHeaders(p Provider, modelID, sessionID string) map[string]string {
+func SessionHeaders(p Provider, modelID, sessionID, cwd string) map[string]string {
 	sh, ok := p.(SessionHeaderProvider)
 	if !ok {
 		return nil
 	}
-	return sh.SessionHeaders(modelID, sessionID)
+	return sh.SessionHeaders(modelID, sessionID, cwd)
 }
 
 // mergeHeaders layers over on top of base, later winning on a name both set.

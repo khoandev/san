@@ -53,8 +53,9 @@ type vendorProvider struct {
 	turnHeaders func([]core.Message) map[string]string
 	// sessionHeaders are the headers whose value depends on which conversation
 	// a call answers for — one gateway gates its free tier on the shape of the
-	// session id. Nil everywhere else.
-	sessionHeaders func(modelID, sessionID string) map[string]string
+	// session id and on the project that conversation belongs to. Nil
+	// everywhere else.
+	sessionHeaders func(modelID, sessionID, cwd string) map[string]string
 	// shapeRequest rewrites a turn's system prompt and tool roster before a
 	// client is built. Nil everywhere else.
 	shapeRequest func(modelID, sessionID, cwd string, system *string, tools *[]core.ToolSchema)
@@ -131,12 +132,13 @@ func (p *vendorProvider) TurnHeaders(msgs []core.Message) map[string]string {
 }
 
 // SessionHeaders returns the headers this conversation needs beyond the
-// fixed ones, for the one vendor whose headers vary with the conversation.
-func (p *vendorProvider) SessionHeaders(modelID, sessionID string) map[string]string {
+// fixed ones, for the one vendor whose headers vary with the conversation and
+// the project it belongs to.
+func (p *vendorProvider) SessionHeaders(modelID, sessionID, cwd string) map[string]string {
 	if p.sessionHeaders == nil {
 		return nil
 	}
-	return p.sessionHeaders(modelID, sessionID)
+	return p.sessionHeaders(modelID, sessionID, cwd)
 }
 
 // ShapeRequest rewrites a turn's system prompt and tool roster for the one

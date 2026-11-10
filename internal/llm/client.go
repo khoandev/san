@@ -145,7 +145,7 @@ func (l *Client) TurnClient(msgs []core.Message) (*ai.Client, error) {
 	if p == nil {
 		return nil, errors.New("llm: no provider")
 	}
-	return p.Client(model, mergeHeaders(TurnHeaders(p, msgs), SessionHeaders(p, model, sessionID)))
+	return p.Client(model, mergeHeaders(TurnHeaders(p, msgs), SessionHeaders(p, model, sessionID, l.workingDir())))
 }
 
 // identity is the provider, model and session this client currently answers

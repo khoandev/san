@@ -321,10 +321,9 @@ func configureCustom(catalog.Vendor, *endpoint.Config) error { return nil }
 //
 // It speaks OpenAI Chat Completions, reasons through reasoning_effort, and
 // echoes reasoning_content on every assistant message — Zen refuses a thinking
-// request whose history omits it. The two fixed headers are the fallback
-// identity: a call that reaches the endpoint outside any conversation (a model
-// listing, a usage poll) still has to look like the OpenCode client it claims
-// to be.
+// request whose history omits it. The fixed headers are the fallback identity:
+// a call that reaches the endpoint outside any conversation (a model listing, a
+// usage poll) still has to look like the OpenCode client it claims to be.
 func openCodeZenVendor() catalog.Vendor {
 	return catalog.Vendor{
 		ID:          opencodeVendorID,
@@ -337,10 +336,7 @@ func openCodeZenVendor() catalog.Vendor {
 			Thinking:         ai.ThinkingEffort,
 			ReasoningContent: true,
 		},
-		Headers: map[string]string{
-			"User-Agent":         opencodeUserAgent,
-			"x-opencode-session": opencodeSessionToken(opencodeInstallIDOrMint()),
-		},
+		Headers: opencodeFixedHeaders(),
 	}
 }
 

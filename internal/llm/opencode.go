@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -33,10 +34,11 @@ import (
 // Zen's free tier is gated on the client rather than on a credential, and the
 // gate runs before the key is even looked at. Two things have to hold.
 //
-// The request has to look like the OpenCode client: a User-Agent leading with
-// opencode/<version>, x-opencode-client naming the client, x-opencode-session
-// in its canonical ses_<12 hex><14 alnum> shape, the five tool names the gate
-// knows in the roster, and the working directory in an <env> block.
+// The request has to look like the OpenCode client: the OpenCode User-Agent,
+// x-opencode-client naming the client, the session headers in their canonical
+// ses_<12 hex><14 alnum> shape, the project identity the CLI sends, the five
+// tool names the gate knows in the roster, and the working directory in an
+// <env> block.
 //
 // The connection has to look like it too, and that is the half a port of the
 // request cannot reach: the same key, headers and body sent from curl, OpenSSL,
@@ -49,9 +51,19 @@ import (
 // OpenCode Go client (internal/identity/request.go).
 
 const (
-	// opencodeUserAgent is the canonical OpenCode client. The gate reads only
-	// the leading token, so the rest of the string is free.
-	opencodeUserAgent = "opencode/1.19.3"
+	// opencodeChannel and opencodeVersion identify the released CLI whose wire
+	// identity San mirrors. The gate reads the User-Agent before anything
+	// else, so these move with the installed client rather than staying on the
+	// version the port was first written against.
+	opencodeChannel = "latest"
+	opencodeVersion = "2.2.6"
+
+	// opencodeClientName is what the CLI reports as x-opencode-client.
+	opencodeClientName = "cli"
+
+	// opencodeUserAgent is the full token OpenCode puts on the wire:
+	// opencode/<channel>/<version>/<client>.
+	opencodeUserAgent = "opencode/" + opencodeChannel + "/" + opencodeVersion + "/" + opencodeClientName
 
 	// opencodePublicKey is what the free tier expects as a credential: the
 	// literal "public", not an account key.
@@ -236,23 +248,87 @@ func newUUIDv4() string {
 // What a Zen request carries
 // ---------------------------------------------------------------------------
 
-// opencodeSessionHeaders is the identity every request to Zen carries. Traffic
-// that belongs to no conversation still has to carry the header shape, so it
-// borrows this installation's identity.
-func opencodeSessionHeaders(modelID, sessionID string) map[string]string {
+// opencodeSessionHeaders is the identity every request to Zen carries, in the
+// four spellings the 2.2.6 CLI sends: the same affinity token answers to
+// x-opencode-session, x-opencode-session-id, x-session-affinity and
+// X-Session-Id, while x-opencode-project names the canonical project root.
+// Traffic that belongs to no conversation still has to carry the header shape,
+// so it borrows this installation's identity.
+func opencodeSessionHeaders(modelID, sessionID, cwd string) map[string]string {
 	if sessionID == "" {
 		sessionID = opencodeInstallIDOrMint()
 	}
+	token := opencodeSessionToken(sessionID)
 	headers := map[string]string{
-		"x-opencode-session": opencodeSessionToken(sessionID),
+		"x-opencode-session":    token,
+		"x-opencode-session-id": token,
+		"x-session-affinity":    token,
+		"X-Session-Id":          token,
+	}
+	if project := opencodeProjectID(cwd); project != "" {
+		headers["x-opencode-project"] = project
 	}
 	if opencodeFreeModel(modelID) {
 		// The gate reads the User-Agent's leading token before anything else,
 		// then checks that the request says which client it is.
-		headers["User-Agent"] = opencodeUserAgent + " (san)"
-		headers["x-opencode-client"] = "cli"
+		headers["User-Agent"] = opencodeUserAgent
+		headers["x-opencode-client"] = opencodeClientName
 	}
 	return headers
+}
+
+// opencodeFixedHeaders is the identity a request outside any conversation
+// carries — a model listing, a usage poll. It borrows this installation's
+// session and the process's project root.
+func opencodeFixedHeaders() map[string]string {
+	headers := opencodeSessionHeaders("", "", "")
+	headers["User-Agent"] = opencodeUserAgent
+	headers["x-opencode-client"] = opencodeClientName
+	return headers
+}
+
+// opencodeProjectID is the x-opencode-project value the CLI sends: the SHA-1
+// of the project's canonical root. The root is the nearest ancestor holding a
+// .git entry — the same worktree OpenCode resolves — so a turn started in a
+// subdirectory still carries the repository's identity.
+func opencodeProjectID(cwd string) string {
+	root := opencodeProjectRoot(cwd)
+	if root == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(root))
+	return hex.EncodeToString(sum[:])
+}
+
+// opencodeProjectRoot canonicalizes cwd and walks up to the worktree root. A
+// path outside any repository is its own project, which is what the CLI
+// records for a plain directory.
+func opencodeProjectRoot(cwd string) string {
+	if cwd == "" {
+		dir, err := os.Getwd()
+		if err != nil {
+			return ""
+		}
+		cwd = dir
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		cwd = abs
+	}
+	root := cwd
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			root = dir
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	return root
 }
 
 // opencodeShapeRequest settles the two body-side checks the free tier makes:
