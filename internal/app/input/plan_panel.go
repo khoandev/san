@@ -96,10 +96,10 @@ type PlanPanel struct {
 	editor  textarea.Model
 	draft   plan.Plan // the plan being edited; its identity survives the edit
 
-	// The panel is a fullscreen overlay: Bubble Tea re-renders it on every
-	// spinner tick and window event, so the body is memoized. It depends only
-	// on the snapshot, the cursor, the geometry, and the status line, and
-	// every one of those marks the cache dirty.
+	// Bubble Tea re-renders the panel on every spinner tick and window event,
+	// so the body is memoized. It depends only on the snapshot, the cursor,
+	// the geometry, and the status line, and every one of those marks the
+	// cache dirty.
 	cachedBody    string
 	cachedBodySet bool
 	cachedView    string
@@ -430,6 +430,13 @@ func (p *PlanPanel) handleEditorKey(msg tea.KeyMsg) tea.Cmd {
 
 // ── Render ──────────────────────────────────────────────────────────────
 
+// Docked reports whether the panel renders as a card above the composer
+// instead of taking the alternate screen. It is the panel's default: a plan is
+// reviewed against the conversation that produced it, and a full screen hides
+// exactly that. Editing is the exception — the plan's text is read and
+// rewritten there, so the editor keeps the whole screen.
+func (p *PlanPanel) Docked() bool { return p.active && !p.editing }
+
 // Render implements overlayPanel.
 func (p *PlanPanel) Render() string {
 	if !p.active {
@@ -443,13 +450,47 @@ func (p *PlanPanel) Render() string {
 	if p.cachedViewSet {
 		return p.cachedView
 	}
-	p.cachedView = panelFrame(p.width, p.height, p.innerWidth(), p.header(""), p.body(), p.hint())
+	p.cachedView = p.card()
 	p.cachedViewSet = true
 	return p.cachedView
 }
 
+// card renders the docked panel: the same header, body and hints the full
+// screen version draws, framed in the card and placed where it stands — no
+// vertical centering and no terminal-height box, so the conversation above it
+// stays on screen.
+func (p *PlanPanel) card() string {
+	w := p.innerWidth()
+	rule := apFaintRuleStyle.Render(strings.Repeat("─", w))
+	col := lipgloss.NewStyle().Width(w).Render(
+		p.header("") + "\n" + rule + "\n\n" + p.body() + "\n\n" + p.hint())
+	return apCardStyle.Render(col)
+}
+
+// cardChrome is every card row that is not content: the border and its
+// padding (4), the header and its rule (2), the blank row under the rule (1),
+// the blank row before the hint (1), and the hint itself (1).
+const cardChrome = 9
+
+// dockBudget bounds the whole card: at most three fifths of the terminal, and
+// never past the rows the dock separator leaves, so the conversation the plan
+// was written about keeps most of the screen. A short terminal still gets the
+// chrome plus a row or two — a card that cannot show its buttons is not a
+// smaller card, it is a broken one.
+func (p *PlanPanel) dockBudget() int {
+	return max(min(12, p.height-2), min(p.height*3/5, p.height-4))
+}
+
+// bodyRows is the row budget for the card's content.
+func (p *PlanPanel) bodyRows() int {
+	return max(1, p.dockBudget()-cardChrome)
+}
+
+// innerWidth is the content width of the card. The rounded border and its
+// padding add six columns around it, so this keeps the whole card at
+// min(width-4, 96) and leaves the frame's margins alone.
 func (p *PlanPanel) innerWidth() int {
-	return max(40, min(p.width-12, 96))
+	return max(20, min(p.width-10, 90))
 }
 
 func (p *PlanPanel) header(sub string) string {
@@ -649,9 +690,12 @@ func (p *PlanPanel) steps(pl plan.Plan) string {
 	return b.String()
 }
 
-// stepRows bounds the step list so the buttons never scroll off the card.
+// stepRows bounds the step list so the buttons never scroll off the card: the
+// title and its goal, the STEPS heading, the marker line and the "…" the clip
+// may add all need room, and a plan with more steps than fit finishes its list
+// with "… N more" rather than losing the tail silently.
 func (p *PlanPanel) stepRows() int {
-	return max(3, p.height-24)
+	return max(2, min(p.bodyRows()-10, 8))
 }
 
 func stepMark(step plan.Step, current bool) (string, lipgloss.Style) {
@@ -692,26 +736,45 @@ func (p *PlanPanel) buttons() string {
 	return strings.Join(parts, "  ")
 }
 
+// hint is the key legend under the card. It is one row by contract — the card
+// budget counts it — so on a narrow card the words go before the keys do, and
+// the meanings are what a person loses, never the keys themselves.
 func (p *PlanPanel) hint() string {
-	parts := []string{keycap("←→") + " choose", keycap("enter") + " confirm", keycap("e") + " edit"}
+	keys := []string{keycap("←→"), keycap("enter"), keycap("e")}
+	meanings := []string{" choose", " confirm", " edit"}
 	if p.offersExecute() {
-		parts = append(parts, keycap("c")+" context")
+		keys = append(keys, keycap("c"))
+		meanings = append(meanings, " context")
 	}
-	parts = append(parts, keycap("esc")+" close")
-	return kit.HintLine(parts...)
+	keys = append(keys, keycap("esc"))
+	meanings = append(meanings, " close")
+
+	labelled := make([]string, len(keys))
+	for i := range keys {
+		labelled[i] = keys[i] + meanings[i]
+	}
+	if line := kit.HintLine(labelled...); lipgloss.Width(line) <= p.innerWidth() {
+		return line
+	}
+	return kit.TruncateText(kit.HintLine(keys...), p.innerWidth())
 }
 
-// clip bounds the card body to the terminal so a long plan never pushes the
-// buttons off screen. The tail is what a person must be able to press, so the
-// buttons are rendered last and the clip keeps the last rows.
+// clip bounds the card body so a long plan never pushes the buttons off
+// screen. The tail is what a person must be able to press, so the buttons are
+// rendered last and the clip keeps the last rows. The elision marker takes a
+// row of its own, so the kept prefix gives one up to make room for it: the
+// body never exceeds the budget, chrome and hint included in the card.
 func (p *PlanPanel) clip(body string) string {
 	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
-	limit := max(6, p.height-12)
+	limit := p.bodyRows()
 	if len(lines) <= limit {
 		return strings.Join(lines, "\n")
 	}
 	tail := min(len(lines), 3) // the blank line, the buttons, and any status
-	kept := append([]string{}, lines[:limit-tail]...)
+	if limit <= tail+1 {
+		return strings.Join(lines[len(lines)-limit:], "\n")
+	}
+	kept := append([]string{}, lines[:limit-tail-1]...)
 	kept = append(kept, apSummaryStyle.Render("…"))
 	kept = append(kept, lines[len(lines)-tail:]...)
 	return strings.Join(kept, "\n")

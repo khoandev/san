@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/genai-io/san/internal/app/kit"
@@ -707,6 +708,40 @@ func TestOnlyFullScreenPanelsUseAlternateScreen(t *testing.T) {
 	m.userInput.Settings.Enter(m.env.Width, m.env.Height)
 	if view := m.View(); !view.AltScreen {
 		t.Fatal("fullscreen picker must render in the alternate screen")
+	}
+}
+
+// Reviewing a plan is the other half of the dock: the plan was written about
+// this conversation, so the card sits above the composer and the conversation
+// stays on screen. The editor is the exception — the plan's text is read and
+// rewritten there, so it gets the whole frame.
+func TestPlanPanelDocksAndItsEditorTakesTheAlternateScreen(t *testing.T) {
+	m := newPlanModel(t)
+	ready := testPlan("plan-ready", "Split auth", "read", "move")
+	ready.Status = plan.StatusPendingApproval
+	m.plan.Restore(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{ready}, ActiveID: ready.ID})
+	m.showPlanPanel()
+
+	if !m.userInput.Plan.IsActive() {
+		t.Fatal("the Execution Panel did not open")
+	}
+	if view := m.View(); view.AltScreen {
+		t.Fatal("a plan under review must dock above the composer, not take the screen")
+	}
+	frame, _ := m.viewString()
+	if !strings.Contains(ansi.Strip(frame), "Execution Panel") {
+		t.Fatalf("the docked panel never reached the frame:\n%s", frame)
+	}
+	if !strings.Contains(ansi.Strip(frame), "Execute new plan") {
+		t.Fatalf("the docked panel lost its buttons:\n%s", frame)
+	}
+
+	m.userInput.Plan.HandleKeypress(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if m.userInput.Plan.Docked() {
+		t.Fatal("the editor must take the full screen, not the dock")
+	}
+	if view := m.View(); !view.AltScreen {
+		t.Fatal("the plan editor must render in the alternate screen")
 	}
 }
 

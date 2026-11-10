@@ -1,10 +1,12 @@
 package input
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/genai-io/san/internal/plan"
 )
@@ -429,5 +431,126 @@ func TestPlanPanelHidesContextWhileExecuting(t *testing.T) {
 	p.HandleKeypress(tea.KeyPressMsg{Code: 'c', Text: "c"})
 	if got := p.Context(); got != PlanContextKeep {
 		t.Fatalf("c changed the context with nothing to execute: %q", got)
+	}
+}
+
+// dockBudgetCheck is the card height the panel promises at a terminal size:
+// three fifths of it, never past the rows above the dock separator.
+func dockBudgetCheck(height int) int {
+	return max(min(12, height-2), min(height*3/5, height-4))
+}
+
+// assertDockedCard checks the invariants every docked render must hold: it is
+// a card, not a screen — inside its row and column budget — and it still ends
+// on the hint row with the buttons above it.
+func assertDockedCard(t *testing.T, view string, width, height int) {
+	t.Helper()
+	if got, budget := lipgloss.Height(view), dockBudgetCheck(height); got > budget {
+		t.Fatalf("docked card is %d rows, budget is %d:\n%s", got, budget, view)
+	}
+	if got, limit := lipgloss.Width(view), min(width-4, 96); got > limit {
+		t.Fatalf("docked card is %d columns, want at most %d:\n%s", got, limit, view)
+	}
+	// The hint is the last row by contract; it may drop its words on a narrow
+	// card but never the keys themselves.
+	if !strings.Contains(view, "Esc") {
+		t.Fatalf("docked card lost its hint row:\n%s", view)
+	}
+}
+
+// A docked card spends its rows on the plan, not on the terminal: however long
+// the plan is, the card stops at its budget, says how many steps it hid, and
+// keeps the buttons and the hint.
+func TestPlanPanelDockedCardStaysWithinItsBudget(t *testing.T) {
+	const width, height = 100, 40
+
+	steps := make([]string, 14)
+	for i := range steps {
+		steps[i] = fmt.Sprintf("step %d", i+1)
+	}
+	ready := panelPlan("plan-long", "A long plan", steps...)
+	ready.Status = plan.StatusPendingApproval
+	ready.Goal = strings.Repeat("why this plan exists ", 8)
+	ready.Risks = []string{strings.Repeat("flaky tests ", 10), strings.Repeat("a wide refactor ", 10)}
+	ready.OpenQuestions = []string{strings.Repeat("keep the legacy cookie? ", 6)}
+	ready.Decisions = []plan.Decision{{Text: strings.Repeat("reuse the helper ", 10)}}
+
+	p := NewPlanPanel()
+	p.Enter(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{ready}, ActiveID: ready.ID}, width, height)
+	view := p.Render()
+
+	assertDockedCard(t, view, width, height)
+	for _, want := range []string{"Execution Panel", "A long plan", "pending_approval", "Execute new plan"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("docked card is missing %q:\n%s", want, view)
+		}
+	}
+	// The step list is bounded by the budget and says what it hid.
+	if !strings.Contains(view, "… ") || !strings.Contains(view, "more") {
+		t.Fatalf("a clipped step list must say how much it hid:\n%s", view)
+	}
+	if strings.Contains(view, "14. step 14") {
+		t.Fatalf("the last step fits only if the card is not docked:\n%s", view)
+	}
+
+	if !strings.Contains(view, "confirm") {
+		t.Fatalf("a wide card keeps the hint's words:\n%s", view)
+	}
+
+	// A narrower terminal narrows the card; the frame keeps its margins.
+	p.Resize(60, height)
+	assertDockedCard(t, p.Render(), 60, height)
+}
+
+// The conflict warning is the reason the panel opened in that state, so it
+// outranks the plan's detail and survives the docked budget.
+func TestPlanPanelDockedCardKeepsTheConflictWarning(t *testing.T) {
+	const width, height = 100, 40
+
+	running := panelPlan("plan-old", "Running", "a", "b")
+	running.Status = plan.StatusExecuting
+	running.Steps[0].Status = plan.StepInProgress
+	fresh := panelPlan("plan-new", "Fresh", "x", "y")
+	fresh.Status = plan.StatusPendingApproval
+
+	p := NewPlanPanel()
+	p.Enter(plan.State{
+		Mode:     plan.ModeExecute,
+		Plans:    []plan.Plan{running, fresh},
+		ActiveID: running.ID,
+		DraftID:  fresh.ID,
+	}, width, height)
+
+	view := p.Render()
+	assertDockedCard(t, view, width, height)
+	if !strings.Contains(view, "still unfinished") {
+		t.Fatalf("the docked card dropped the conflict warning:\n%s", view)
+	}
+	if !strings.Contains(view, "Keep existing context") {
+		t.Fatalf("the docked card dropped the conflict buttons:\n%s", view)
+	}
+}
+
+// Reviewing a plan docks it above the composer; editing the plan's text is the
+// one state that needs the whole frame, so it leaves the dock.
+func TestPlanPanelDocksExceptWhileEditing(t *testing.T) {
+	p := NewPlanPanel()
+	ready := panelPlan("plan-1", "Split auth", "read", "move")
+	ready.Status = plan.StatusPendingApproval
+	p.Enter(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{ready}, ActiveID: ready.ID}, 100, 40)
+
+	if !p.Docked() {
+		t.Fatal("a plan under review must dock above the composer")
+	}
+	p.HandleKeypress(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if !p.editing {
+		t.Fatal("e did not open the editor")
+	}
+	if p.Docked() {
+		t.Fatal("the editor must take the full screen, not the dock")
+	}
+	p.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !p.Docked() {
+		t.Fatal("discarding the editor must return the panel to the dock")
 	}
 }

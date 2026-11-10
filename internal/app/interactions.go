@@ -147,7 +147,7 @@ func (m *model) showActiveInteraction() tea.Cmd {
 			return m.advanceInteractions()
 		}
 		m.userInput.Approval.Show(view, m.env.Width, m.env.Height)
-		m.resizeApprovalPanel()
+		m.resizeDockedPanel()
 	case req.Question != nil:
 		m.conv.Modal.Question.ShowFrom(req.Question.Request, m.env.Width, req.Source.Label())
 		// Worker questions require the human; the parent's copilot cannot grant
@@ -161,15 +161,21 @@ func (m *model) showActiveInteraction() tea.Cmd {
 	return nil
 }
 
-func (m *model) resizeApprovalPanel() {
-	if !m.userInput.Approval.IsActive() {
-		return
-	}
+// resizeDockedPanel sizes whichever docked modal is in front to the rows left
+// under the dock separator. The Approval panel fills that space; the Execution
+// Panel keeps the terminal's own geometry and budgets its card down to three
+// fifths of it, so opening the fullscreen editor needs no second resize.
+func (m *model) resizeDockedPanel() {
 	reserved := 2 // blank row and dock separator
 	if m.interactionQueueContext() != "" {
 		reserved++
 	}
-	m.userInput.Approval.Resize(max(1, m.env.Width-1), max(1, m.env.Height-reserved))
+	if m.userInput.Approval.IsActive() {
+		m.userInput.Approval.Resize(max(1, m.env.Width-1), max(1, m.env.Height-reserved))
+	}
+	if m.userInput.Plan.IsActive() {
+		m.userInput.Plan.Resize(m.env.Width, m.env.Height)
+	}
 }
 
 func (m *model) finishInteraction() {

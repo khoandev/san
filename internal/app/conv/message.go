@@ -12,6 +12,7 @@ import (
 
 	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/core"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool"
 	"github.com/genai-io/san/internal/tool/toolresult"
@@ -352,9 +353,12 @@ func RenderCommittedThinkingBlock(thinking string, showIcon bool, width int, md 
 // with the "● " marker (the turn's first content) or a blank continuation
 // gutter. Returns "" when the slice renders empty (e.g. only blank lines).
 func RenderCommittedContentBlock(content string, showBullet bool, md *MDRenderer) string {
-	body := content
+	// The plan protocol travels as fenced JSON; the person reads the plan in
+	// the Execution Panel, not as a block of it. Mask before rendering so the
+	// committed row matches the live one.
+	body := plan.MaskBlocks(content)
 	if md != nil {
-		body = renderMarkdownContent(md, content)
+		body = renderMarkdownContent(md, body)
 	}
 	if strings.TrimSpace(body) == "" {
 		return ""
@@ -370,6 +374,10 @@ func RenderAssistantMessage(params AssistantParams) string {
 	// streaming message are already in scrollback (see FlushStreamingBlocks).
 	params.Thinking = sliceFrom(params.Thinking, params.ThinkingCommittedLen)
 	params.Content = sliceFrom(params.Content, params.ContentCommittedLen)
+	// Plan blocks are masked for display only: the message keeps the JSON the
+	// agent sent, because the transcript, the model's history and a resume all
+	// read Content, and the panel is drawn from the plan store that parsed it.
+	params.Content = plan.MaskBlocks(params.Content)
 
 	// The first content of a turn leads with "● "; once a block has been
 	// committed the bullet is spent and the remainder aligns under a gutter.

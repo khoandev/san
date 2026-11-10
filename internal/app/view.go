@@ -26,7 +26,8 @@ var ghostTextStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
 //
 //  1. Loading splash (env not ready yet)
 //  2. Active fullscreen overlay (slash-command picker / etc.)
-//  3. Active docked modal (Question / Approval) — wrapped between separators
+//  3. Active docked modal (Question / Approval / plan review) — wrapped between
+//     separators
 //  4. Normal mode — chat section + status + input strip
 //
 // The active overlay (cases 2 & 3) comes from activeOverlay — the same
@@ -76,7 +77,7 @@ func (m *model) viewString() (string, *tea.Cursor) {
 	separator := conv.SeparatorStyle.Render(strings.Repeat("─", max(1, m.env.Width-1)))
 	trackerView := m.renderTrackerList()
 
-	if hasOverlay { // docked modal (Question / Approval)
+	if hasOverlay { // docked modal (Question / Approval / plan review)
 		return m.renderDockedModalView(ov, separator, trackerView), nil
 	}
 	return m.renderNormalView(separator, trackerView)
@@ -92,7 +93,7 @@ func (m *model) viewString() (string, *tea.Cursor) {
 // the tail unbounded would push the modal's answer options off the bottom of the
 // screen, which is worse than showing no text at all.
 func (m *model) renderDockedModalView(ov overlayPanel, separator, trackerView string) string {
-	m.resizeApprovalPanel()
+	m.resizeDockedPanel()
 	modal := "\n" + separator + "\n"
 	if context := m.interactionQueueContext(); context != "" {
 		modal += context + "\n"
@@ -110,12 +111,16 @@ func (m *model) renderDockedModalView(ov overlayPanel, separator, trackerView st
 
 // isDockedModal reports whether the active overlay docks above the input area
 // — rendered between separators with the task tracker still visible — rather
-// than taking over the full screen like the slash-command pickers do. Only
-// the Question, Approval, and secret-item modals dock.
+// than taking over the full screen like the slash-command pickers do. The
+// Question, Approval, and secret-item modals dock, and so does the Execution
+// Panel while it is reviewing a plan; its editor takes the full screen,
+// because that is where the plan's text is actually read and rewritten.
 func isDockedModal(ov overlayPanel) bool {
-	switch ov.(type) {
+	switch ov := ov.(type) {
 	case *conv.QuestionPrompt, *input.ApprovalModel, *input.SecretPromptModel:
 		return true
+	case *input.PlanPanel:
+		return ov.Docked()
 	}
 	return false
 }
@@ -421,12 +426,21 @@ func (m model) renderSelfLearnLive() string {
 	return ""
 }
 
+// renderTrackerList composes the strip above the composer: the plan's progress
+// row first, then the tracked tasks.
+//
 // Pointer receiver: Executing below is a *model method value, so a value
 // receiver would take the address of the copy and force the whole model onto
 // the heap on every frame.
+//
+// The plan row is plan state, not a tracked item: it answers to Plan Mode
+// rather than to the ShowTasks toggle, and it is drawn even when no task is
+// running, because "which step is the executor on" is the question the strip
+// exists to answer while a plan runs.
 func (m *model) renderTrackerList() string {
+	planRow := m.renderPlanProgress()
 	if !m.conv.ShowTasks {
-		return ""
+		return planRow
 	}
 	items := m.services.Tracker.List()
 	var running []task.BackgroundTask
@@ -468,7 +482,35 @@ func (m *model) renderTrackerList() string {
 			return task.TaskInfo{}
 		},
 	})
-	return appendLiveWorkflowViews(view, running, m.conv.Spinner.Frame(), m.env.Width)
+	return joinTrackerSections(planRow, appendLiveWorkflowViews(view, running, m.conv.Spinner.Frame(), m.env.Width))
+}
+
+// renderPlanProgress is the plan's one-row progress line, empty unless a plan
+// is executing. The row itself is rendered by conv, so the app keeps no second
+// copy of its shape.
+func (m *model) renderPlanProgress() string {
+	active, ok := m.plan.Active()
+	if !ok {
+		return ""
+	}
+	row := conv.RenderPlanProgress(conv.PlanProgressParams{
+		Mode:  m.plan.Mode(),
+		Plan:  active,
+		Width: m.env.Width,
+	})
+	if row == "" {
+		return ""
+	}
+	return row + "\n"
+}
+
+// joinTrackerSections stacks the plan row over the task block with no blank
+// line between them: the strip sits directly above the composer.
+func joinTrackerSections(planRow, tasks string) string {
+	if planRow == "" {
+		return tasks
+	}
+	return planRow + tasks
 }
 
 func appendLiveWorkflowViews(view string, running []task.BackgroundTask, frame, width int) string {
