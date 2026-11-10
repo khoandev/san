@@ -7,7 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// The usage segment is "icon number" per role that ran, in the order the
+// The usage segment is "role count" per role that ran, in the order the
 // snapshot supplies; an empty count or name is not rendered at all.
 func TestRenderAgentUsage(t *testing.T) {
 	got := stripANSI(RenderAgentUsage([]AgentUsageCount{
@@ -18,8 +18,8 @@ func TestRenderAgentUsage(t *testing.T) {
 		{Name: "custom-a", Count: 4},
 		{Name: "  ", Count: 9},
 	}))
-	if got != "◆3 »2 ✓1 C4" {
-		t.Fatalf("usage = %q, want %q", got, "◆3 »2 ✓1 C4")
+	if got != "advisor 3 · quick 2 · reviewer 1 · custom-a 4" {
+		t.Fatalf("usage = %q", got)
 	}
 
 	if got := RenderAgentUsage(nil); got != "" {
@@ -42,7 +42,7 @@ func TestStatusBarDropsUsageBeforeModelAndContext(t *testing.T) {
 		ContextWindow: 200000,
 		AgentUsage:    []AgentUsageCount{{Name: "quick", Count: 2}},
 	}
-	if got := stripANSI(RenderModeStatus(wide)); !strings.Contains(got, "»2") {
+	if got := stripANSI(RenderModeStatus(wide)); !strings.Contains(got, "quick 2") {
 		t.Fatalf("wide status line lost the usage segment: %q", got)
 	}
 
@@ -51,7 +51,7 @@ func TestStatusBarDropsUsageBeforeModelAndContext(t *testing.T) {
 	justEnough := 3 + lipgloss.Width("Opus 5") + 3 + lipgloss.Width(contextLabel)
 	wide.Width = justEnough
 	got := stripANSI(RenderModeStatus(wide))
-	if strings.Contains(got, "»2") {
+	if strings.Contains(got, "quick 2") {
 		t.Fatalf("narrow status line kept the usage segment: %q", got)
 	}
 	if !strings.Contains(got, "Opus 5") || !strings.Contains(got, plainContext) {

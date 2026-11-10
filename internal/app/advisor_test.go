@@ -458,7 +458,7 @@ func TestStatusBarShowsTheAdvisorState(t *testing.T) {
 	}
 }
 
-// The status line shows each role's request count as icon + number, fed by the
+// The status line shows each role's request count as "role count", fed by the
 // session counter rather than by the transcript.
 func TestStatusBarShowsAgentUsage(t *testing.T) {
 	m := model{
@@ -474,14 +474,14 @@ func TestStatusBarShowsAgentUsage(t *testing.T) {
 	m.env.Width = 120
 
 	got := ansi.Strip(m.renderModeStatus())
-	for _, want := range []string{"»2", "◆3"} {
+	for _, want := range []string{"quick 2", "advisor 3"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("status line %q is missing %q", got, want)
 		}
 	}
 
 	m.services.Usage.Reset()
-	if got := ansi.Strip(m.renderModeStatus()); strings.Contains(got, "»") || strings.Contains(got, "◆") {
+	if got := ansi.Strip(m.renderModeStatus()); strings.Contains(got, "quick 2") || strings.Contains(got, "advisor 3") {
 		t.Fatalf("cleared usage still rendered: %q", got)
 	}
 }

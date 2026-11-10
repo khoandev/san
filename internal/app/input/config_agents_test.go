@@ -89,18 +89,107 @@ func moveToSave(t *testing.T, p *agentsPanel) {
 	t.Fatal("the Save row is unreachable")
 }
 
-// The agents tab is part of /settings, between Permissions and General.
+// The roles live in /settings's Agent tab, between Appearance and General, and
+// no separate Permissions tab remains: the gate is a row inside Agent.
 func TestAgentsTabIsInSettings(t *testing.T) {
 	c := NewSettingsSelector(nil)
 	var titles []string
 	for _, p := range c.panels {
 		titles = append(titles, p.Title())
 	}
-	if !slicesContains(titles, "agents") {
-		t.Fatalf("the /settings popup has no agents tab: %v", titles)
+	if got := strings.Join(titles, ","); got != "appearance,agent,general" {
+		t.Fatalf("/settings tabs = %q, want appearance,agent,general", got)
 	}
-	if slicesContains(titles, "advisor") {
-		t.Fatalf("the advisor tab is still listed: %v", titles)
+	for _, gone := range []string{"advisor", "permissions", "agents"} {
+		if slicesContains(titles, gone) {
+			t.Fatalf("%q is still a top-level tab: %v", gone, titles)
+		}
+	}
+	if _, ok := c.panels[1].(*agentPanel); !ok {
+		t.Fatalf("the middle tab is %T, want the merged agent tab", c.panels[1])
+	}
+}
+
+// The merged tab keeps both halves reachable from one row list: the gate row
+// leads, every agent role row follows, and the roles keep their user/project
+// scope control.
+func TestAgentTabHostsTheGateAndTheRoles(t *testing.T) {
+	tab := newAgentPanel(nil)
+	tab.Enter()
+	if got := tab.Title(); got != "agent" {
+		t.Fatalf("tab title = %q, want agent", got)
+	}
+
+	rows := tab.agents.form.rowsFn()
+	if rows[1].kind != rowEntry || rows[1].entryID != permissionsEntry {
+		t.Fatalf("rows[1] = %+v, want the gate entry row", rows[1])
+	}
+	if got := rows[1].summary(nil); got != "allowed" {
+		t.Fatalf("gate summary = %q, want allowed", got)
+	}
+	entryIDs := map[string]bool{}
+	for _, row := range rows {
+		if row.kind == rowEntry {
+			entryIDs[row.entryID] = true
+		}
+	}
+	for _, agent := range managedAgents {
+		if !entryIDs[agent] {
+			t.Fatalf("agent %q has no role row: %v", agent, entryIDs)
+		}
+	}
+	if scopes := tab.agents.form.scopesOrDefault(); len(scopes) != 2 || scopes[0] != scopeUser || scopes[1] != scopeProject {
+		t.Fatalf("role form scopes = %v, want user then project", scopes)
+	}
+
+	// Enter on the leading row opens the gate; it stays inside the tab, and
+	// esc backs out instead of closing /settings.
+	if _, done := tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}); done || !tab.inPerms {
+		t.Fatalf("enter on the gate row: done=%v inPerms=%v, want a sub-view inside the tab", done, tab.inPerms)
+	}
+	if !tab.Modal() || tab.Breadcrumb() != "permissions" {
+		t.Fatalf("gate sub-view: modal=%v crumb=%q", tab.Modal(), tab.Breadcrumb())
+	}
+	if tab.agents.form.Dirty() {
+		t.Fatalf("the roles must stay clean while the gate sub-view is open")
+	}
+	tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if tab.inPerms {
+		t.Fatalf("esc should leave the gate sub-view")
+	}
+}
+
+// Locking the gate from inside the merged tab writes allowBypass=false and
+// keeps /settings open, so the new state is visible where it was set.
+func TestAgentTabGateSavesWithoutClosingThePopup(t *testing.T) {
+	home := tempHome(t)
+
+	tab := newAgentPanel(nil)
+	tab.Enter()
+	tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}) // open the gate
+	if !tab.inPerms {
+		t.Fatalf("the gate sub-view did not open")
+	}
+	tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown}) // Allowed → Locked
+	if !tab.Dirty() {
+		t.Fatalf("moving off the baseline should mark the tab dirty")
+	}
+	cmd, done := tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if done {
+		t.Fatalf("a gate save must not dismiss /settings")
+	}
+	if tab.inPerms {
+		t.Fatalf("a gate save should return to the tab body")
+	}
+	msg, ok := cmd().(AllowBypassSavedMsg)
+	if !ok || msg.Allowed {
+		t.Fatalf("expected AllowBypassSavedMsg{Allowed:false}, got %#v", cmd())
+	}
+	if got := tab.gateSummary(); got != "locked" {
+		t.Fatalf("gate summary = %q, want locked", got)
+	}
+	if data := readPersistedAllowBypass(t, home); data == nil || *data {
+		t.Fatalf("persisted allowBypass = %v, want false", data)
 	}
 }
 

@@ -146,7 +146,7 @@ type model struct {
 	// `san update`). Zero until the command reports.
 	updateInstalled string
 
-	// modeHintUntil is when the status bar's "(shift+tab to cycle)" goes: a
+	// modeHintUntil is when the status bar's "(shift+tab)" hint goes: a
 	// few seconds after start and after each switch, long enough to be read.
 	modeHintUntil time.Time
 	updateFailed  updateFailedMsg

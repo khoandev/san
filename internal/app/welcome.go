@@ -71,7 +71,7 @@ func renderWelcome(info welcomeInfo) string {
 	if info.Model != "" {
 		parts = append(parts, dim.Render(info.Model))
 	}
-	return "\n" + strings.Join(parts, dim.Render("  ·  "))
+	return "\n" + strings.Join(parts, dim.Render(" · "))
 }
 
 // projectName returns a compact, human-friendly label for the working
@@ -93,12 +93,15 @@ func projectName(p string) string {
 }
 
 func plainWelcome(info welcomeInfo) string {
-	parts := []string{fmt.Sprintf("< SAN %s />", kit.CurrentSymbols.BrandStar)}
+	// Plain output is piped or NO_COLOR, so it must not inherit a table the
+	// user picked for an interactive terminal (emoji would double the width and
+	// nerd glyphs would be tofu). The plain table's star is the ASCII fallback.
+	parts := []string{fmt.Sprintf("< SAN %s />", kit.SymbolsFor(kit.IconStylePlain).BrandStar)}
 	if proj := projectName(info.CWD); proj != "" {
 		parts = append(parts, proj)
 	}
 	if info.Model != "" {
 		parts = append(parts, info.Model)
 	}
-	return "\n" + strings.Join(parts, "  ·  ")
+	return "\n" + strings.Join(parts, " · ")
 }

@@ -1,6 +1,7 @@
-// /settings agents tab: the model role each agent runs on — the advisor plus the
+// /settings Agent tab: the model role each agent runs on — the advisor plus the
 // four bundled definitions — with the model that role resolves to shown on the
-// row, and the advisor's one extra state: off.
+// row, and the advisor's one extra state: off. The tab hosts this form below the
+// YOLO gate's row (see config_agent_tab.go).
 //
 // A role is a routing slot, so the tab assigns roles and never a concrete model:
 // moving every review to a stronger model stays a one-word edit, and an agent's
@@ -93,8 +94,9 @@ type AgentRoleSource struct {
 	Resolve func(role string) (model, effort string)
 }
 
-// agentsPanel is the /settings agents tab: a configForm over the agentsConfig
-// working copy, plus the role sub-view that assigns one agent's role.
+// agentsPanel is the Agent tab's role form: a configForm over the agentsConfig
+// working copy, plus the role sub-view that assigns one agent's role. The tab
+// that hosts it also injects the YOLO gate's row above these rows.
 type agentsPanel struct {
 	form configForm[agentsConfig]
 

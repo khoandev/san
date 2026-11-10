@@ -57,7 +57,7 @@ func (m *model) View() tea.View {
 // and their own editors paint a virtual cursor instead.
 func (m *model) viewString() (string, *tea.Cursor) {
 	if !m.env.Ready {
-		return "\n  " + brandMark() + ghostTextStyle.Render("  ·  Loading…"), nil
+		return "\n  " + brandMark() + ghostTextStyle.Render(" · Loading…"), nil
 	}
 
 	ov, hasOverlay := m.activeOverlay()
@@ -304,9 +304,11 @@ func (m model) withUpdateNotice(status string) string {
 func (m model) renderInputView() string {
 	prompt := conv.InputPromptStyle.Render(conv.InputPrompt)
 	if m.missionOfferVisible() && !m.userInput.Suggestions.IsVisible() {
-		offer := "Start the mission? enter to start · esc to skip"
+		// Only the keys that actually do something here, so the offer fits one
+		// row on a narrow composer.
+		offer := "Start mission? enter · esc"
 		if m.env.AutoPilot.MissionState == setting.MissionPaused {
-			offer = "Resume the mission? enter to resume · esc to skip"
+			offer = "Resume mission? enter · esc"
 		}
 		return prompt + ghostTextStyle.Render(offer)
 	}

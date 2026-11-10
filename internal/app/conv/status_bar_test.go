@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
+	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/setting"
 )
 
@@ -306,5 +309,49 @@ func TestContextLabelCountsAgainstTheWindow(t *testing.T) {
 	}))
 	if !strings.Contains(visible, "120.0k/272.0k") {
 		t.Fatalf("status = %q, want the window as the denominator", visible)
+	}
+}
+
+// The status line is one row: at every terminal width and in every glyph table
+// the rendered line must fit, dropping its least important segments rather than
+// wrapping.
+func TestStatusLineStaysOneRowAcrossWidths(t *testing.T) {
+	t.Cleanup(func() { kit.InitSymbols(setting.IconStyleUnicode) })
+	params := OperationModeParams{
+		Mode:              setting.ModeAutoPilot,
+		PlanMode:          "execute",
+		ModelName:         "claude-sonnet-4-6",
+		ContextTokens:     120_000,
+		ContextWindow:     200_000,
+		ContextBudget:     180_000,
+		ShowContextBar:    true,
+		Compressions:      3,
+		Advisor:           AdvisorBadge{Enabled: true, HasModel: true, Reviews: 2},
+		AgentUsage:        []AgentUsageCount{{Name: "advisor", Count: 3}, {Name: "quick", Count: 2}},
+		Group:             "shop",
+		GroupSelf:         "api",
+		GroupWaiting:      2,
+		SubscriptionUsage: "weekly 42%",
+		StatusMessage:     "indexing",
+		JudgeApprovals:    2,
+		JudgeEscalations:  1,
+	}
+	for _, style := range []string{
+		kit.IconStyleUnicode,
+		kit.IconStyleEmoji,
+		kit.IconStyleNerd,
+		kit.IconStylePlain,
+	} {
+		kit.InitSymbols(style)
+		for _, width := range []int{60, 80, 120} {
+			params.Width = width
+			got := RenderModeStatus(params)
+			if strings.Contains(got, "\n") {
+				t.Fatalf("%s at width %d wrapped: %q", style, width, stripANSI(got))
+			}
+			if w := lipgloss.Width(got); w > width {
+				t.Fatalf("%s at width %d rendered %d columns: %q", style, width, w, stripANSI(got))
+			}
+		}
 	}
 }

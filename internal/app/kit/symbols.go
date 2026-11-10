@@ -179,17 +179,25 @@ var CurrentSymbols = unicodeSymbols
 // cheap and does no terminal I/O.
 func InitSymbols(style string) string {
 	resolved := ResolveIconStyle(style)
-	switch resolved {
-	case IconStyleEmoji:
-		CurrentSymbols = emojiSymbols
-	case IconStyleNerd:
-		CurrentSymbols = nerdSymbols
-	case IconStylePlain:
-		CurrentSymbols = plainSymbols
-	default:
-		CurrentSymbols = unicodeSymbols
-	}
+	CurrentSymbols = SymbolsFor(resolved)
 	return resolved
+}
+
+// SymbolsFor returns the glyph table a resolved style draws. Unlike
+// InitSymbols it installs nothing and resolves nothing, so a caller rendering
+// output that cannot carry the live table (plain text, a piped splash) reads the
+// plain table instead.
+func SymbolsFor(style string) Symbols {
+	switch style {
+	case IconStyleEmoji:
+		return emojiSymbols
+	case IconStyleNerd:
+		return nerdSymbols
+	case IconStylePlain:
+		return plainSymbols
+	default:
+		return unicodeSymbols
+	}
 }
 
 // ResolveIconStyle maps a stored style to the style that will actually be

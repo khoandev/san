@@ -218,7 +218,7 @@ type OperationModeParams struct {
 	Group             string   // this session's group, "" outside one
 	GroupSelf         string   // this session's member name in it
 	GroupHold         bool     // this member holds the others' messages
-	ModeHint          bool     // show "(shift+tab to cycle)": briefly, after start or a switch
+	ModeHint          bool     // show "(shift+tab)": briefly, after start or a switch
 	GroupWaiting      int      // member messages waiting for the person's next input
 	GroupApproval     []string // other members whose turn waits on their user's approval
 	// PlanMode is the Plan Mode badge: "plan" while the session is read-only,
@@ -240,40 +240,27 @@ type AgentUsageCount struct {
 	Count int
 }
 
-// agentUsageIcons maps the roles a session usually runs to their glyph. A
-// custom agent falls back to the first letter of its name, so the segment never
-// depends on a fixed catalog.
-var agentUsageIcons = map[string]string{
-	"advisor":  kit.CurrentSymbols.GroupMark,
-	"quick":    "»",
-	"explore":  "⌕",
-	"task":     "▣",
-	"reviewer": kit.CurrentSymbols.Success,
-}
-
-// RenderAgentUsage renders the per-role counts as "icon count" pairs joined by
-// spaces, in the order the caller supplies. Roles that ran nothing are omitted,
-// and an empty result means the status line carries no usage segment at all.
+// RenderAgentUsage renders the per-role counts as "role count" pairs joined by
+// the status line's separator, in the order the caller supplies. Roles that ran
+// nothing are omitted, and an empty result means the status line carries no
+// usage segment at all.
+//
+// No icon precedes a role: the past glyph map needed one mark per agent, three
+// of them outside the symbol registry, and the names read clearer than a legend
+// the reader has to learn.
 func RenderAgentUsage(entries []AgentUsageCount) string {
 	parts := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Count <= 0 {
+		name := strings.TrimSpace(entry.Name)
+		if entry.Count <= 0 || name == "" {
 			continue
 		}
-		icon := agentUsageIcons[entry.Name]
-		if icon == "" {
-			name := []rune(strings.TrimSpace(entry.Name))
-			if len(name) == 0 {
-				continue
-			}
-			icon = strings.ToUpper(string(name[0]))
-		}
-		parts = append(parts, fmt.Sprintf("%s%d", icon, entry.Count))
+		parts = append(parts, fmt.Sprintf("%s %d", name, entry.Count))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render(strings.Join(parts, " "))
+	return lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render(strings.Join(parts, " · "))
 }
 
 // AdvisorBadge is the advisor's status-bar state. The zero value renders
@@ -288,20 +275,15 @@ type AdvisorBadge struct {
 	LastSkip  string // why the last completed turn was not reviewed
 }
 
-// RenderModeStatus renders the combined mode status line.
+// RenderModeStatus renders the combined mode status line. It is always one row:
+// both halves drop their least important pieces rather than running past Width.
 func RenderModeStatus(params OperationModeParams) string {
-	mode, hint := modeIndicator(params.Mode, params.JudgeApprovals, params.JudgeEscalations, params.AutopilotThinking)
-	if params.ModeHint {
-		mode += hint
-	}
-	mode = withPlanBadge(mode, params.PlanMode)
-	mode = withAdvisorBadge(mode, params.Advisor)
-	left := withGroupStatus(mode, params)
+	left := renderLeftCluster(params)
 	if params.Width <= 0 {
 		return left
 	}
-	// The cluster gets what the mode indicator leaves, so it drops its least
-	// important segments instead of running off the edge.
+	// The cluster gets what the left run leaves, minus the gap, so it drops its
+	// least important segments instead of running off the edge.
 	cluster := params
 	cluster.Width = params.Width - lipgloss.Width(left) - 3
 	right := renderStatusCluster(cluster)
@@ -313,9 +295,59 @@ func RenderModeStatus(params OperationModeParams) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// withPlanBadge puts the Plan Mode badge beside the operation mode — same row,
-// because both answer "how is this session running?".
-func withPlanBadge(mode, planMode string) string {
+// renderLeftCluster composes the operation mode, the optional shift+tab hint,
+// the Plan Mode badge and the group into one left-aligned run. Each piece is a
+// statusSegment: under width pressure the group goes first, then the plan badge,
+// then the mode — the last of which is the row's reason to exist. The mode
+// indicator carries the row's two-space indent, so survivors that do not start
+// with it get the same indent added.
+func renderLeftCluster(params OperationModeParams) string {
+	mode, hint := modeIndicator(params.Mode, params.JudgeApprovals, params.JudgeEscalations, params.AutopilotThinking)
+	if params.ModeHint {
+		mode += hint
+	}
+
+	segments := make([]statusSegment, 0, 3)
+	if mode != "" {
+		segments = append(segments, statusSegment{text: mode, priority: 1})
+	}
+	if badge := renderPlanBadge(params.PlanMode); badge != "" {
+		segments = append(segments, statusSegment{text: badge, priority: 2})
+	}
+	if group := renderGroupStatus(params); group != "" {
+		segments = append(segments, statusSegment{text: group, priority: 3})
+	}
+	if len(segments) == 0 {
+		return ""
+	}
+
+	sep := " · "
+	survivors := make([]string, 0, len(segments))
+	if params.Width > 0 {
+		// Two columns are always spent on the row indent, whether the mode
+		// indicator supplies it or the fallback below adds it.
+		fitted := fitStatusSegments(segments, max(1, params.Width-2), lipgloss.Width(sep))
+		for _, text := range fitted {
+			survivors = append(survivors, text)
+		}
+	} else {
+		for _, seg := range segments {
+			survivors = append(survivors, seg.text)
+		}
+	}
+	if len(survivors) == 0 {
+		return ""
+	}
+	out := strings.Join(survivors, sep)
+	if !strings.HasPrefix(out, "  ") {
+		out = "  " + out
+	}
+	return out
+}
+
+// renderPlanBadge returns the Plan Mode badge alone — "plan" while the session
+// is read-only, "execute" while it runs an approved plan, "" otherwise.
+func renderPlanBadge(planMode string) string {
 	var icon, label string
 	var clr kit.AdaptiveColor
 	switch planMode {
@@ -324,26 +356,9 @@ func withPlanBadge(mode, planMode string) string {
 	case "execute":
 		icon, label, clr = kit.CurrentSymbols.ExecuteBadge, " execute", kit.CurrentTheme.Success
 	default:
-		return mode
+		return ""
 	}
-	badge := lipgloss.NewStyle().Foreground(clr).Render(icon + label)
-	if mode == "" {
-		return "  " + badge // the indent the mode indicator would have
-	}
-	return mode + "  " + badge
-}
-
-// withAdvisorBadge puts the advisor beside the plan badge: it answers "did the
-// reviewer look at that?" on the same row as how the session is running.
-func withAdvisorBadge(mode string, badge AdvisorBadge) string {
-	rendered := renderAdvisorBadge(badge)
-	if rendered == "" {
-		return mode
-	}
-	if mode == "" {
-		return "  " + rendered // the indent the mode indicator would have
-	}
-	return mode + "  " + rendered
+	return lipgloss.NewStyle().Foreground(clr).Render(icon + label)
 }
 
 // renderAdvisorBadge renders the advisor's state as one short label. A badged
@@ -372,19 +387,6 @@ func renderAdvisorBadge(b AdvisorBadge) string {
 		label, clr = "advisor", kit.CurrentTheme.Muted
 	}
 	return lipgloss.NewStyle().Foreground(clr).Render(label)
-}
-
-// withGroupStatus puts the group after the mode: who this session is sits
-// with how it runs, on the left; the right is what it runs on.
-func withGroupStatus(mode string, p OperationModeParams) string {
-	group := renderGroupStatus(p)
-	switch {
-	case group == "":
-		return mode
-	case mode == "":
-		return "  " + group // the indent the mode indicator would have
-	}
-	return mode + "  " + group
 }
 
 // renderGroupStatus reads "◆ shop/api", "· hold" when it holds messages, then,
@@ -416,24 +418,36 @@ func renderGroupStatus(p OperationModeParams) string {
 }
 
 // renderStatusCluster composes the status line's right-hand cluster, in
-// display order: model name, the per-role request counts, optional transient
-// status message, the numeric "X/Y" context label, the optional visual context
-// bar, the optional compressions badge, and the optional cost. Each piece is a
-// statusSegment with a drop priority; fitStatusSegments drops the least
-// important first when the terminal is too narrow to hold them all.
+// display order: model name, the advisor badge, the per-role request counts,
+// optional transient status message, the numeric "X/Y" context label, the
+// optional visual context bar, the optional compressions badge, and the
+// optional cost. Each piece is a statusSegment with a drop priority;
+// fitStatusSegments drops the least important first when the terminal is too
+// narrow to hold them all.
+//
+// The advisor badge lives here rather than beside the mode because it can grow
+// ("advisor · 3 waiting · 2 need approval"): on the right it shares the one
+// drop-priority budget instead of pushing the mode off a narrow line.
 func renderStatusCluster(p OperationModeParams) string {
-	if p.ModelName == "" {
+	// With no model there is nothing to annotate: a lone context label or
+	// advisor badge on the right would read as a stray fragment. Keep the old
+	// silence unless the caller has something real to say.
+	if p.ModelName == "" && p.StatusMessage == "" && !p.Advisor.Enabled && RenderAgentUsage(p.AgentUsage) == "" {
 		return ""
 	}
 	muted := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
 	sep := muted.Render(" · ")
 
-	// Priority 1 = most important (dropped last). The model name always
-	// renders; everything else drops before it under width pressure. Usage is
-	// the first thing to go: the model and the context fill are what the line
-	// is for, and the counts are reference material.
+	// Priority 1 = most important (dropped last). The model name is dropped
+	// last; usage and the advisor are reference material, so they give way
+	// first — the model and the context fill are what the line is for.
 	var segments []statusSegment
-	segments = append(segments, statusSegment{text: muted.Render(p.ModelName), priority: 1})
+	if p.ModelName != "" {
+		segments = append(segments, statusSegment{text: muted.Render(p.ModelName), priority: 1})
+	}
+	if badge := renderAdvisorBadge(p.Advisor); badge != "" {
+		segments = append(segments, statusSegment{text: badge, priority: 6})
+	}
 	if usage := RenderAgentUsage(p.AgentUsage); usage != "" {
 		segments = append(segments, statusSegment{text: usage, priority: 5})
 	}
@@ -469,6 +483,9 @@ func renderStatusCluster(p OperationModeParams) string {
 
 	if p.SubscriptionUsage != "" {
 		segments = append(segments, statusSegment{text: muted.Render(p.SubscriptionUsage), priority: 8})
+	}
+	if len(segments) == 0 {
+		return ""
 	}
 	survivors := fitStatusSegments(segments, p.Width, lipgloss.Width(sep))
 	return strings.Join(survivors, sep)
@@ -527,7 +544,7 @@ func modeIndicator(mode setting.OperationMode, judgeApprovals, judgeEscalations 
 	}
 
 	style := lipgloss.NewStyle().Foreground(clr)
-	return "  " + style.Render(icon+label), lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render(" (shift+tab to cycle)")
+	return "  " + style.Render(icon+label), lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render(" (shift+tab)")
 }
 
 // ModelStatusLabel composes the status line's model segment: the model name

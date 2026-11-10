@@ -4,7 +4,8 @@
 // panel's body + hint. Each sub-panel implements Panel and owns its body.
 //
 // Two popups are built on this shell today:
-//   - /settings → Appearance, Permissions, Agents and General panels.
+//   - /settings → Appearance, Agent and General panels (the Agent tab hosts the
+//     YOLO gate and the per-agent roles).
 //   - /evolve   → the skill self-learning panel.
 //
 // To add a panel to either, implement Panel and append it in the popup's
@@ -83,17 +84,22 @@ func newPanelPopup(glyph, title, tagline string, panels ...Panel) PanelPopup {
 	return PanelPopup{glyph: glyph, title: title, tagline: tagline, panels: panels}
 }
 
-// NewSettingsSelector builds the /settings popup: Appearance, Permissions,
-// Agents and General.
+// NewSettingsSelector builds the /settings popup: Appearance, Agent, General.
+// Three tabs keep the strip short: the Agent tab holds both the YOLO gate and
+// the per-agent roles.
 func NewSettingsSelector(settings *setting.Settings) PanelPopup {
-	return newPanelPopup("⚙", "Settings", "appearance, permissions, agents & general",
-		newAppearancePanel(settings), newPermissionsPanel(settings),
-		newAgentsPanel(settings), newGeneralPanel(settings))
+	return newPanelPopup("⚙", "Settings", "appearance, agent & general",
+		newAppearancePanel(settings), newAgentPanel(settings), newGeneralPanel(settings))
 }
 
-// SetSettings rebinds the Settings panels while keeping the active tab and popup state.
+// SetSettings rebinds the Settings panels while keeping the active tab and popup
+// state. The tab count is fixed, but a stale index from a wider tab strip is
+// clamped instead of indexing past the end.
 func (c *PanelPopup) SetSettings(settings *setting.Settings) {
 	c.panels = NewSettingsSelector(settings).panels
+	if c.index >= len(c.panels) {
+		c.index = len(c.panels) - 1
+	}
 	c.applyRoleSource()
 	if c.active {
 		c.activePanel().Enter()
@@ -110,8 +116,11 @@ func (c *PanelPopup) SetAgentRoleSource(src AgentRoleSource) {
 
 func (c *PanelPopup) applyRoleSource() {
 	for _, p := range c.panels {
-		if ap, ok := p.(*agentsPanel); ok {
-			ap.SetRoleSource(c.roleSource)
+		switch panel := p.(type) {
+		case *agentsPanel:
+			panel.SetRoleSource(c.roleSource)
+		case *agentPanel:
+			panel.agents.SetRoleSource(c.roleSource)
 		}
 	}
 }

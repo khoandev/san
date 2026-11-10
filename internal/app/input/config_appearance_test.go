@@ -172,9 +172,8 @@ func TestAppearancePanelContextBarSavesAndEmits(t *testing.T) {
 }
 
 // TestSettingsSelectorTabSwitchesPanels confirms tab / shift+tab cycle
-// /settings's panels (and wrap). The shell's tab switching was dormant while
-// /settings hosted a single panel; it now hosts Appearance, Permissions,
-// Agents and General.
+// /settings's panels (and wrap). The strip is three tabs: the YOLO gate lives
+// inside Agent beside the roles, so no separate Permissions tab remains.
 func TestSettingsSelectorTabSwitchesPanels(t *testing.T) {
 	c := NewSettingsSelector(nil)
 	c.Enter(120, 40)
@@ -182,16 +181,12 @@ func TestSettingsSelectorTabSwitchesPanels(t *testing.T) {
 		t.Fatalf("default panel = %q, want appearance", got)
 	}
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
-	if got := c.ActivePanel().Title(); got != "permissions" {
-		t.Fatalf("after tab = %q, want permissions", got)
-	}
-	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
-	if got := c.ActivePanel().Title(); got != "agents" {
-		t.Fatalf("after second tab = %q, want agents", got)
+	if got := c.ActivePanel().Title(); got != "agent" {
+		t.Fatalf("after tab = %q, want agent", got)
 	}
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := c.ActivePanel().Title(); got != "general" {
-		t.Fatalf("after third tab = %q, want general", got)
+		t.Fatalf("after second tab = %q, want general", got)
 	}
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab}) // wrap
 	if got := c.ActivePanel().Title(); got != "appearance" {
@@ -200,6 +195,13 @@ func TestSettingsSelectorTabSwitchesPanels(t *testing.T) {
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}) // wrap back
 	if got := c.ActivePanel().Title(); got != "general" {
 		t.Fatalf("after shift+tab wrap = %q, want general", got)
+	}
+
+	// A settings rebind (a reload, a provider change) keeps the tab the user was
+	// on instead of jumping back to the first one.
+	c.SetSettings(nil)
+	if got := c.ActivePanel().Title(); got != "general" {
+		t.Fatalf("after SetSettings = %q, want general", got)
 	}
 }
 

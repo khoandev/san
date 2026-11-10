@@ -3,6 +3,8 @@ package conv
 import (
 	"strings"
 	"testing"
+
+	"charm.land/lipgloss/v2"
 )
 
 // The advisor badge says what the reviewer is doing and what it last found. A
@@ -40,9 +42,10 @@ func TestRenderModeStatusAdvisorBadge(t *testing.T) {
 	}
 }
 
-// The badge sits with the mode and the plan, before the group: it answers how
-// this session is running, which is the left cluster's question.
-func TestAdvisorBadgeFollowsThePlanBadge(t *testing.T) {
+// The advisor badge rides in the right-hand cluster, after the model, so it
+// shares that cluster's drop priority instead of pushing the mode off a narrow
+// line. The plan badge and the group stay on the left with the mode.
+func TestAdvisorBadgeRidesTheRightCluster(t *testing.T) {
 	got := stripANSI(RenderModeStatus(OperationModeParams{
 		ModelName: "m",
 		Width:     160,
@@ -52,12 +55,33 @@ func TestAdvisorBadgeFollowsThePlanBadge(t *testing.T) {
 		GroupSelf: "me",
 	}))
 	plan := strings.Index(got, "plan")
-	advisor := strings.Index(got, "advisor")
 	group := strings.Index(got, "shop/me")
-	if plan < 0 || advisor < 0 || group < 0 {
+	model := strings.Index(got, "m ·")
+	advisor := strings.Index(got, "advisor")
+	if plan < 0 || model < 0 || advisor < 0 || group < 0 {
 		t.Fatalf("status lacks a badge: %q", got)
 	}
-	if !(plan < advisor && advisor < group) {
-		t.Fatalf("badge order = plan %d, advisor %d, group %d: %q", plan, advisor, group, got)
+	if !(plan < group && group < model && model < advisor) {
+		t.Fatalf("badge order = plan %d, group %d, model %d, advisor %d: %q", plan, group, model, advisor, got)
+	}
+}
+
+// Under pressure the advisor badge gives way with the usage counts before the
+// model and the context fill it annotates.
+func TestAdvisorBadgeDropsBeforeTheModel(t *testing.T) {
+	contextLabel := RenderContextLabel(1000, 200000)
+	justEnough := 3 + lipgloss.Width("m") + 3 + lipgloss.Width(contextLabel)
+	got := stripANSI(RenderModeStatus(OperationModeParams{
+		ModelName:     "m",
+		Width:         justEnough,
+		ContextTokens: 1000,
+		ContextWindow: 200000,
+		Advisor:       AdvisorBadge{Enabled: true, HasModel: true, Reviews: 1},
+	}))
+	if strings.Contains(got, "advisor") {
+		t.Fatalf("narrow status line kept the advisor badge: %q", got)
+	}
+	if !strings.Contains(got, "m") || !strings.Contains(got, stripANSI(contextLabel)) {
+		t.Fatalf("narrow status line dropped the model or context: %q", got)
 	}
 }
