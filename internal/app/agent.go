@@ -906,8 +906,12 @@ func (m *model) ResetAgentRuntime() error {
 	m.teardownSelfLearn()
 	// The advisor belongs to the conversation that is going away: cancel its
 	// context and drop its review history, so nothing from the old session is
-	// published or persisted into the new one.
+	// published or persisted into the new one. The cursor goes with it — the
+	// next conversation starts from its own end, not this one's position.
 	m.teardownAdvisor()
+	m.advisorReviewed = -1
+	m.advisorPending = false
+	m.advisorFollowups = 0
 	m.env.Advisor = setting.AdvisorSettings{}
 	if m.services.Setting != nil {
 		m.env.Advisor = m.services.Setting.Advisor()

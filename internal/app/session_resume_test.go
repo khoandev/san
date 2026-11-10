@@ -95,6 +95,28 @@ func TestResumeDiscardsPreviousSessionNotices(t *testing.T) {
 	}
 }
 
+// A resumed conversation starts at its own end: the advisor cursor from the
+// previous conversation must not carry over and hand the whole restored
+// history to a review.
+func TestResumeResetsTheAdvisorCursor(t *testing.T) {
+	m, store := resumedModel(t, []core.Message{core.UserMessage("first", nil)})
+	t.Cleanup(group.Forget)
+	if err := testutil.ImportSession(store, &session.LegacyHistory{
+		Metadata: session.LegacyMetadata{ID: "other"},
+		Messages: []core.Message{ai.UserMessage("other conversation")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.advisorReviewed = 7
+
+	if err := m.loadSessionByID("other"); err != nil {
+		t.Fatal(err)
+	}
+	if m.advisorReviewed != -1 {
+		t.Fatalf("cursor = %d after resume, want -1", m.advisorReviewed)
+	}
+}
+
 // Resume replays the whole conversation, whatever the previous one printed.
 func TestResumeReplaysEveryMessage(t *testing.T) {
 	m, store := resumedModel(t, parallelResultChain())

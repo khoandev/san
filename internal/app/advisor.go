@@ -42,6 +42,10 @@ const (
 	// output from crowding out the conversation it belongs to.
 	advisorToolResultBudget = 2000
 	advisorToolInputBudget  = 600
+	// advisorMaxFollowups caps consecutive reviews of turns the advisor's own
+	// note opened. Advice about advice is not worth a model call, so the run
+	// stops after this many and starts again on a turn the person opened.
+	advisorMaxFollowups = 3
 )
 
 // advisorSession is one live advisor for the current conversation session. It
@@ -63,12 +67,9 @@ type advisorSession struct {
 	live *atomic.Bool
 
 	// busy enforces one review at a time. A turn that ends while a review runs
-	// is left for the next turn instead of queuing model calls.
+	// is remembered by the model's pending flag and reviewed once the running
+	// review finishes, so its delta is queued rather than dropped.
 	busy atomic.Bool
-
-	// reviewed is the number of conversation messages already reviewed. It is
-	// touched only on the UI goroutine.
-	reviewed int
 
 	// parentSessionID and cwd are captured at wire time so the review goroutine
 	// never reads UI state.
@@ -114,9 +115,15 @@ func (m *model) wireAdvisor() {
 	}
 	// Enabling mid-session starts from here: replaying the whole old
 	// conversation on the first enabled turn would spend tokens on work the
-	// person has already moved past.
-	if m.services.Agent != nil {
-		s.reviewed = len(m.services.Agent.Messages())
+	// person has already moved past. Only the first wire of a conversation
+	// initializes the cursor — a later rewire (a settings save, a cwd change, a
+	// model-role switch, a rebuilt runtime) must keep it, or the delta the
+	// previous turn produced would be skipped without ever being reviewed.
+	if m.advisorReviewed < 0 {
+		m.advisorReviewed = 0
+		if m.services.Agent != nil {
+			m.advisorReviewed = len(m.services.Agent.Messages())
+		}
 	}
 	m.services.Advisor = s
 }
@@ -216,42 +223,141 @@ func (m *model) advisorSignature() string {
 // reviewCompletedTurn starts a review of what this turn added to the
 // conversation. Called from OnTurnEnd on the UI goroutine; the review itself
 // runs elsewhere.
+//
+// One review runs at a time. A turn that ends while another review is still in
+// flight is queued instead of dropped: the cursor stays where it is, and the
+// completion signal drains the accumulated delta once the running review
+// finishes. That is what keeps the advisor from silently skipping a turn — the
+// bug where the cursor advanced before the busy check.
 func (m *model) reviewCompletedTurn(result core.Result) {
 	s := m.services.Advisor
-	if s == nil || !s.live.Load() || result.StopReason != core.StopEndTurn {
+	if s == nil || !s.live.Load() || !advisorReviewsTurn(result) {
 		return
 	}
-	msgs := m.services.Agent.Messages()
-	if s.reviewed > len(msgs) {
-		s.reviewed = 0
+	if s.busy.Load() {
+		m.advisorPending = true
+		return
 	}
-	delta := msgs[s.reviewed:]
-	s.reviewed = len(msgs)
+	m.startAdvisorReview(s)
+}
 
-	// A turn the advisor itself opened is not reviewed again: its note is in
-	// the transcript, and reviewing the agent's reaction to it would loop.
-	if lastInputIsAdvisory(delta) {
-		return
+// advisorReviewsTurn reports whether a turn that ended this way is work the
+// advisor should read. A cancelled turn says nothing about the work, and an
+// errored inference is a failure rather than an outcome. Every other ending —
+// a normal stop, the output cap, the step cap, a hook ending the turn — left
+// real work behind. OnTurnEnd's cancel branch returns before calling the
+// trigger; the check stays here so a second path cannot skip it silently.
+func advisorReviewsTurn(result core.Result) bool {
+	return result.StopReason != core.StopCanceled && result.StopReason != core.StopError
+}
+
+// startAdvisorReview renders the unreviewed delta and starts one review. The
+// cursor moves only once a review is actually accepted, so a skip never loses
+// the messages it would have read. UI goroutine only.
+func (m *model) startAdvisorReview(s *advisorSession) {
+	m.advisorPending = false
+	msgs := m.services.Agent.Messages()
+	// A cursor past the conversation means it was replaced under it (a
+	// compaction or a resume); start from the top rather than slicing out of
+	// range. A cursor below zero is a conversation that has never been wired.
+	if m.advisorReviewed < 0 || m.advisorReviewed > len(msgs) {
+		m.advisorReviewed = 0
+	}
+	delta := msgs[m.advisorReviewed:]
+
+	// A turn the advisor's own note opened is reviewed like any other: the
+	// agent's fix is exactly what needs a second look. A run of them is capped
+	// so advice cannot loop into advice; the capped turn is skipped with the
+	// cursor moving past it rather than replayed.
+	openedByNote := deltaOpenedByAdvisory(delta)
+	if openedByNote {
+		if m.advisorFollowups >= advisorMaxFollowups {
+			m.advisorFollowups = 0
+			m.advisorReviewed = len(msgs)
+			return
+		}
+	} else {
+		// A turn the person opened ends the run: the next note gets a fresh
+		// budget.
+		m.advisorFollowups = 0
 	}
 	transcript := renderAdvisorTranscript(delta)
 	if transcript == "" {
+		m.advisorReviewed = len(msgs)
 		return
 	}
-	// One review at a time. The cursor above already moved, so a skipped review
-	// is dropped rather than replayed later; the next turn reviews its own
-	// delta.
+	// The cursor advances after the busy check: a review that could not start
+	// stays pending with its delta intact for the drain to pick up.
 	if !s.busy.CompareAndSwap(false, true) {
+		m.advisorPending = true
 		return
 	}
-	go m.runAdvisorTurn(s, transcript)
+	m.advisorReviewed = len(msgs)
+	if openedByNote {
+		m.advisorFollowups++
+	}
+	run := m.advisorReview
+	if run == nil {
+		run = m.runAdvisorTurn
+	}
+	go run(s, transcript)
+}
+
+// drainAdvisorPending starts the queued review, if any, after the previous one
+// finished. Called on the UI goroutine from the completion handler.
+func (m *model) drainAdvisorPending() {
+	if !m.advisorPending {
+		return
+	}
+	s := m.services.Advisor
+	if s == nil || !s.live.Load() {
+		m.advisorPending = false
+		return
+	}
+	m.startAdvisorReview(s)
+}
+
+// advisorDoneMsg wakes the Update loop when a review finishes, so the queued
+// delta is reviewed on the main goroutine.
+type advisorDoneMsg struct{}
+
+// awaitAdvisorDone yields an advisorDoneMsg each time a review finishes.
+func awaitAdvisorDone(ch <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		<-ch
+		return advisorDoneMsg{}
+	}
+}
+
+// publishAdvisorDone signals the main loop that a review ended. Non-blocking:
+// a full channel drops the signal rather than deadlocking a quitting app.
+func (m *model) publishAdvisorDone() {
+	select {
+	case m.advisorDone <- struct{}{}:
+	default:
+	}
+}
+
+// onAdvisorDone re-arms the listener and starts any review queued while the
+// last one ran.
+func (m *model) onAdvisorDone() tea.Cmd {
+	next := awaitAdvisorDone(m.advisorDone)
+	m.drainAdvisorPending()
+	return next
 }
 
 // runAdvisorTurn executes one review. Every side effect is a log line, a
 // mutex-guarded field or a channel send, so it may run on any goroutine.
 func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
-	defer s.busy.Store(false)
+	// Release the slot and wake the main loop on every path — a note, no note,
+	// an error or a teardown — or a queued review would wait forever. The
+	// signal goes last so the drain sees a free slot.
+	defer func() {
+		s.setRunning(false)
+		s.busy.Store(false)
+		m.publishAdvisorDone()
+	}()
 	s.setRunning(true)
-	defer s.setRunning(false)
 
 	ctx, cancel := context.WithTimeout(s.ctx, advisor.DefaultTimeout)
 	defer cancel()
@@ -360,11 +466,11 @@ func renderAdvisorTranscript(msgs []core.Message) string {
 	return strings.TrimSpace(b.String())
 }
 
-// lastInputIsAdvisory reports whether the delta's last user input is the note
-// the advisor injected, which is what stops review and advice from looping.
-func lastInputIsAdvisory(msgs []core.Message) bool {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		msg := msgs[i]
+// deltaOpenedByAdvisory reports whether the delta starts with the note the
+// advisor injected, i.e. the turn that note triggered. The note itself is left
+// out of the review transcript, so only the agent's reaction is reviewed.
+func deltaOpenedByAdvisory(msgs []core.Message) bool {
+	for _, msg := range msgs {
 		if msg.Role != ai.RoleUser || len(msg.ToolResults()) > 0 {
 			continue
 		}

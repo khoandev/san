@@ -5,13 +5,16 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/genai-io/sdk-go/pkg/ai"
 
 	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/core"
+	"github.com/genai-io/san/internal/hook"
 	"github.com/genai-io/san/internal/setting"
+	"github.com/genai-io/san/internal/task"
 )
 
 // The review reads this text and nothing else, so it has to carry what
@@ -39,9 +42,9 @@ func TestRenderAdvisorTranscriptKeepsWhatHappened(t *testing.T) {
 	}
 }
 
-// The advisor's own note is not work to review: feeding the agent's reaction to
-// it back into the reviewer would loop advice into advice.
-func TestLastInputIsAdvisory(t *testing.T) {
+// The delta's first user input is what opened the turn: the advisor's note, or
+// something the person wrote.
+func TestDeltaOpenedByAdvisory(t *testing.T) {
 	tests := []struct {
 		name string
 		msgs []core.Message
@@ -54,11 +57,16 @@ func TestLastInputIsAdvisory(t *testing.T) {
 			core.UserMessage("<advisory>\n- check the nil case\n</advisory>", nil),
 			core.AssistantMessage("Fixed the nil case.", "", nil),
 		}, true},
+		{"later note does not open the delta", []core.Message{
+			core.UserMessage("carry on", nil),
+			core.AssistantMessage("Done.", "", nil),
+			core.UserMessage("<advisory>\n- check the nil case\n</advisory>", nil),
+		}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := lastInputIsAdvisory(tt.msgs); got != tt.want {
-				t.Fatalf("lastInputIsAdvisory = %v, want %v", got, tt.want)
+			if got := deltaOpenedByAdvisory(tt.msgs); got != tt.want {
+				t.Fatalf("deltaOpenedByAdvisory = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -112,50 +120,345 @@ func liveAdvisorSession() (*advisorSession, *atomic.Bool) {
 	return &advisorSession{live: live, ctx: context.Background()}, live
 }
 
-// A review runs only for a turn that ended on its own terms: a cancelled or
-// cut-short turn says nothing about the work, and reviewing it would spend
-// model calls on half a thought.
-func TestReviewCompletedTurnOnlyForFinishedTurns(t *testing.T) {
-	s, _ := liveAdvisorSession()
-	s.busy.Store(true) // Keeps the trigger from starting a real review.
-	m := reviewModel(t, []core.Message{core.AssistantMessage("done", "", nil)}, s)
-
-	m.reviewCompletedTurn(core.Result{StopReason: core.StopCanceled})
-	if s.reviewed != 0 {
-		t.Fatalf("a cancelled turn moved the cursor to %d", s.reviewed)
+// Every turn that produced work is reviewed, however it ended: a cancel or a
+// failed inference is not work, but the output cap, the step cap and a hook
+// ending the turn all leave a conversation worth a second look.
+func TestReviewCompletedTurnStopReasons(t *testing.T) {
+	msgs := []core.Message{core.UserMessage("fix it", nil), core.AssistantMessage("fixed", "", nil)}
+	tests := []struct {
+		reason core.StopReason
+		review bool
+	}{
+		{core.StopEndTurn, true},
+		{core.StopTruncated, true},
+		{core.StopMaxSteps, true},
+		{core.StopHook, true},
+		{core.StopRefused, true},
+		{core.StopCanceled, false},
+		{core.StopError, false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.reason), func(t *testing.T) {
+			s, _ := liveAdvisorSession()
+			m := reviewModel(t, msgs, s)
+			started := make(chan string, 1)
+			m.advisorReview = func(_ *advisorSession, transcript string) { started <- transcript }
+			m.reviewCompletedTurn(core.Result{StopReason: tt.reason})
+			select {
+			case <-started:
+				if !tt.review {
+					t.Fatalf("a %s turn started a review", tt.reason)
+				}
+			case <-time.After(50 * time.Millisecond):
+				if tt.review {
+					t.Fatalf("a %s turn never reached the advisor", tt.reason)
+				}
+			}
+			if !tt.review && m.advisorReviewed != 0 {
+				t.Fatalf("a %s turn moved the cursor to %d", tt.reason, m.advisorReviewed)
+			}
+		})
 	}
 }
 
-// The cursor follows the conversation even when the review is skipped, so a
-// turn the advisor was too busy for is dropped rather than replayed later.
-func TestReviewCompletedTurnAdvancesCursorWhileBusy(t *testing.T) {
+// A background task completion arrives as a notice, becomes the next turn's
+// input, and that turn ends like any other — so the advisor reviews it.
+func TestTaskCompletionTurnReachesTheAdvisor(t *testing.T) {
+	m, _ := noticeDeliveryModel(t)
+	attachTurnSession(t, m)
+	m.services.Hook = hook.NewEngine(setting.NewData(), "", t.TempDir(), "")
+	m.env.Width = 80
+	m.services.Task = task.NewManager()
+	m.wireTaskLifecycle(nil)
+	t.Cleanup(func() { task.SetLifecycleHandler(nil) })
+
+	s, _ := liveAdvisorSession()
+	m.services.Advisor = s
+	reviews := make(chan string, 1)
+	m.advisorReview = func(_ *advisorSession, transcript string) { reviews <- transcript }
+
+	// deliverNotice turns a completion into this user message; the agent's
+	// answer to it is the turn that ends here.
+	notice := m.showNoticeLine(taskNotice())
+	m.services.Agent.SetMessages([]core.Message{notice, core.AssistantMessage("background finished", "", nil)})
+	m.OnTurnEnd(core.Result{StopReason: core.StopEndTurn})
+
+	select {
+	case transcript := <-reviews:
+		if !strings.Contains(transcript, "task-notification") || !strings.Contains(transcript, "background finished") {
+			t.Fatalf("the completion turn was not what the advisor read:\n%s", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a completed background task's turn never reached the advisor")
+	}
+}
+
+// A turn that ends while a review is still running is queued: the cursor stays
+// where it is so the delta is not lost, and the pending flag records the work.
+func TestReviewCompletedTurnQueuesWhileBusy(t *testing.T) {
 	s, _ := liveAdvisorSession()
 	s.busy.Store(true)
 	msgs := []core.Message{core.UserMessage("fix it", nil), core.AssistantMessage("fixed", "", nil)}
 	m := reviewModel(t, msgs, s)
 
 	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
-	if s.reviewed != len(msgs) {
-		t.Fatalf("cursor = %d, want %d", s.reviewed, len(msgs))
+	if !m.advisorPending {
+		t.Fatal("a turn that ended mid-review was not queued")
+	}
+	if m.advisorReviewed != 0 {
+		t.Fatalf("cursor = %d while a review runs, want it unchanged", m.advisorReviewed)
 	}
 }
 
-// A turn that only carried the advisor's own note is not worth reviewing: the
-// agent's reaction to it would be advice about advice.
-func TestReviewCompletedTurnSkipsTheAdvisorsOwnNote(t *testing.T) {
+// The review that follows reads every turn that ended while the previous one
+// ran, once, and only then does the cursor catch up.
+func TestAdvisorDrainReviewsTheQueuedTurns(t *testing.T) {
+	s, _ := liveAdvisorSession()
+	s.busy.Store(true)
+	m := reviewModel(t, []core.Message{core.UserMessage("first", nil), core.AssistantMessage("one", "", nil)}, s)
+	reviews := make(chan string, 2)
+	m.advisorReview = func(_ *advisorSession, transcript string) { reviews <- transcript }
+
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	m.services.Agent.SetMessages(append(m.services.Agent.Messages(),
+		core.UserMessage("second", nil), core.AssistantMessage("two", "", nil)))
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	if !m.advisorPending || m.advisorReviewed != 0 {
+		t.Fatalf("queued state = pending %v, cursor %d", m.advisorPending, m.advisorReviewed)
+	}
+
+	s.busy.Store(false) // The previous review finished and signalled.
+	m.drainAdvisorPending()
+	select {
+	case transcript := <-reviews:
+		for _, want := range []string{"first", "one", "second", "two"} {
+			if !strings.Contains(transcript, want) {
+				t.Fatalf("queued review is missing %q:\n%s", want, transcript)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the queued review never started")
+	}
+	if m.advisorPending {
+		t.Fatal("the drain left the review queued")
+	}
+	if want := len(m.services.Agent.Messages()); m.advisorReviewed != want {
+		t.Fatalf("cursor = %d after the drain, want %d", m.advisorReviewed, want)
+	}
+}
+
+// Each message is reviewed once: a turn end with nothing new starts no review,
+// so an already-reviewed delta is never replayed.
+func TestAdvisorNeverReviewsTheSameMessageTwice(t *testing.T) {
+	s, _ := liveAdvisorSession()
+	m := reviewModel(t, []core.Message{core.UserMessage("fix it", nil), core.AssistantMessage("fixed", "", nil)}, s)
+	reviews := make(chan string, 4)
+	m.advisorReview = func(_ *advisorSession, transcript string) { reviews <- transcript }
+
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	select {
+	case <-reviews:
+	case <-time.After(time.Second):
+		t.Fatal("the first review never started")
+	}
+	s.busy.Store(false) // The review finished; nothing new followed it.
+
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	select {
+	case transcript := <-reviews:
+		t.Fatalf("a reviewed message was reviewed again:\n%s", transcript)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if m.advisorPending {
+		t.Fatal("an empty delta was queued as pending")
+	}
+}
+
+// The completion signal reaches the main loop through the buffered channel, and
+// the handler it wakes starts the queued review.
+func TestAdvisorCompletionDrainsThroughTheMainLoop(t *testing.T) {
+	s, _ := liveAdvisorSession()
+	s.busy.Store(true)
+	m := reviewModel(t, []core.Message{core.UserMessage("fix it", nil), core.AssistantMessage("fixed", "", nil)}, s)
+	m.advisorDone = make(chan struct{}, 1)
+	started := make(chan struct{}, 1)
+	m.advisorReview = func(*advisorSession, string) { started <- struct{}{} }
+
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	s.busy.Store(false)
+	m.publishAdvisorDone()
+	select {
+	case <-m.advisorDone:
+	default:
+		t.Fatal("the review completion was not signalled")
+	}
+	m.onAdvisorDone()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("the completion handler did not start the queued review")
+	}
+}
+
+// A turn the advisor's note opened is reviewed like any other: the agent's fix
+// is exactly what needs a second look. The note itself stays out of the
+// transcript.
+func TestReviewCompletedTurnReviewsAnAdvisoryTurn(t *testing.T) {
 	s, _ := liveAdvisorSession()
 	msgs := []core.Message{
 		core.UserMessage("<advisory>\n- check the nil case\n</advisory>", nil),
 		core.AssistantMessage("Checked it.", "", nil),
 	}
 	m := reviewModel(t, msgs, s)
+	reviews := make(chan string, 1)
+	m.advisorReview = func(_ *advisorSession, transcript string) { reviews <- transcript }
 
 	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
-	if s.reviewed != len(msgs) {
-		t.Fatalf("cursor = %d, want %d", s.reviewed, len(msgs))
+	select {
+	case transcript := <-reviews:
+		if strings.Contains(transcript, "<advisory") {
+			t.Fatalf("the note was fed back into the review:\n%s", transcript)
+		}
+		if !strings.Contains(transcript, "Checked it.") {
+			t.Fatalf("the agent's answer was not reviewed:\n%s", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("an advisory-opened turn was not reviewed")
 	}
-	if s.busy.Load() {
-		t.Fatal("the note's own turn started a review")
+	if m.advisorFollowups != 1 {
+		t.Fatalf("followups = %d, want 1", m.advisorFollowups)
+	}
+	if m.advisorReviewed != len(msgs) {
+		t.Fatalf("cursor = %d, want %d", m.advisorReviewed, len(msgs))
+	}
+}
+
+// The cap stops advice about advice: the fourth consecutive advisory-opened
+// turn is skipped with the cursor moving past it, and the next note starts a
+// fresh budget.
+func TestAdvisorFollowupCapSkipsTheFourthTurn(t *testing.T) {
+	s, _ := liveAdvisorSession()
+	msgs := []core.Message{
+		core.UserMessage("<advisory>\n- check the nil case\n</advisory>", nil),
+		core.AssistantMessage("Checked it.", "", nil),
+	}
+	m := reviewModel(t, msgs, s)
+	reviews := make(chan string, 1)
+	m.advisorReview = func(_ *advisorSession, transcript string) { reviews <- transcript }
+	m.advisorFollowups = advisorMaxFollowups
+
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	select {
+	case <-reviews:
+		t.Fatal("a capped advisory turn started another review")
+	default:
+	}
+	if m.advisorReviewed != len(msgs) {
+		t.Fatalf("cursor = %d, want %d", m.advisorReviewed, len(msgs))
+	}
+	if m.advisorFollowups != 0 {
+		t.Fatalf("followups = %d after the cap, want a reset", m.advisorFollowups)
+	}
+}
+
+// A turn the person opened ends the run, so the next note starts with its full
+// budget again.
+func TestReviewCompletedTurnResetsFollowupsOnAUserTurn(t *testing.T) {
+	s, _ := liveAdvisorSession()
+	msgs := []core.Message{core.UserMessage("fix it", nil), core.AssistantMessage("fixed", "", nil)}
+	m := reviewModel(t, msgs, s)
+	m.advisorReview = func(*advisorSession, string) {}
+	m.advisorFollowups = advisorMaxFollowups - 1
+
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	if m.advisorFollowups != 0 {
+		t.Fatalf("followups = %d after a user turn, want 0", m.advisorFollowups)
+	}
+}
+
+// The same note twice is noise, not a second finding: it is injected once.
+func TestAdvisorAcceptsEachNoteOnce(t *testing.T) {
+	s, _ := liveAdvisorSession()
+	if !s.acceptNote("- the test asserts the old behaviour") {
+		t.Fatal("the first note was rejected")
+	}
+	if s.acceptNote("- the   test asserts the OLD behaviour") {
+		t.Fatal("a reworded duplicate note was injected again")
+	}
+	if !s.acceptNote("- a different finding") {
+		t.Fatal("a new note was rejected")
+	}
+}
+
+// A rewire is not a new conversation. The cursor lives on the model so a
+// settings save, a cwd change, a role switch or a rebuilt runtime cannot move
+// it: otherwise the delta the previous turn produced would be skipped without
+// ever reaching a review.
+func TestWireAdvisorKeepsTheReviewCursor(t *testing.T) {
+	on := true
+	m := advisorRoleModel(t, nil, nil)
+	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
+	m.advisorReviewed = 1
+
+	m.wireAdvisor()
+	if m.services.Advisor == nil {
+		t.Fatal("the advisor was not wired")
+	}
+	if m.advisorReviewed != 1 {
+		t.Fatalf("rewire moved the cursor to %d, want 1", m.advisorReviewed)
+	}
+}
+
+// A conversation that has never been wired starts from its own end: enabling
+// the advisor mid-session — or resuming one, which resets the cursor to -1 —
+// must not hand the whole existing history to the reviewer.
+func TestWireAdvisorStartsAtTheEndOfAnExistingConversation(t *testing.T) {
+	on := true
+	m := advisorRoleModel(t, nil, nil)
+	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
+	m.services.Agent = &agent.Runtime{}
+	msgs := []core.Message{core.UserMessage("old", nil), core.AssistantMessage("done", "", nil)}
+	m.services.Agent.SetMessages(msgs)
+	m.advisorReviewed = -1
+
+	m.wireAdvisor()
+	if m.advisorReviewed != len(msgs) {
+		t.Fatalf("cursor = %d, want the end of the conversation (%d)", m.advisorReviewed, len(msgs))
+	}
+}
+
+// The delta that accumulated before a rewire is the next turn's work: the
+// cursor still points at it after the rewire, and the next turn end consumes it.
+func TestRewireKeepsAnUnreviewedDelta(t *testing.T) {
+	on := true
+	m := advisorRoleModel(t, nil, nil)
+	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
+	m.services.Agent = &agent.Runtime{}
+	msgs := []core.Message{
+		core.UserMessage("first", nil),
+		core.AssistantMessage("done", "", nil),
+		core.UserMessage("second", nil),
+	}
+	m.services.Agent.SetMessages(msgs)
+	m.advisorReviewed = 1 // "first" and its answer were reviewed; "second" was not.
+
+	m.wireAdvisor()
+	if m.advisorReviewed != 1 {
+		t.Fatalf("rewire moved the cursor to %d, want 1", m.advisorReviewed)
+	}
+	reviews := make(chan string, 1)
+	m.advisorReview = func(_ *advisorSession, transcript string) { reviews <- transcript }
+	m.reviewCompletedTurn(core.Result{StopReason: core.StopEndTurn})
+	select {
+	case transcript := <-reviews:
+		if !strings.Contains(transcript, "second") {
+			t.Fatalf("the unreviewed delta was not reviewed:\n%s", transcript)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the unreviewed delta was never reviewed")
+	}
+	if m.advisorReviewed != len(msgs) {
+		t.Fatalf("cursor = %d after the turn, want %d", m.advisorReviewed, len(msgs))
 	}
 }
 

@@ -241,6 +241,12 @@ func (m *model) restoreHistory(sess *session.LegacyHistory) {
 	m.conv.Messages = m.services.SessionStore.ChatRows(sess)
 	m.earlyNotices = nil
 	m.services.Agent.SetMessages(sess.Messages)
+	// A resumed conversation starts from its own end: its history is not work
+	// for the advisor to review now, and the cursor from the previous
+	// conversation would point into a different transcript.
+	m.advisorReviewed = -1
+	m.advisorPending = false
+	m.advisorFollowups = 0
 	m.services.Reminder.RestoreHistory(m.conv.Messages)
 	m.conv.CommittedCount = 0
 
@@ -359,6 +365,10 @@ func (m *model) forkSession() (string, error) {
 	m.replaceSession(opened)
 	m.releaseGroupOnSwitch()
 	m.services.Agent.SetMessages(forked.Messages)
+	// The fork carries its parent's history; only work after the fork is new.
+	m.advisorReviewed = -1
+	m.advisorPending = false
+	m.advisorFollowups = 0
 	m.restorePlanState(forked.Plan)
 	// Same storage switch as loadSessionByID: clear the tracker so
 	// initTaskStorage adopts the fork's directory, then re-import the tasks

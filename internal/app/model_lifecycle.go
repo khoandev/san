@@ -136,6 +136,7 @@ func newBaseModel() model {
 		conv:             conv.NewModel(defaultWidth),
 		mainNotices:      make(chan mainNotice, 64),
 		selfLearnStarts:  make(chan struct{}, 8),
+		advisorDone:      make(chan struct{}, 8),
 		systemInput:      trigger.New(),
 		env:              environment,
 		services:         svc,
@@ -145,6 +146,9 @@ func newBaseModel() model {
 		pendingDecisions: new(sync.Map),
 		autopilot:        new(atomic.Pointer[autopilotRuntime]),
 		plan:             plan.NewStore(),
+		// The advisor cursor is unset until the first conversation is wired; -1
+		// keeps "never wired" distinct from "wired at message 0".
+		advisorReviewed: -1,
 	}
 }
 

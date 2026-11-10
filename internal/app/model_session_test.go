@@ -37,8 +37,20 @@ func TestClearStartsAFreshDurableSession(t *testing.T) {
 	m.services.Agent.SetMessages(history)
 	m.env.SessionName = "old title"
 	m.env.FileCache = filecache.New()
+	m.advisorReviewed = 3
+	m.advisorPending = true
+	m.advisorFollowups = 2
 	if err := m.clearSession(); err != nil {
 		t.Fatal(err)
+	}
+	if m.advisorReviewed != -1 {
+		t.Fatalf("clear kept the advisor cursor at %d, want -1", m.advisorReviewed)
+	}
+	if m.advisorPending {
+		t.Fatal("clear kept a review queued for the previous session")
+	}
+	if m.advisorFollowups != 0 {
+		t.Fatalf("clear kept %d advisory followups", m.advisorFollowups)
 	}
 	id := m.sessionID()
 	if id == "old" || id == "" {

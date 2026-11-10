@@ -73,9 +73,13 @@ type model struct {
 	// (PostTool fires once per tool). Reset each step in OnInference (PostInfer).
 	drainedThisStep bool
 	selfLearnStarts chan struct{} // fork goroutine → Update loop: a review started (start the spinner)
-	systemInput     trigger.Model // Source 3: system events (cron/hooks/watcher)
-	conv            conv.Model    // Agent Outbox: conversation + output rendering
-	env             env           // Shared app state: provider, session, permission, plan, config
+	// advisorDone wakes the Update loop when an advisor review ends, so a turn
+	// that ended mid-review is queued rather than dropped. Buffered and written
+	// non-blockingly: losing a signal must never block a quitting app.
+	advisorDone chan struct{}
+	systemInput trigger.Model // Source 3: system events (cron/hooks/watcher)
+	conv        conv.Model    // Agent Outbox: conversation + output rendering
+	env         env           // Shared app state: provider, session, permission, plan, config
 	// plan is this session's Plan Mode state: the mode, every plan it produced,
 	// and the active plan's step progress. It is persisted inside the transcript
 	// (transcript.StatePatch.Plan), never in a file of its own.
@@ -189,6 +193,29 @@ type model struct {
 	// toggle, a settings edit or a model switch takes effect on the next turn.
 	agentAdvisorSignature string
 
+	// advisorReviewed is how many conversation messages have been handed to a
+	// review. It lives here, not on advisorSession, because the session is
+	// rebuilt on every settings, cwd or model-role drift: a fresh session would
+	// start its cursor at the current message count and silently skip the delta
+	// the previous turn produced. -1 means "not wired yet"; a new conversation
+	// resets it so a resumed or cleared session starts from its own end.
+	// Touched only on the UI goroutine.
+	advisorReviewed int
+
+	// advisorPending records a turn that ended while a review was already
+	// running. The cursor did not move for it, so the completion handler drains
+	// the accumulated delta once the review finishes. UI goroutine only.
+	advisorPending bool
+
+	// advisorFollowups counts consecutive reviews of turns the advisor's own
+	// note opened. At advisorMaxFollowups the run stops and the next note starts
+	// a fresh budget; a turn the person opened resets it. UI goroutine only.
+	advisorFollowups int
+
+	// advisorReview launches one review; nil means runAdvisorTurn. Tests
+	// replace it to observe a review's transcript without a provider.
+	advisorReview func(s *advisorSession, transcript string)
+
 	// agentPlanModel is the planModelSignature() the live agent was built with:
 	// "" when the session model answers, otherwise the model Plan Mode runs on.
 	// Entering or leaving Plan Mode on an idle runtime stops it, and this catches
@@ -230,6 +257,7 @@ func (m *model) Init() tea.Cmd {
 		trigger.StartAsyncHookTicker(),
 		awaitMainNotice(m.mainNotices),
 		awaitSelfLearnStart(m.selfLearnStarts),
+		awaitAdvisorDone(m.advisorDone),
 		autoUpdate(m.env.Version, m.services.Setting.AutoUpdate()),
 		refreshModelData(),
 		m.syncGitBar(),
