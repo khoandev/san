@@ -248,6 +248,9 @@ func (m *model) restoreHistory(sess *session.LegacyHistory) {
 	m.advisorPending = false
 	m.advisorFollowups = 0
 	m.services.AdvisorIndicator.Reset()
+	// Counts are per conversation: a resumed session starts from zero rather
+	// than inheriting the previous one's totals.
+	m.services.Usage.Reset()
 	m.services.Reminder.RestoreHistory(m.conv.Messages)
 	m.conv.CommittedCount = 0
 
@@ -371,6 +374,8 @@ func (m *model) forkSession() (string, error) {
 	m.advisorPending = false
 	m.advisorFollowups = 0
 	m.services.AdvisorIndicator.Reset()
+	// The fork's counts start empty: its parent's totals describe other work.
+	m.services.Usage.Reset()
 	m.restorePlanState(forked.Plan)
 	// Same storage switch as loadSessionByID: clear the tracker so
 	// initTaskStorage adopts the fork's directory, then re-import the tasks

@@ -58,6 +58,8 @@ type Executor struct {
 	mcpManager                 *mcp.Manager         // tool schemas, execution, per-subagent server sets
 	disabledToolsMu            sync.RWMutex
 	disabledTools              map[string]bool // effective global disabled tools, copied on set/read
+	runObserverMu              sync.RWMutex
+	runObserver                RunObserver // counts a finished run's inference steps; nil = no host counting
 	tasks                      *task.Manager
 	permission                 func(bool, string) perm.PermissionFunc
 	toolContext                func(context.Context, string) context.Context
@@ -192,6 +194,34 @@ func (e *Executor) SetAgentRoleSource(roles func(name string) string) {
 	e.agentRoles = roles
 }
 
+// RunObserver records one finished run: the resolved agent name and the
+// inference steps it spent. The host keeps the per-role counts; the executor
+// only reports, once per run.
+type RunObserver func(name string, steps int)
+
+// SetRunObserver wires the counter fed at the end of every run — foreground,
+// background and continuation alike. A nil observer stops reporting.
+func (e *Executor) SetRunObserver(obs RunObserver) {
+	e.runObserverMu.Lock()
+	e.runObserver = obs
+	e.runObserverMu.Unlock()
+}
+
+// observeRun reports one finished run without holding the observer lock while
+// the host counts: the observer may take its own lock, and a cancellation must
+// never wait on a UI map.
+func (e *Executor) observeRun(name string, steps int) {
+	if name == "" || steps <= 0 {
+		return
+	}
+	e.runObserverMu.RLock()
+	obs := e.runObserver
+	e.runObserverMu.RUnlock()
+	if obs != nil {
+		obs(name, steps)
+	}
+}
+
 // SetSkillsDirectory provides the skills directory section so subagents
 // with the Skill tool can see and invoke available skills.
 func (e *Executor) SetSkillsDirectory(skillsPrompt string) {
@@ -289,20 +319,28 @@ func (e *Executor) Run(ctx context.Context, req tool.AgentExecRequest) (*AgentRe
 	return result, err
 }
 
-func (e *Executor) runPrepared(ctx context.Context, run *preparedRun) (*AgentResult, error) {
+func (e *Executor) runPrepared(ctx context.Context, run *preparedRun) (result *AgentResult, err error) {
 	e.logRunStart(run)
 	e.fireSubagentStart(run.req, run.hookID)
+	// Every run reports its own inference count exactly once, including a run
+	// that ended in failure with partial work: the requests were spent either
+	// way.
+	defer func() {
+		if result != nil {
+			e.observeRun(run.cfg.config.Name, result.StepCount)
+		}
+	}()
 
-	result, err := e.executePreparedRun(ctx, run)
+	res, err := e.executePreparedRun(ctx, run)
 	if err != nil {
-		if unfinished := e.buildUnfinishedAgentResult(run, result); unfinished != nil {
+		if unfinished := e.buildUnfinishedAgentResult(run, res); unfinished != nil {
 			return unfinished, err
 		}
 		e.fireSubagentStop(run.req, run.hookID, "", "")
 		return nil, fmt.Errorf("LLM completion failed: %w", err)
 	}
 
-	return e.buildAgentResult(run, result), nil
+	return e.buildAgentResult(run, res), nil
 }
 
 // RunBackground executes an agent in the background and returns the task.

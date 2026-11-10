@@ -75,17 +75,19 @@ type Engine struct {
 func NewEngine(cfg EngineConfig) *Engine { return &Engine{cfg: cfg} }
 
 // Advise reviews one transcript delta and returns the note worth injecting into
-// the main conversation, or "" when there is nothing to say.
+// the main conversation, or "" when there is nothing to say. steps is how many
+// inference requests the review spent, which the caller records as this role's
+// usage.
 //
 // An error means the review did not run to an answer — a provider failure, a
 // timeout. Callers log it; a review that could not run says nothing about the
 // work, which is why it is never treated as approval.
-func (e *Engine) Advise(ctx context.Context, transcript string) (string, error) {
+func (e *Engine) Advise(ctx context.Context, transcript string) (note string, steps int, err error) {
 	if e == nil {
-		return "", fmt.Errorf("advisor engine is nil")
+		return "", 0, fmt.Errorf("advisor engine is nil")
 	}
 	if e.cfg.Client == nil {
-		return "", fmt.Errorf("advisor engine has no client")
+		return "", 0, fmt.Errorf("advisor engine has no client")
 	}
 
 	timeout := e.cfg.Timeout
@@ -128,12 +130,12 @@ func (e *Engine) Advise(ctx context.Context, transcript string) (string, error) 
 
 	res, err := ag.ThinkAct(ctx)
 	if err != nil {
-		return "", fmt.Errorf("advisor review: %w", err)
+		return "", 0, fmt.Errorf("advisor review: %w", err)
 	}
 	if res == nil {
-		return "", nil
+		return "", 0, nil
 	}
-	return parseNote(res.Content), nil
+	return parseNote(res.Content), res.Steps, nil
 }
 
 // parseNote turns the model's answer into the note to inject. NO_ADVICE (with

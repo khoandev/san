@@ -4,10 +4,36 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/genai-io/sdk-go/pkg/ai"
+	"github.com/genai-io/sdk-go/pkg/ai/aitest"
+
+	"github.com/genai-io/san/internal/core"
+
 	// Register the built-in tools so ReadOnlyTools filters a live registry, the
 	// same wiring the app uses.
 	_ "github.com/genai-io/san/internal/tool/register"
 )
+
+// The caller counts the advisor's requests, so a review must report the steps
+// the fork actually spent.
+func TestAdviseReportsInferenceSteps(t *testing.T) {
+	driver := aitest.New(aitest.Says("- the retry loop never resets its backoff"))
+	engine := NewEngine(EngineConfig{
+		Client: func([]core.Message) (*ai.Client, error) { return driver.Client(), nil },
+		CWD:    t.TempDir(),
+	})
+
+	note, steps, err := engine.Advise(t.Context(), "User: implement the retry loop")
+	if err != nil {
+		t.Fatalf("Advise: %v", err)
+	}
+	if !strings.Contains(note, "backoff") {
+		t.Fatalf("note = %q", note)
+	}
+	if steps != 1 {
+		t.Fatalf("steps = %d, want 1 for a single-inference review", steps)
+	}
+}
 
 func TestParseNote(t *testing.T) {
 	tests := []struct {
@@ -63,11 +89,11 @@ func TestReadOnlyToolsExcludesWriters(t *testing.T) {
 }
 
 func TestAdviseWithoutClientFails(t *testing.T) {
-	if _, err := NewEngine(EngineConfig{}).Advise(t.Context(), "User: hi"); err == nil {
+	if _, _, err := NewEngine(EngineConfig{}).Advise(t.Context(), "User: hi"); err == nil {
 		t.Fatal("an engine without a client reported a review")
 	}
 	var nilEngine *Engine
-	if _, err := nilEngine.Advise(t.Context(), "User: hi"); err == nil {
+	if _, _, err := nilEngine.Advise(t.Context(), "User: hi"); err == nil {
 		t.Fatal("a nil engine reported a review")
 	}
 }

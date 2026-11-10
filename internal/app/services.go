@@ -61,6 +61,10 @@ type services struct {
 	// once at services construction and outlives any session's wire/teardown,
 	// so the render path can always snapshot it without a nil check.
 	AdvisorIndicator *AdvisorIndicator
+
+	// Usage counts inference requests per agent role for this session. Every
+	// role's own call site adds to it; the status bar only reads snapshots.
+	Usage *AgentUsage
 }
 
 // SelfLearnServices holds the L1 self-learning state.
@@ -124,5 +128,6 @@ func newServices() services {
 		Reminder:         reminder.New(),
 		SelfLearn:        SelfLearnServices{Indicator: NewSelfLearnIndicator(), Recent: NewRecentLearnLog()},
 		AdvisorIndicator: NewAdvisorIndicator(),
+		Usage:            NewAgentUsage(),
 	}
 }

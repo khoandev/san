@@ -385,8 +385,12 @@ func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
 
 	engine, closeFork := m.advisorEngine(s)
 	var err error
-	note, err = engine.Advise(ctx, transcript)
+	var steps int
+	note, steps, err = engine.Advise(ctx, transcript)
 	closeFork()
+	// The requests were spent whether or not the review produced a note, so
+	// the advisor's own count includes a review that came back empty.
+	m.services.Usage.Add("advisor", steps)
 	if !s.live.Load() {
 		abandoned = true
 		return

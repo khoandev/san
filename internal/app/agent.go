@@ -913,6 +913,8 @@ func (m *model) ResetAgentRuntime() error {
 	m.advisorPending = false
 	m.advisorFollowups = 0
 	m.services.AdvisorIndicator.Reset()
+	// The per-role request counts belong to the conversation going away.
+	m.services.Usage.Reset()
 	m.env.Advisor = setting.AdvisorSettings{}
 	if m.services.Setting != nil {
 		m.env.Advisor = m.services.Setting.Advisor()
@@ -991,6 +993,17 @@ func (m *model) ReconfigureAgentTool() {
 	resolver := roleResolverFor(m.modelRoleBindings, m.llmStore(), m.env.LLMProvider, m.env.GetModelID())
 	executor.SetRoleResolver(resolver)
 	executor.SetAgentRoleSource(m.agentRoleFor)
+	// Every finished run reports its inference steps to the session counter,
+	// keyed by the role /settings assigned the definition (otherwise by the
+	// definition's own name). The observer runs on the worker's goroutine, so
+	// it only touches the mutex-guarded counter.
+	executor.SetRunObserver(func(name string, steps int) {
+		role := strings.TrimPrefix(strings.TrimSpace(m.agentRoleFor(name)), "@")
+		if role == "" {
+			role = name
+		}
+		m.services.Usage.Add(role, steps)
+	})
 	// The Agent tool's catalog advertises the role each definition will run on,
 	// so a model choosing an agent reads what /settings configured rather than
 	// what the definition file alone declares.
