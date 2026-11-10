@@ -53,6 +53,28 @@ func DrawsThinkingBody(mode string) bool {
 	return mode == "" || mode == ThinkingDisplayFull
 }
 
+// How the TUI draws its semantic icons. A display preference only: it never
+// changes what the app does, just which glyph set stands for the same mark.
+// This package stores and validates the raw choice; mapping a style to its
+// glyph table is the UI kit's job (kit.ResolveIconStyle).
+const (
+	// IconStyleAuto picks a style for the terminal: Nerd Font when the
+	// environment opts in, otherwise plain Unicode — and plain ASCII when the
+	// output is not a color terminal. It is the default.
+	IconStyleAuto = "auto"
+	// IconStyleUnicode draws the default symbol set (●, ✦, ✓, …).
+	IconStyleUnicode = "unicode"
+	// IconStyleEmoji draws colorful emoji in place of the symbols. They are
+	// double-width, so every row that pads by glyph width must measure them.
+	IconStyleEmoji = "emoji"
+	// IconStyleNerd draws Nerd Font private-use glyphs; a terminal without a
+	// patched font shows tofu instead.
+	IconStyleNerd = "nerd"
+)
+
+// DefaultIconStyle is what an unset or unrecognized value resolves to.
+const DefaultIconStyle = IconStyleAuto
+
 // Data represents the complete San configuration.
 type Data struct {
 	Permissions PermissionSettings `json:"permissions,omitzero"`
@@ -79,7 +101,12 @@ type Data struct {
 	EnabledPlugins   map[string]bool   `json:"enabledPlugins,omitempty"`
 	DisabledTools    map[string]bool   `json:"disabledTools,omitempty"`
 	Theme            string            `json:"theme,omitempty"`
-	SearchProvider   string            `json:"searchProvider,omitempty"`
+	// IconStyle selects the glyph set the TUI draws its semantic marks with:
+	// "auto", "unicode", "emoji" or "nerd" (see the IconStyle* constants).
+	// Empty or unrecognized resolves to DefaultIconStyle. Read via
+	// Data.IconStyleKind(); only the UI kit decides what a style draws.
+	IconStyle      string `json:"iconStyle,omitempty"`
+	SearchProvider string `json:"searchProvider,omitempty"`
 	// AllowBypass gates Bypass Permissions mode. Opt-out: nil/absent means
 	// allowed (bypass is in the Shift+Tab cycle by default); set false to
 	// lock it out. Read via Settings.AllowBypass().
@@ -599,6 +626,22 @@ func (s *Data) ThinkingDisplayMode() string {
 		return s.ThinkingDisplay
 	default:
 		return DefaultThinkingDisplay
+	}
+}
+
+// IconStyleKind resolves the stored icon style to one of the IconStyle*
+// constants, mapping an unset or unrecognized value to DefaultIconStyle. It
+// only validates the choice: which glyph table a style draws is decided in the
+// UI kit, so this package stays free of render logic.
+func (s *Data) IconStyleKind() string {
+	if s == nil {
+		return DefaultIconStyle
+	}
+	switch s.IconStyle {
+	case IconStyleAuto, IconStyleUnicode, IconStyleEmoji, IconStyleNerd:
+		return s.IconStyle
+	default:
+		return DefaultIconStyle
 	}
 }
 

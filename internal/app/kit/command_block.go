@@ -15,7 +15,7 @@ func CommandMarkerColumn(width int) int {
 		width = 80
 	}
 	available := max(1, width-1)
-	return min(ToolIconWidth, max(0, available-5))
+	return min(ToolIconWidth(), max(0, available-5))
 }
 
 // RenderCommandBlock draws shell input as one inset rectangular surface. The

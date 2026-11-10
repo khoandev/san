@@ -796,7 +796,7 @@ func RenderToolCalls(params ToolCallsParams) string {
 				}
 			}
 			if (params.CompactAgentLabel || hasResult && !params.ToolCallsExpanded) && rowWidth > 0 {
-				label = kit.TruncateText(label, max(1, rowWidth-kit.ToolIconWidth))
+				label = kit.TruncateText(label, max(1, rowWidth-kit.ToolIconWidth()))
 			}
 			if to, body := sendMessageParts(tc.Input); tc.Name == tool.ToolSendMessage && to != "" {
 				sb.WriteString(renderAgentMessageLine("●", "To", to, body, params.Width, params.AgentIdentities, params.AgentColors, params.MemberColors) + "\n")

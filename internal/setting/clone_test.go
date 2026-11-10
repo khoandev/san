@@ -23,6 +23,7 @@ func TestCloneCopiesEveryField(t *testing.T) {
 		EnabledPlugins:          map[string]bool{"p": true},
 		DisabledTools:           map[string]bool{"WebFetch": true},
 		Theme:                   "dark",
+		IconStyle:               IconStyleNerd,
 		SearchProvider:          "exa",
 		AllowBypass:             &yes,
 		AutoUpdate:              &no,

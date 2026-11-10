@@ -113,6 +113,15 @@ func (s *Settings) ShowSkillCommands() bool {
 	return s.data == nil || s.data.SkillCommands == nil || *s.data.SkillCommands
 }
 
+// IconStyleKind reports the icon style the TUI should draw, already normalized
+// to one of the IconStyle* constants. It is a display preference only; the
+// glyph table a style draws is chosen by the UI kit.
+func (s *Settings) IconStyleKind() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.IconStyleKind()
+}
+
 func (s *Settings) IsGitRepo(cwd string) bool {
 	return IsGitRepo(cwd)
 }

@@ -846,6 +846,15 @@ func SaveTheme(t string) error {
 	return nil
 }
 
+// SaveIconStyle persists the TUI icon-style choice to ~/.san/settings.json,
+// replacing the field. Callers pass one of the IconStyle* constants; an
+// unrecognized value resolves to the default on read (see IconStyleKind).
+// Where the style is a per-user display preference, the choice is written to
+// the user file only — a project overlay never sets it.
+func SaveIconStyle(style string) error {
+	return updateSettingsFile(ScopeUser, func(d *Data) { d.IconStyle = style })
+}
+
 // SaveContextBar persists the context-usage bar on/off choice to
 // ~/.san/settings.json. The value is written as an explicit pointer so an
 // "off" choice overrides any inherited "on" instead of being dropped as a

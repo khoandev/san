@@ -4,8 +4,8 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// ToolIconWidth reserves the display columns for a tool icon and its gap.
-const ToolIconWidth = 2
+// ToolIconWidth now lives in symbols.go: it follows the live glyph table
+// rather than a fixed column count, because an emoji icon is double-width.
 
 // Selector styles — lazy functions to pick up the current theme at render time.
 

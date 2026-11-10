@@ -228,6 +228,52 @@ type OperationModeParams struct {
 	// Advisor is the advisor's badge: off renders nothing, otherwise which
 	// model reviews, whether a review is running, and what the last one found.
 	Advisor AdvisorBadge
+	// AgentUsage is the per-role inference request count: role name and the
+	// number of requests it spent this session. Empty renders nothing.
+	AgentUsage []AgentUsageCount
+}
+
+// AgentUsageCount is one agent role's accumulated request count on the status
+// line. The name is the role or definition name; the renderer owns the glyph.
+type AgentUsageCount struct {
+	Name  string
+	Count int
+}
+
+// agentUsageIcons maps the roles a session usually runs to their glyph. A
+// custom agent falls back to the first letter of its name, so the segment never
+// depends on a fixed catalog.
+var agentUsageIcons = map[string]string{
+	"advisor":  "◆",
+	"quick":    "»",
+	"explore":  "⌕",
+	"task":     "▣",
+	"reviewer": "✓",
+}
+
+// RenderAgentUsage renders the per-role counts as "icon count" pairs joined by
+// spaces, in the order the caller supplies. Roles that ran nothing are omitted,
+// and an empty result means the status line carries no usage segment at all.
+func RenderAgentUsage(entries []AgentUsageCount) string {
+	parts := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Count <= 0 {
+			continue
+		}
+		icon := agentUsageIcons[entry.Name]
+		if icon == "" {
+			name := []rune(strings.TrimSpace(entry.Name))
+			if len(name) == 0 {
+				continue
+			}
+			icon = strings.ToUpper(string(name[0]))
+		}
+		parts = append(parts, fmt.Sprintf("%s%d", icon, entry.Count))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Render(strings.Join(parts, " "))
 }
 
 // AdvisorBadge is the advisor's status-bar state. The zero value renders
@@ -370,11 +416,11 @@ func renderGroupStatus(p OperationModeParams) string {
 }
 
 // renderStatusCluster composes the status line's right-hand cluster, in
-// display order: model name, optional transient status message, the numeric
-// "X/Y" context label, the optional visual context bar, the optional compressions
-// badge, and the optional cost. Each piece is a statusSegment with a drop
-// priority; fitStatusSegments drops the least important first when the
-// terminal is too narrow to hold them all.
+// display order: model name, the per-role request counts, optional transient
+// status message, the numeric "X/Y" context label, the optional visual context
+// bar, the optional compressions badge, and the optional cost. Each piece is a
+// statusSegment with a drop priority; fitStatusSegments drops the least
+// important first when the terminal is too narrow to hold them all.
 func renderStatusCluster(p OperationModeParams) string {
 	if p.ModelName == "" {
 		return ""
@@ -383,9 +429,14 @@ func renderStatusCluster(p OperationModeParams) string {
 	sep := muted.Render(" · ")
 
 	// Priority 1 = most important (dropped last). The model name always
-	// renders; everything else drops before it under width pressure.
+	// renders; everything else drops before it under width pressure. Usage is
+	// the first thing to go: the model and the context fill are what the line
+	// is for, and the counts are reference material.
 	var segments []statusSegment
 	segments = append(segments, statusSegment{text: muted.Render(p.ModelName), priority: 1})
+	if usage := RenderAgentUsage(p.AgentUsage); usage != "" {
+		segments = append(segments, statusSegment{text: usage, priority: 5})
+	}
 	if p.StatusMessage != "" {
 		segments = append(segments, statusSegment{text: muted.Render(p.StatusMessage), priority: 2})
 	}
@@ -394,7 +445,7 @@ func renderStatusCluster(p OperationModeParams) string {
 	// limit is unknown, so the slot stays visible instead of silently hiding.
 	segments = append(segments, statusSegment{
 		text:     RenderContextLabel(p.ContextTokens, p.ContextWindow),
-		priority: 3,
+		priority: 4,
 	})
 
 	// The visual bar is opt-in (off by default). When shown it also carries
@@ -406,18 +457,18 @@ func renderStatusCluster(p OperationModeParams) string {
 				bar += sep + muted.Render(hint)
 			}
 		}
-		segments = append(segments, statusSegment{text: bar, priority: 4})
+		segments = append(segments, statusSegment{text: bar, priority: 5})
 	}
 
 	if badge := RenderCompressionsBadge(p.Compressions); badge != "" {
-		segments = append(segments, statusSegment{text: badge, priority: 5})
+		segments = append(segments, statusSegment{text: badge, priority: 6})
 	}
 	if !p.ConversationCost.IsZero() {
-		segments = append(segments, statusSegment{text: muted.Render(kit.FormatCostTotal(p.ConversationCost)), priority: 6})
+		segments = append(segments, statusSegment{text: muted.Render(kit.FormatCostTotal(p.ConversationCost)), priority: 7})
 	}
 
 	if p.SubscriptionUsage != "" {
-		segments = append(segments, statusSegment{text: muted.Render(p.SubscriptionUsage), priority: 7})
+		segments = append(segments, statusSegment{text: muted.Render(p.SubscriptionUsage), priority: 8})
 	}
 	survivors := fitStatusSegments(segments, p.Width, lipgloss.Width(sep))
 	return strings.Join(survivors, sep)

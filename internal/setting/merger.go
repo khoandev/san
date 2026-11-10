@@ -24,6 +24,7 @@ func mergeSettings(base, overlay *Data) *Data {
 	// of the roles it cares about and leave the rest to the user's file.
 	result.ModelRoleEfforts = mergeMaps(base.ModelRoleEfforts, overlay.ModelRoleEfforts)
 	result.Theme = coalesce(overlay.Theme, base.Theme)
+	result.IconStyle = coalesce(overlay.IconStyle, base.IconStyle)
 	result.Hooks = mergeHooks(base.Hooks, overlay.Hooks)
 	result.Env = mergeMaps(base.Env, overlay.Env)
 	result.EnabledPlugins = mergeMaps(base.EnabledPlugins, overlay.EnabledPlugins)

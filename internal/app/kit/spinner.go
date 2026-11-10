@@ -27,17 +27,19 @@ var (
 
 // LiveDot is the one indicator for a reply or action still in flight: a
 // breathing ●. The row settles into a solid ● in its own color when the work
-// is done, so the color says done and the breathing says waiting.
+// is done, so the color says done and the breathing says waiting. The glyph
+// follows CurrentSymbols; only the breath is fixed.
 func LiveDot(frame int) string {
-	return liveDotMark("●", frame)
+	return liveDotMark(CurrentSymbols.LiveDot, frame)
 }
 
-// MemoryMark identifies a memory being read or supplied as context.
+// MemoryMark identifies a memory being read or supplied as context. It is the
+// Unicode table's value — the canonical glyph — which the other tables replace.
 const MemoryMark = "⟡"
 
 // LiveMemory gives an in-flight memory read the same gentle breath as tools.
 func LiveMemory(frame int) string {
-	return liveDotMark(MemoryMark, frame)
+	return liveDotMark(CurrentSymbols.MemoryMark, frame)
 }
 
 func liveDotMark(mark string, frame int) string {
@@ -45,11 +47,12 @@ func liveDotMark(mark string, frame int) string {
 }
 
 // ThinkingMark leads reasoning: the star of the San mark, apart from the
-// reply's ●.
+// reply's ●. It is the Unicode table's value — the canonical glyph — which the
+// other tables replace.
 const ThinkingMark = "✦"
 
 // LiveStar is the breathing ThinkingMark held while the model's reply is
 // awaited, bold so the small glyph reads.
 func LiveStar(frame int) string {
-	return lipgloss.NewStyle().Bold(true).Foreground(starBreath[frame%len(starBreath)]).Render(ThinkingMark)
+	return lipgloss.NewStyle().Bold(true).Foreground(starBreath[frame%len(starBreath)]).Render(CurrentSymbols.ThinkingStar)
 }

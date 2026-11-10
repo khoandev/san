@@ -25,7 +25,7 @@ func renderBackgroundShellCall(toolName, input, taskID string, width int) string
 	if description != "" {
 		label += " · " + description
 	}
-	label = kit.TruncateText(label, max(1, width-kit.ToolIconWidth))
+	label = kit.TruncateText(label, max(1, width-kit.ToolIconWidth()))
 	header := renderAgentColoredLine(label, width, "●", backgroundIdentityColor(taskID))
 	return header + "\n" + kit.RenderCommandBlock(command, width)
 }

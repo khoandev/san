@@ -458,6 +458,34 @@ func TestStatusBarShowsTheAdvisorState(t *testing.T) {
 	}
 }
 
+// The status line shows each role's request count as icon + number, fed by the
+// session counter rather than by the transcript.
+func TestStatusBarShowsAgentUsage(t *testing.T) {
+	m := model{
+		services: services{
+			LLM:   &llm.Conn{},
+			Hook:  hook.NewEngine(setting.NewData(), "", t.TempDir(), ""),
+			Usage: NewAgentUsage(),
+		},
+		plan: plan.NewStore(),
+	}
+	m.services.Usage.Add("quick", 2)
+	m.services.Usage.Add("advisor", 3)
+	m.env.Width = 120
+
+	got := ansi.Strip(m.renderModeStatus())
+	for _, want := range []string{"»2", "◆3"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status line %q is missing %q", got, want)
+		}
+	}
+
+	m.services.Usage.Reset()
+	if got := ansi.Strip(m.renderModeStatus()); strings.Contains(got, "»") || strings.Contains(got, "◆") {
+		t.Fatalf("cleared usage still rendered: %q", got)
+	}
+}
+
 // /advisor and the badge read the same snapshot.
 func TestAdvisorStatusReadsTheIndicator(t *testing.T) {
 	on := true

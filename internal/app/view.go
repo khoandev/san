@@ -608,6 +608,7 @@ func (m model) renderModeStatus() string {
 	window, budget := kit.GetContextLimits(m.services.LLM.Store(), m.env.CurrentModel)
 	return conv.RenderModeStatus(conv.OperationModeParams{
 		Advisor:           m.advisorBadge(),
+		AgentUsage:        m.agentUsageCounts(),
 		Mode:              m.env.OperationMode,
 		PlanMode:          m.planStatusLabel(),
 		ContextTokens:     m.env.ContextTokens,
@@ -649,6 +650,21 @@ func (m model) advisorBadge() conv.AdvisorBadge {
 		LastError: snap.LastError,
 		LastSkip:  snap.LastSkip,
 	}
+}
+
+// agentUsageCounts maps the session's per-role request totals onto the status
+// line's compact icon+number form. The snapshot already carries display order;
+// this only renames the types, so the UI never sorts roles itself.
+func (m model) agentUsageCounts() []conv.AgentUsageCount {
+	snap := m.services.Usage.Snapshot()
+	if len(snap) == 0 {
+		return nil
+	}
+	counts := make([]conv.AgentUsageCount, len(snap))
+	for i, entry := range snap {
+		counts[i] = conv.AgentUsageCount{Name: entry.Name, Count: entry.Count}
+	}
+	return counts
 }
 
 // Decorative grouping yields first as the composer or active workers grow.
