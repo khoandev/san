@@ -607,6 +607,7 @@ func (m model) renderModeStatus() string {
 	}
 	window, budget := kit.GetContextLimits(m.services.LLM.Store(), m.env.CurrentModel)
 	return conv.RenderModeStatus(conv.OperationModeParams{
+		Advisor:           m.advisorBadge(),
 		Mode:              m.env.OperationMode,
 		PlanMode:          m.planStatusLabel(),
 		ContextTokens:     m.env.ContextTokens,
@@ -629,6 +630,25 @@ func (m model) renderModeStatus() string {
 		GroupWaiting:      len(m.grp.announced),
 		GroupApproval:     m.membersAwaitingApproval(),
 	})
+}
+
+// advisorBadge maps the advisor's live state onto the status-bar badge. An
+// advisor that is off renders nothing; one that is on but has no session names
+// the missing model instead of staying silent.
+func (m model) advisorBadge() conv.AdvisorBadge {
+	if !m.env.Advisor.Enabled() {
+		return conv.AdvisorBadge{}
+	}
+	snap := m.services.AdvisorIndicator.Snapshot()
+	return conv.AdvisorBadge{
+		Enabled:   true,
+		HasModel:  m.services.Advisor != nil,
+		Reviewing: snap.Reviewing,
+		Reviews:   snap.Reviews,
+		LastNote:  snap.LastNote,
+		LastError: snap.LastError,
+		LastSkip:  snap.LastSkip,
+	}
 }
 
 // Decorative grouping yields first as the composer or active workers grow.

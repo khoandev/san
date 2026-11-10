@@ -56,6 +56,11 @@ type services struct {
 	// Advisor is the session's live advisor, nil when the advisor is off so a
 	// disabled advisor costs no goroutine and no model call.
 	Advisor *advisorSession
+
+	// AdvisorIndicator is the status-bar state of the advisor. It is allocated
+	// once at services construction and outlives any session's wire/teardown,
+	// so the render path can always snapshot it without a nil check.
+	AdvisorIndicator *AdvisorIndicator
 }
 
 // SelfLearnServices holds the L1 self-learning state.
@@ -100,23 +105,24 @@ type selfLearnSession struct {
 
 func newServices() services {
 	return services{
-		Setting:      setting.Default(),
-		LLM:          llm.Default(),
-		Tool:         tool.Default(),
-		Hook:         hook.DefaultEngine(),
-		SessionStore: appSessionStore,
-		sessionID:    appSessionID,
-		Skill:        skill.Default(),
-		Subagent:     subagent.Default(),
-		Command:      command.Default(),
-		Task:         task.Default(),
-		Tracker:      todo.Default(),
-		Cron:         cron.Default(),
-		MCP:          mcp.DefaultManager(),
-		Plugin:       plugin.Default(),
-		Agent:        agent.Default(),
-		Persona:      persona.Default(),
-		Reminder:     reminder.New(),
-		SelfLearn:    SelfLearnServices{Indicator: NewSelfLearnIndicator(), Recent: NewRecentLearnLog()},
+		Setting:          setting.Default(),
+		LLM:              llm.Default(),
+		Tool:             tool.Default(),
+		Hook:             hook.DefaultEngine(),
+		SessionStore:     appSessionStore,
+		sessionID:        appSessionID,
+		Skill:            skill.Default(),
+		Subagent:         subagent.Default(),
+		Command:          command.Default(),
+		Task:             task.Default(),
+		Tracker:          todo.Default(),
+		Cron:             cron.Default(),
+		MCP:              mcp.DefaultManager(),
+		Plugin:           plugin.Default(),
+		Agent:            agent.Default(),
+		Persona:          persona.Default(),
+		Reminder:         reminder.New(),
+		SelfLearn:        SelfLearnServices{Indicator: NewSelfLearnIndicator(), Recent: NewRecentLearnLog()},
+		AdvisorIndicator: NewAdvisorIndicator(),
 	}
 }

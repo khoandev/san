@@ -912,6 +912,7 @@ func (m *model) ResetAgentRuntime() error {
 	m.advisorReviewed = -1
 	m.advisorPending = false
 	m.advisorFollowups = 0
+	m.services.AdvisorIndicator.Reset()
 	m.env.Advisor = setting.AdvisorSettings{}
 	if m.services.Setting != nil {
 		m.env.Advisor = m.services.Setting.Advisor()

@@ -225,6 +225,21 @@ type OperationModeParams struct {
 	// "execute" while it runs an approved plan, "" otherwise. The operation
 	// mode cannot express either posture.
 	PlanMode string
+	// Advisor is the advisor's badge: off renders nothing, otherwise which
+	// model reviews, whether a review is running, and what the last one found.
+	Advisor AdvisorBadge
+}
+
+// AdvisorBadge is the advisor's status-bar state. The zero value renders
+// nothing, which is what a disabled or unconfigured advisor looks like.
+type AdvisorBadge struct {
+	Enabled   bool   // the advisor is on for this session
+	HasModel  bool   // a review model is resolved; false with Enabled shows why nothing runs
+	Reviewing bool   // a review is in flight
+	Reviews   int    // reviews finished in this conversation
+	LastNote  string // the last note injected, "" when the last review found nothing
+	LastError string // the last review's failure
+	LastSkip  string // why the last completed turn was not reviewed
 }
 
 // RenderModeStatus renders the combined mode status line.
@@ -234,6 +249,7 @@ func RenderModeStatus(params OperationModeParams) string {
 		mode += hint
 	}
 	mode = withPlanBadge(mode, params.PlanMode)
+	mode = withAdvisorBadge(mode, params.Advisor)
 	left := withGroupStatus(mode, params)
 	if params.Width <= 0 {
 		return left
@@ -269,6 +285,47 @@ func withPlanBadge(mode, planMode string) string {
 		return "  " + badge // the indent the mode indicator would have
 	}
 	return mode + "  " + badge
+}
+
+// withAdvisorBadge puts the advisor beside the plan badge: it answers "did the
+// reviewer look at that?" on the same row as how the session is running.
+func withAdvisorBadge(mode string, badge AdvisorBadge) string {
+	rendered := renderAdvisorBadge(badge)
+	if rendered == "" {
+		return mode
+	}
+	if mode == "" {
+		return "  " + rendered // the indent the mode indicator would have
+	}
+	return mode + "  " + rendered
+}
+
+// renderAdvisorBadge renders the advisor's state as one short label. A badged
+// review is never silent: running, noted, checked, failed and skipped each read
+// differently, and an enabled advisor with no model names the missing piece.
+func renderAdvisorBadge(b AdvisorBadge) string {
+	if !b.Enabled {
+		return ""
+	}
+	var label string
+	var clr kit.AdaptiveColor
+	switch {
+	case !b.HasModel:
+		label, clr = "advisor · no model", kit.CurrentTheme.Muted
+	case b.Reviewing:
+		label, clr = "advisor · reviewing", kit.CurrentTheme.Focus
+	case b.LastError != "":
+		label, clr = "advisor · error", kit.CurrentTheme.Warning
+	case b.LastNote != "":
+		label, clr = "advisor · noted", kit.CurrentTheme.Success
+	case b.Reviews > 0:
+		label, clr = "advisor · checked", kit.CurrentTheme.Muted
+	case b.LastSkip != "":
+		label, clr = "advisor · "+b.LastSkip, kit.CurrentTheme.Muted
+	default:
+		label, clr = "advisor", kit.CurrentTheme.Muted
+	}
+	return lipgloss.NewStyle().Foreground(clr).Render(label)
 }
 
 // withGroupStatus puts the group after the mode: who this session is sits

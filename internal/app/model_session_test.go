@@ -40,6 +40,8 @@ func TestClearStartsAFreshDurableSession(t *testing.T) {
 	m.advisorReviewed = 3
 	m.advisorPending = true
 	m.advisorFollowups = 2
+	m.services.AdvisorIndicator = NewAdvisorIndicator()
+	m.services.AdvisorIndicator.Finish("- old note", nil)
 	if err := m.clearSession(); err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +53,9 @@ func TestClearStartsAFreshDurableSession(t *testing.T) {
 	}
 	if m.advisorFollowups != 0 {
 		t.Fatalf("clear kept %d advisory followups", m.advisorFollowups)
+	}
+	if snap := m.services.AdvisorIndicator.Snapshot(); snap.Reviews != 0 || snap.LastNote != "" {
+		t.Fatalf("clear kept the previous session's advisor badge: %+v", snap)
 	}
 	id := m.sessionID()
 	if id == "old" || id == "" {

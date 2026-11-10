@@ -247,6 +247,7 @@ func (m *model) restoreHistory(sess *session.LegacyHistory) {
 	m.advisorReviewed = -1
 	m.advisorPending = false
 	m.advisorFollowups = 0
+	m.services.AdvisorIndicator.Reset()
 	m.services.Reminder.RestoreHistory(m.conv.Messages)
 	m.conv.CommittedCount = 0
 
@@ -369,6 +370,7 @@ func (m *model) forkSession() (string, error) {
 	m.advisorReviewed = -1
 	m.advisorPending = false
 	m.advisorFollowups = 0
+	m.services.AdvisorIndicator.Reset()
 	m.restorePlanState(forked.Plan)
 	// Same storage switch as loadSessionByID: clear the tracker so
 	// initTaskStorage adopts the fork's directory, then re-import the tasks

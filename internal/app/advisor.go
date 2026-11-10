@@ -10,6 +10,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -231,11 +232,16 @@ func (m *model) advisorSignature() string {
 // bug where the cursor advanced before the busy check.
 func (m *model) reviewCompletedTurn(result core.Result) {
 	s := m.services.Advisor
-	if s == nil || !s.live.Load() || !advisorReviewsTurn(result) {
+	if s == nil || !s.live.Load() {
+		return
+	}
+	if !advisorReviewsTurn(result) {
+		m.services.AdvisorIndicator.Skip(string(result.StopReason))
 		return
 	}
 	if s.busy.Load() {
 		m.advisorPending = true
+		m.services.AdvisorIndicator.Skip("queued")
 		return
 	}
 	m.startAdvisorReview(s)
@@ -245,8 +251,13 @@ func (m *model) reviewCompletedTurn(result core.Result) {
 // advisor should read. A cancelled turn says nothing about the work, and an
 // errored inference is a failure rather than an outcome. Every other ending —
 // a normal stop, the output cap, the step cap, a hook ending the turn — left
-// real work behind. OnTurnEnd's cancel branch returns before calling the
-// trigger; the check stays here so a second path cannot skip it silently.
+// real work behind.
+//
+// The checks are defensive rather than reachable from today's trigger:
+// OnTurnEnd returns before calling it on a cancel, and the SDK never emits a
+// turn end for StopError (core/run.go treats a failed inference as an agent
+// stop). They stay so a second call path cannot skip or review those turns
+// silently.
 func advisorReviewsTurn(result core.Result) bool {
 	return result.StopReason != core.StopCanceled && result.StopReason != core.StopError
 }
@@ -274,6 +285,7 @@ func (m *model) startAdvisorReview(s *advisorSession) {
 		if m.advisorFollowups >= advisorMaxFollowups {
 			m.advisorFollowups = 0
 			m.advisorReviewed = len(msgs)
+			m.services.AdvisorIndicator.Skip("capped")
 			return
 		}
 	} else {
@@ -284,18 +296,21 @@ func (m *model) startAdvisorReview(s *advisorSession) {
 	transcript := renderAdvisorTranscript(delta)
 	if transcript == "" {
 		m.advisorReviewed = len(msgs)
+		m.services.AdvisorIndicator.Skip("no new work")
 		return
 	}
 	// The cursor advances after the busy check: a review that could not start
 	// stays pending with its delta intact for the drain to pick up.
 	if !s.busy.CompareAndSwap(false, true) {
 		m.advisorPending = true
+		m.services.AdvisorIndicator.Skip("queued")
 		return
 	}
 	m.advisorReviewed = len(msgs)
 	if openedByNote {
 		m.advisorFollowups++
 	}
+	m.services.AdvisorIndicator.BeginReview()
 	run := m.advisorReview
 	if run == nil {
 		run = m.runAdvisorTurn
@@ -349,12 +364,20 @@ func (m *model) onAdvisorDone() tea.Cmd {
 // runAdvisorTurn executes one review. Every side effect is a log line, a
 // mutex-guarded field or a channel send, so it may run on any goroutine.
 func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
-	// Release the slot and wake the main loop on every path — a note, no note,
-	// an error or a teardown — or a queued review would wait forever. The
-	// signal goes last so the drain sees a free slot.
+	var note string
+	var reviewErr error
+	abandoned := false
+	// Release the slot, record the outcome and wake the main loop on every
+	// path — a note, no note, an error or a teardown — or a queued review would
+	// wait forever. The signal goes last so the drain sees a free slot.
 	defer func() {
 		s.setRunning(false)
 		s.busy.Store(false)
+		if abandoned {
+			m.services.AdvisorIndicator.Abandon()
+		} else {
+			m.services.AdvisorIndicator.Finish(note, reviewErr)
+		}
 		m.publishAdvisorDone()
 	}()
 	s.setRunning(true)
@@ -363,15 +386,23 @@ func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
 	defer cancel()
 
 	engine, closeFork := m.advisorEngine(s)
-	note, err := engine.Advise(ctx, transcript)
+	var err error
+	note, err = engine.Advise(ctx, transcript)
 	closeFork()
 	if !s.live.Load() {
+		abandoned = true
 		return
 	}
 	if err != nil {
-		if ctx.Err() == nil {
+		switch {
+		case ctx.Err() == nil, errors.Is(ctx.Err(), context.DeadlineExceeded):
+			reviewErr = err
 			s.setError(err)
 			log.Logger().Warn("advisor review failed", zap.Error(err))
+		default:
+			// A session teardown cancelled the review: it has no outcome, so
+			// it must not look like a checked turn on the badge.
+			abandoned = true
 		}
 		return
 	}
@@ -379,15 +410,14 @@ func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
 		s.clearError()
 		return
 	}
-	if !s.acceptNote(note) {
-		return
+	if s.acceptNote(note) {
+		// The notice shows the note in the conversation and hands it to the
+		// agent as a user message; see notify.go.
+		m.notifyMain(mainNotice{
+			Display: "advisor · " + advisorNoteLine(note),
+			Content: "<advisory>\n" + note + "\n</advisory>",
+		})
 	}
-	// The notice shows the note in the conversation and hands it to the agent
-	// as a user message; see notify.go.
-	m.notifyMain(mainNotice{
-		Display: "advisor · " + advisorNoteLine(note),
-		Content: "<advisory>\n" + note + "\n</advisory>",
-	})
 }
 
 // advisorEngine builds the fork for one review, opening the sidechain session
@@ -542,14 +572,8 @@ func normalizeNote(note string) string {
 	return strings.Join(strings.Fields(strings.ToLower(note)), " ")
 }
 
-// snapshot is what /advisor reports.
-func (s *advisorSession) snapshot() (running bool, last, errText string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.running, s.lastNote, s.lastErr
-}
-
-// advisorStatusLine reports the live configuration and the last note.
+// advisorStatusLine reports the live configuration and the last note, from the
+// same snapshot the status-bar badge renders.
 func (m *model) advisorStatusLine() string {
 	cfg := m.env.Advisor
 	s := m.services.Advisor
@@ -559,17 +583,17 @@ func (m *model) advisorStatusLine() string {
 		}
 		return "advisor · on · no model connected"
 	}
-	running, last, lastErr := s.snapshot()
+	badge := m.services.AdvisorIndicator.Snapshot()
 	state := "on"
-	if running {
+	if badge.Reviewing {
 		state = "reviewing"
 	}
 	line := fmt.Sprintf("advisor · %s · %s", state, s.modelID)
-	if last != "" {
-		line += "\nlast: " + advisorNoteLine(last)
+	if badge.LastNote != "" {
+		line += "\nlast: " + advisorNoteLine(badge.LastNote)
 	}
-	if lastErr != "" {
-		line += "\nlast error: " + lastErr
+	if badge.LastError != "" {
+		line += "\nlast error: " + badge.LastError
 	}
 	return line
 }

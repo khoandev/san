@@ -2,17 +2,21 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/genai-io/sdk-go/pkg/ai"
 
 	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/hook"
+	"github.com/genai-io/san/internal/llm"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/task"
 )
@@ -161,31 +165,53 @@ func TestReviewCompletedTurnStopReasons(t *testing.T) {
 	}
 }
 
-// A background task completion arrives as a notice, becomes the next turn's
-// input, and that turn ends like any other — so the advisor reviews it.
+// A background task completion arrives as a notice and reaches the running
+// turn, so the advisor reviews that work when the turn ends.
 func TestTaskCompletionTurnReachesTheAdvisor(t *testing.T) {
-	m, _ := noticeDeliveryModel(t)
+	m, provider := noticeDeliveryModel(t)
 	attachTurnSession(t, m)
 	m.services.Hook = hook.NewEngine(setting.NewData(), "", t.TempDir(), "")
 	m.env.Width = 80
 	m.services.Task = task.NewManager()
 	m.wireTaskLifecycle(nil)
 	t.Cleanup(func() { task.SetLifecycleHandler(nil) })
+	m.conv.Stream.Active = true // the agent is mid-turn when the worker finishes
 
 	s, _ := liveAdvisorSession()
+	s.cancel = func() {}
 	m.services.Advisor = s
 	reviews := make(chan string, 1)
 	m.advisorReview = func(_ *advisorSession, transcript string) { reviews <- transcript }
 
-	// deliverNotice turns a completion into this user message; the agent's
-	// answer to it is the turn that ends here.
-	notice := m.showNoticeLine(taskNotice())
-	m.services.Agent.SetMessages([]core.Message{notice, core.AssistantMessage("background finished", "", nil)})
+	worker := m.services.Task.CreateAgentTask("worker", "Backend", "research", context.Background(), func() {})
+	worker.Complete(nil)
+	msg, ok := taskCompletionMessage(worker.GetStatus())
+	if !ok {
+		t.Fatal("completed worker produced no notice")
+	}
+	m.deliverNotice(fromBrokerMessage(msg))
+	select {
+	case chain := <-provider.requests:
+		delivered := false
+		for _, got := range chain {
+			if strings.Contains(got.Text(), "task-notification") {
+				delivered = true
+			}
+		}
+		if !delivered {
+			t.Fatalf("the completion notice never reached the agent: %+v", chain)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the completion notice never reached the running turn")
+	}
+	stopRuntime(t, m.services.Agent)
+
+	// The turn over that input ends here, as the runtime reports it.
 	m.OnTurnEnd(core.Result{StopReason: core.StopEndTurn})
 
 	select {
 	case transcript := <-reviews:
-		if !strings.Contains(transcript, "task-notification") || !strings.Contains(transcript, "background finished") {
+		if !strings.Contains(transcript, "task-notification") {
 			t.Fatalf("the completion turn was not what the advisor read:\n%s", transcript)
 		}
 	case <-time.After(time.Second):
@@ -387,6 +413,67 @@ func TestAdvisorAcceptsEachNoteOnce(t *testing.T) {
 	}
 	if !s.acceptNote("- a different finding") {
 		t.Fatal("a new note was rejected")
+	}
+}
+
+// The status bar follows the indicator: idle, reviewing, then what the last
+// review found or failed on.
+func TestStatusBarShowsTheAdvisorState(t *testing.T) {
+	on := true
+	s, _ := liveAdvisorSession()
+	m := model{
+		services: services{LLM: &llm.Conn{}, Hook: hook.NewEngine(setting.NewData(), "", t.TempDir(), "")},
+		plan:     plan.NewStore(),
+	}
+	m.services.Advisor = s
+	m.services.AdvisorIndicator = NewAdvisorIndicator()
+	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
+	m.env.Width = 120
+	status := func() string { return ansi.Strip(m.renderModeStatus()) }
+
+	if got := status(); !strings.Contains(got, "advisor") {
+		t.Fatalf("an enabled advisor left no badge: %q", got)
+	}
+	m.services.AdvisorIndicator.BeginReview()
+	if got := status(); !strings.Contains(got, "advisor · reviewing") {
+		t.Fatalf("reviewing badge = %q", got)
+	}
+	m.services.AdvisorIndicator.Finish("- check the nil case", nil)
+	if got := status(); !strings.Contains(got, "advisor · noted") {
+		t.Fatalf("noted badge = %q", got)
+	}
+	m.services.AdvisorIndicator.Finish("", nil)
+	if got := status(); !strings.Contains(got, "advisor · checked") {
+		t.Fatalf("checked badge = %q", got)
+	}
+	m.services.AdvisorIndicator.Finish("", errors.New("review timed out"))
+	if got := status(); !strings.Contains(got, "advisor · error") {
+		t.Fatalf("error badge = %q", got)
+	}
+
+	off := false
+	m.env.Advisor.Enable = &off
+	if got := status(); strings.Contains(got, "advisor") {
+		t.Fatalf("a disabled advisor still rendered: %q", got)
+	}
+}
+
+// /advisor and the badge read the same snapshot.
+func TestAdvisorStatusReadsTheIndicator(t *testing.T) {
+	on := true
+	m := &model{}
+	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
+	m.services.AdvisorIndicator = NewAdvisorIndicator()
+	m.services.Advisor = &advisorSession{modelID: "review-model"}
+
+	m.services.AdvisorIndicator.BeginReview()
+	if line := m.advisorStatusLine(); !strings.Contains(line, "reviewing") {
+		t.Fatalf("status = %q, want the review reported", line)
+	}
+	m.services.AdvisorIndicator.Finish("- check the nil case", nil)
+	line := m.advisorStatusLine()
+	if !strings.Contains(line, "last: check the nil case") {
+		t.Fatalf("status = %q, want the last note", line)
 	}
 }
 
