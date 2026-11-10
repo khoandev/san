@@ -16,6 +16,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/setting"
@@ -140,6 +141,31 @@ func TestAgentTabHostsTheGateAndTheRoles(t *testing.T) {
 	}
 	if scopes := tab.agents.form.scopesOrDefault(); len(scopes) != 2 || scopes[0] != scopeUser || scopes[1] != scopeProject {
 		t.Fatalf("role form scopes = %v, want user then project", scopes)
+	}
+	hasSave := false
+	for _, row := range rows {
+		hasSave = hasSave || row.kind == rowSave
+	}
+	if !hasSave {
+		t.Fatalf("the merged tab lost its Save row")
+	}
+
+	// The body shows the gate above the roles, and the whole tab still fits a
+	// 24-row terminal.
+	body := ansi.Strip(tab.Render(70, 20))
+	for _, want := range []string{"PERMISSIONS", "YOLO mode", "ADVISOR", "AGENTS"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("tab body is missing %q: %q", want, body)
+		}
+	}
+	c := NewSettingsSelector(nil)
+	c.Enter(80, 24)
+	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab}) // Agent
+	if got := lipgloss.Height(c.Render()); got > 24 {
+		t.Fatalf("Agent tab height = %d, exceeds a 24-row terminal", got)
+	}
+	if got := ansi.Strip(c.Render()); !strings.Contains(got, "AGENT") || !strings.Contains(got, "GENERAL") {
+		t.Fatalf("the tab strip is missing a tab: %q", got)
 	}
 
 	// Enter on the leading row opens the gate; it stays inside the tab, and
