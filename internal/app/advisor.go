@@ -77,9 +77,9 @@ type advisorSession struct {
 	parentSessionID string
 	cwd             string
 
-	// mu guards the display state read by /advisor.
+	// mu guards the note dedupe and the last failure, which the indicator
+	// mirrors for display.
 	mu       sync.Mutex
-	running  bool
 	lastNote string
 	lastErr  string
 }
@@ -371,7 +371,6 @@ func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
 	// path — a note, no note, an error or a teardown — or a queued review would
 	// wait forever. The signal goes last so the drain sees a free slot.
 	defer func() {
-		s.setRunning(false)
 		s.busy.Store(false)
 		if abandoned {
 			m.services.AdvisorIndicator.Abandon()
@@ -380,7 +379,6 @@ func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
 		}
 		m.publishAdvisorDone()
 	}()
-	s.setRunning(true)
 
 	ctx, cancel := context.WithTimeout(s.ctx, advisor.DefaultTimeout)
 	defer cancel()
@@ -532,13 +530,6 @@ func advisorNoteLine(note string) string {
 		}
 	}
 	return "note"
-}
-
-// setRunning records that a review is in flight for /advisor.
-func (s *advisorSession) setRunning(on bool) {
-	s.mu.Lock()
-	s.running = on
-	s.mu.Unlock()
 }
 
 // setError records the last failure that produced no note.
