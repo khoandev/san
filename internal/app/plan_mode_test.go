@@ -157,11 +157,11 @@ func TestPlanModeWrapsUserTurns(t *testing.T) {
 // back complete — mode, plans, step statuses, and the cursor.
 func TestPlanStateSurvivesSessionRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	store, err := session.NewStoreWithDir(dir)
+	store, err := session.NewLegacyStoreWithDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := store.Create(session.CreateOptions{ID: "sess-1"})
+	opened, err := store.Create(session.LegacyCreateOptions{ID: "sess-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestPlanStateSurvivesSessionRoundTrip(t *testing.T) {
 	}
 	m.persistPlan()
 
-	history, err := store.Read("sess-1", session.ReadOptions{})
+	history, err := store.Read("sess-1", session.LegacyReadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

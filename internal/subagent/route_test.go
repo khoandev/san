@@ -334,7 +334,7 @@ func TestExplicitTierBeatsTheDefinitionsOwnRung(t *testing.T) {
 // continues the run it was started with, so a new tier on the request cannot
 // move the model underneath it.
 func TestContinuationKeepsItsApprovedRung(t *testing.T) {
-	store, err := session.NewStoreWithDir(t.TempDir())
+	store, err := session.NewLegacyStoreWithDir(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

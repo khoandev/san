@@ -291,7 +291,7 @@ func (m *model) advisorEngine(s *advisorSession) (*advisor.Engine, func()) {
 	var forkID string
 	cleanup := func() {}
 	if store := m.services.SessionStore; store != nil {
-		rec, err := store.Create(session.CreateOptions{
+		rec, err := store.Create(session.LegacyCreateOptions{
 			AgentID:         advisorAgentID,
 			Provider:        advisorProviderName(s.provider),
 			Model:           s.modelID,

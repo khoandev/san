@@ -1,7 +1,7 @@
 package session
 
-// Typed events. Ordinary Store.Create/Open remain schema 4; this model is
-// deliberately not connected to Session's writer yet (see the delivery plan in
+// Typed events persisted by Store and Session. Runtime producers still use
+// LegacySession until the single format switch (see the delivery plan in
 // docs/design/proposal-0005-session-management.md).
 import (
 	"bytes"
@@ -76,11 +76,15 @@ func (p *PatchField[T]) UnmarshalJSON(b []byte) error {
 }
 
 type GenerationOptions struct {
-	Version       int       `json:"version"`
-	MaxTokens     *int      `json:"max_tokens,omitempty"`
-	Temperature   *float64  `json:"temperature,omitempty"`
-	Effort        ai.Effort `json:"effort,omitempty"`
-	StopSequences []string  `json:"stop_sequences,omitempty"`
+	Version        int               `json:"version"`
+	MaxTokens      *int              `json:"max_tokens,omitempty"`
+	Temperature    *float64          `json:"temperature,omitempty"`
+	Effort         ai.Effort         `json:"effort,omitempty"`
+	StopSequences  []string          `json:"stop_sequences,omitempty"`
+	ToolChoice     ai.ToolChoice     `json:"tool_choice,omitzero"`
+	CacheRetention ai.CacheRetention `json:"cache_retention,omitempty"`
+	Schema         *ai.Schema        `json:"schema,omitempty"`
+	SamplingParams map[string]any    `json:"sampling_params,omitempty"`
 }
 type AutopilotPolicy struct {
 	Version  int `json:"version"`
