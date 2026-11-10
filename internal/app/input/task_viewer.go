@@ -209,9 +209,9 @@ func (v *TaskViewer) rebuild() {
 		}
 		addItem := func(item TaskViewItem) {
 			v.rowOffsets[item.ID] = rowOffset
-			prefix := "  ● "
+			prefix := "  " + kit.CurrentSymbols.LiveDot + " "
 			if item.ID == v.selected {
-				prefix = "› ● "
+				prefix = "› " + kit.CurrentSymbols.LiveDot + " "
 			}
 			addLine(prefix + taskViewSubject(item) + " [" + taskViewStatus(item) + "]")
 		}

@@ -26,6 +26,8 @@ func TestResolveIconStyle(t *testing.T) {
 		{"explicit unicode", IconStyleUnicode, true, nil, IconStyleUnicode},
 		{"explicit emoji", IconStyleEmoji, true, nil, IconStyleEmoji},
 		{"explicit nerd", IconStyleNerd, true, nil, IconStyleNerd},
+		{"explicit plain", IconStylePlain, true, nil, IconStylePlain},
+		{"explicit plain on a non-tty", IconStylePlain, false, nil, IconStylePlain},
 		{"auto on a non-tty", IconStyleAuto, false, nil, IconStylePlain},
 		{"auto with NO_COLOR", IconStyleAuto, true, noColor, IconStylePlain},
 		{"env picks emoji", IconStyleAuto, true, map[string]string{"SAN_ICON_STYLE": "emoji"}, IconStyleEmoji},
@@ -55,6 +57,7 @@ func TestInitSymbolsInstallsTable(t *testing.T) {
 		{IconStyleUnicode, unicodeSymbols},
 		{IconStyleEmoji, emojiSymbols},
 		{IconStyleNerd, nerdSymbols},
+		{IconStylePlain, plainSymbols},
 	} {
 		got := InitSymbols(tt.style)
 		if got != tt.style {
@@ -133,6 +136,7 @@ func TestUnicodeTableKeepsTheOldGlyphs(t *testing.T) {
 		{"GroupMark", unicodeSymbols.GroupMark, "◆"},
 		{"ToolResult", unicodeSymbols.ToolResult, "⎿"},
 		{"BrandStar", unicodeSymbols.BrandStar, "✦"},
+		{"AutoPilot", unicodeSymbols.AutoPilot, "⏵"},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)
@@ -147,14 +151,22 @@ func TestToolIconWidthFollowsTheTable(t *testing.T) {
 	t.Cleanup(func() { CurrentSymbols = unicodeSymbols })
 	for _, tt := range []struct {
 		style string
+		table Symbols
 		want  int
 	}{
-		{IconStyleUnicode, 2}, // one column of glyph plus the gap — the old constant
-		{IconStyleNerd, 2},
-		{IconStylePlain, 2},
-		{IconStyleEmoji, 3}, // double-width emoji plus the gap
+		{IconStyleUnicode, unicodeSymbols, 2}, // one column of glyph plus the gap — the old constant
+		{IconStyleNerd, nerdSymbols, 2},
+		{IconStylePlain, plainSymbols, 2},
+		{IconStyleEmoji, emojiSymbols, 3}, // double-width emoji plus the gap
 	} {
-		InitSymbols(tt.style)
+		if got := InitSymbols(tt.style); got != tt.style {
+			t.Fatalf("InitSymbols(%q) resolved to %q", tt.style, got)
+		}
+		// The table, not just the width, must follow the style: equal widths
+		// for unicode and plain would otherwise hide a wrong table.
+		if !reflect.DeepEqual(CurrentSymbols, tt.table) {
+			t.Fatalf("InitSymbols(%q) installed %+v", tt.style, CurrentSymbols)
+		}
 		if got := ToolIconWidth(); got != tt.want {
 			t.Fatalf("ToolIconWidth(%s) = %d, want %d", tt.style, got, tt.want)
 		}

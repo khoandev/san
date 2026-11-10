@@ -355,7 +355,7 @@ func (m *MemorySelector) Render() string {
 		hint = kit.HintLine(keycap("enter")+" open", keycap("d")+" change dir", keycap("t")+" on/off",
 			keycap("p")+" project", keycap("esc")+" close")
 	}
-	header := apTitleGlyphStyle.Render("✦ ") + apTitleStyle.Render("Memory") + apDescStyle.Render("   what San remembers across sessions")
+	header := apTitleGlyphStyle.Render(kit.CurrentSymbols.ThinkingStar+" ") + apTitleStyle.Render("Memory") + apDescStyle.Render("   what San remembers across sessions")
 	return panelFrame(m.width, m.height, w, header, strings.TrimRight(b.String(), "\n"), hint)
 }
 
@@ -363,9 +363,9 @@ func (m *MemorySelector) Render() string {
 // the value of a file that does not exist yet or a store while auto memory is
 // off. A long description loses its head, so a store keeps its repository.
 func (m *MemorySelector) renderRow(i int, item memoryItem, width int) string {
-	mark := "  "
+	mark := strings.Repeat(" ", kit.Width(kit.CurrentSymbols.Cursor)+1)
 	if i == m.selectedIdx {
-		mark = apCursorStyle.Render("▸ ")
+		mark = apCursorStyle.Render(kit.CurrentSymbols.Cursor + " ")
 	}
 	label := mark + apLabelStyle.Render(apPad(item.Label, apLabelWidth))
 	valueStyle := apLabelStyle
@@ -643,7 +643,7 @@ func (s *memoryListState) writeMemorySection(sb *strings.Builder, label string, 
 	rulesFiles := system.ListRulesFiles(rulesDir)
 
 	if len(mainFound) > 0 || len(rulesFiles) > 0 {
-		sb.WriteString(memoryFormatBoxLine(fmt.Sprintf(" ● %s", label)))
+		sb.WriteString(memoryFormatBoxLine(fmt.Sprintf(" %s %s", kit.CurrentSymbols.RadioOn, label)))
 		for _, mf := range mainFound {
 			s.writeMemoryFileLine(sb, mf, isProject)
 		}
@@ -651,7 +651,7 @@ func (s *memoryListState) writeMemorySection(sb *strings.Builder, label string, 
 			s.writeMemoryFileLine(sb, rf, isProject)
 		}
 	} else {
-		sb.WriteString(memoryFormatBoxLine(fmt.Sprintf(" ○ %s (not found)", label)))
+		sb.WriteString(memoryFormatBoxLine(fmt.Sprintf(" %s %s (not found)", kit.CurrentSymbols.RadioOff, label)))
 		sb.WriteString(memoryFormatBoxLine(fmt.Sprintf("   Create: %s", createHint)))
 	}
 	sb.WriteString(memoryFormatBoxLine(""))
@@ -659,10 +659,10 @@ func (s *memoryListState) writeMemorySection(sb *strings.Builder, label string, 
 
 func (s *memoryListState) writeMemoryLocalSection(sb *strings.Builder, localPath string) {
 	if _, err := os.Stat(localPath); err == nil {
-		sb.WriteString(memoryFormatBoxLine(" ● Local (git-ignored)"))
+		sb.WriteString(memoryFormatBoxLine(fmt.Sprintf(" %s Local (git-ignored)", kit.CurrentSymbols.RadioOn)))
 		s.writeMemoryFileLine(sb, localPath, true)
 	} else {
-		sb.WriteString(memoryFormatBoxLine(" ○ Local (not found)"))
+		sb.WriteString(memoryFormatBoxLine(fmt.Sprintf(" %s Local (not found)", kit.CurrentSymbols.RadioOff)))
 		sb.WriteString(memoryFormatBoxLine("   Create: /init local"))
 	}
 	sb.WriteString(memoryFormatBoxLine(""))
@@ -682,9 +682,9 @@ func (s *memoryListState) writeMemoryFileLine(sb *strings.Builder, path string, 
 // writeAutoMemorySection lists both auto-memory stores, a long directory
 // losing its head so the repository and count stay in view.
 func writeAutoMemorySection(sb *strings.Builder, cwd string, on bool) {
-	glyph := "○"
+	glyph := kit.CurrentSymbols.RadioOff
 	if on {
-		glyph = "●"
+		glyph = kit.CurrentSymbols.RadioOn
 	}
 	sb.WriteString(memoryFormatBoxLine(" " + glyph + " Auto memory (" + onOff(on) + ", " + autoMemorySource() + ")"))
 	for _, item := range autoMemoryItems(cwd) {

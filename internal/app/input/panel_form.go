@@ -404,32 +404,36 @@ func capitalizeKeyLabel(s string) string {
 // at indent 0 (col 0). Rows directly under a section: indent 1 (col 4).
 // Sub-sections under those: header at indent 1, rows at indent 2 (col 8).
 const (
-	indentStep  = 4
-	cursorWidth = 2
+	indentStep = 4
 )
 
 // contentCol returns the column where the row's leftmost rendered content
 // (bracket / value / save button) starts, for the given indent.
 func contentCol(indent int) int { return indent * indentStep }
 
+// cursorWidth is the column budget of the cursor caret cell — the caret glyph
+// plus the space after it. It follows the live symbol table so a wide style's
+// caret does not overrun the label column instead of assuming two columns.
+func cursorWidth() int { return kit.Width(kit.CurrentSymbols.Cursor) + 1 }
+
 func (f *configForm[T]) cursorMark(i int) string {
 	if i == f.cursor {
-		return selflearnCursorStyle.Render("▸ ")
+		return selflearnCursorStyle.Render(kit.CurrentSymbols.Cursor + " ")
 	}
-	return strings.Repeat(" ", cursorWidth)
+	return strings.Repeat(" ", cursorWidth())
 }
 
 // cursorPad returns the leading whitespace + cursor caret so the next
 // glyph lands exactly at contentCol(indent).
 func (f *configForm[T]) cursorPad(i, indent int) string {
-	at := max(contentCol(indent)-cursorWidth, 0)
+	at := max(contentCol(indent)-cursorWidth(), 0)
 	return strings.Repeat(" ", at) + f.cursorMark(i)
 }
 
 func (f *configForm[T]) renderBoolRow(i int, row configRow[T], width int) string {
 	mark := "[ ]"
 	if row.boolGetter(&f.snap) {
-		mark = selflearnCheckStyle.Render("[✓]")
+		mark = selflearnCheckStyle.Render("[" + kit.CurrentSymbols.Success + "]")
 	}
 	line := f.cursorPad(i, row.indent) + mark + " " + row.label
 	return noteSuffix(line, row.note, width)
@@ -479,7 +483,7 @@ func (f *configForm[T]) renderBoolIntRow(i int, row configRow[T]) string {
 	on := row.boolGetter(&f.snap)
 	mark := "[ ]"
 	if on {
-		mark = selflearnCheckStyle.Render("[✓]")
+		mark = selflearnCheckStyle.Render("[" + kit.CurrentSymbols.Success + "]")
 	}
 	value := strconv.Itoa(row.intGetter(&f.snap))
 	if f.editing && i == f.cursor {
@@ -500,7 +504,7 @@ func (f *configForm[T]) renderBoolIntRow(i int, row configRow[T]) string {
 // unset field reads as the default it behaves as.
 func (f *configForm[T]) renderChoiceRow(i int, row configRow[T], width int) string {
 	labelStart := contentCol(row.indent) + 4 // align with bool-row labels
-	leftPad := strings.Repeat(" ", labelStart-cursorWidth)
+	leftPad := strings.Repeat(" ", labelStart-cursorWidth())
 	chips := selflearnChipBracketStyle.Render("‹") +
 		selflearnValueStyle.Render(row.getChoice(&f.snap)) +
 		selflearnChipBracketStyle.Render("›")
@@ -551,7 +555,7 @@ func (f *configForm[T]) renderIntRow(i int, row configRow[T], _ int) string {
 	// The label sits one bracket-width past where a bool row's "[" goes,
 	// so labels align with bool-row labels at the same indent.
 	labelStart := contentCol(row.indent) + 4 // 4 = bracket width "[ ] "
-	leftPad := strings.Repeat(" ", labelStart-cursorWidth)
+	leftPad := strings.Repeat(" ", labelStart-cursorWidth())
 	line := leftPad + f.cursorMark(i) + row.label + " " + valueChip(value)
 	if row.unit != "" {
 		line += " " + selflearnMutedStyle.Render(row.unit)
@@ -568,7 +572,7 @@ func (f *configForm[T]) renderIntRow(i int, row configRow[T], _ int) string {
 // non-editing value shows the muted placeholder instead.
 func (f *configForm[T]) renderTextRow(i int, row configRow[T], width int) string {
 	labelStart := contentCol(row.indent) + 4 // align with bool-row labels
-	leftPad := strings.Repeat(" ", labelStart-cursorWidth)
+	leftPad := strings.Repeat(" ", labelStart-cursorWidth())
 	head := leftPad + f.cursorMark(i) + row.label + " "
 
 	editing := f.editing && i == f.cursor

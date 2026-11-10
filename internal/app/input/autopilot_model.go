@@ -163,11 +163,11 @@ func (p *AutopilotSelector) renderModel() string {
 	for i := start; i < end; i++ {
 		text := choices[i]
 		if text == current {
-			text += "  ✓"
+			text += "  " + kit.CurrentSymbols.Success
 		}
-		mark, label := "  ", apLabelStyle.Render(text)
+		mark, label := strings.Repeat(" ", kit.Width(kit.CurrentSymbols.Cursor)+1), apLabelStyle.Render(text)
 		if i == p.modelCursor {
-			mark, label = apCursorStyle.Render("▸ "), apBreadcrumbSubStyle.Render(text)
+			mark, label = apCursorStyle.Render(kit.CurrentSymbols.Cursor+" "), apBreadcrumbSubStyle.Render(text)
 		}
 		b.WriteString(mark + label + "\n")
 	}

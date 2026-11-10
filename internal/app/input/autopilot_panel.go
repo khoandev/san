@@ -452,7 +452,7 @@ func (p *AutopilotSelector) missionValue() string {
 	if mission == strings.TrimSpace(p.baseline.Mission) {
 		switch p.baseline.MissionState {
 		case setting.MissionDone:
-			label = "✓ done"
+			label = kit.CurrentSymbols.Success + " done"
 		case "":
 		default:
 			label = string(p.baseline.MissionState)

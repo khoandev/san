@@ -8,6 +8,7 @@ import (
 	"time"
 
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/tool"
@@ -31,12 +32,12 @@ func renderAgentActivity(activity []string) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(toolResultStyle.Render("  ⎿  Recent activity") + "\n")
+	sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  %s  Recent activity", kit.CurrentSymbols.ToolResult)) + "\n")
 	if omitted := len(activity) - len(visible); omitted > 0 {
-		sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  ⎿  … %d retained entries omitted", omitted)) + "\n")
+		sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  %s  … %d retained entries omitted", kit.CurrentSymbols.ToolResult, omitted)) + "\n")
 	}
 	for _, p := range visible {
-		sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  ⎿  %s", p)) + "\n")
+		sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  %s  %s", kit.CurrentSymbols.ToolResult, p)) + "\n")
 	}
 	return sb.String()
 }
@@ -211,7 +212,7 @@ func RenderPendingToolSpinner(params PendingToolSpinnerParams) string {
 			}
 		}
 		// The tool name may arrive before its arguments finish streaming.
-		return renderAgentToolLine(toolName, params.Width, "●", "") + "\n" +
+		return renderAgentToolLine(toolName, params.Width, kit.CurrentSymbols.LiveDot, "") + "\n" +
 			renderAgentLocalBody("Pending", params.Width)
 	}
 

@@ -77,7 +77,7 @@ func newFrameClock() FrameClock {
 	sp := spinner.New()
 	sp.Spinner = spinner.Spinner{
 		// One frame: the spinner is only the ticker; View draws the dot.
-		Frames: []string{"●"},
+		Frames: kit.CurrentSymbols.SpinnerFrames,
 		FPS:    kit.LiveDotFPS,
 	}
 	sp.Style = lipgloss.NewStyle()

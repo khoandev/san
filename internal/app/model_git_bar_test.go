@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/genai-io/san/internal/app/input"
+	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/hook"
 	"github.com/genai-io/san/internal/proc"
 	"github.com/genai-io/san/internal/setting"
@@ -125,7 +126,7 @@ func TestGitBarSettingsFollowWorkspaceChange(t *testing.T) {
 	m.userInput.Settings.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyDown})
 	m.userInput.Settings.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyDown})
 	panel := m.userInput.Settings.ActivePanel()
-	if panel.Dirty() || !strings.Contains(ansi.Strip(panel.Render(70, 8)), "▸ Git information") {
+	if panel.Dirty() || !strings.Contains(ansi.Strip(panel.Render(70, 8)), kit.FocusBar+" Git information") {
 		t.Fatal("Git toggle was not focused at its saved value")
 	}
 	m.userInput.Settings.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyRight})

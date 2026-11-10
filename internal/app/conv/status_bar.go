@@ -244,11 +244,11 @@ type AgentUsageCount struct {
 // custom agent falls back to the first letter of its name, so the segment never
 // depends on a fixed catalog.
 var agentUsageIcons = map[string]string{
-	"advisor":  "◆",
+	"advisor":  kit.CurrentSymbols.GroupMark,
 	"quick":    "»",
 	"explore":  "⌕",
 	"task":     "▣",
-	"reviewer": "✓",
+	"reviewer": kit.CurrentSymbols.Success,
 }
 
 // RenderAgentUsage renders the per-role counts as "icon count" pairs joined by
@@ -320,9 +320,9 @@ func withPlanBadge(mode, planMode string) string {
 	var clr kit.AdaptiveColor
 	switch planMode {
 	case "plan":
-		icon, label, clr = "✎", " plan", kit.CurrentTheme.Focus
+		icon, label, clr = kit.CurrentSymbols.PlanBadge, " plan", kit.CurrentTheme.Focus
 	case "execute":
-		icon, label, clr = "▶", " execute", kit.CurrentTheme.Success
+		icon, label, clr = kit.CurrentSymbols.ExecuteBadge, " execute", kit.CurrentTheme.Success
 	default:
 		return mode
 	}
@@ -394,7 +394,7 @@ func renderGroupStatus(p OperationModeParams) string {
 	if p.Group == "" {
 		return ""
 	}
-	parts := []string{fmt.Sprintf("◆ %s/%s", p.Group, p.GroupSelf)}
+	parts := []string{fmt.Sprintf("%s %s/%s", kit.CurrentSymbols.GroupMark, p.Group, p.GroupSelf)}
 	if p.GroupHold {
 		parts = append(parts, "hold")
 	}
@@ -497,15 +497,15 @@ func modeIndicator(mode setting.OperationMode, judgeApprovals, judgeEscalations 
 
 	switch mode {
 	case setting.ModeAutoAccept:
-		icon = "⏵⏵"
+		icon = kit.CurrentSymbols.AutoAccept
 		label = " accept edits"
 		clr = kit.CurrentTheme.Success
 	case setting.ModeAutoPilot:
-		icon = "⏵⏵"
+		icon = kit.CurrentSymbols.AutoAccept
 		label = " autopilot"
 		clr = kit.CurrentTheme.Warning
 	case setting.ModeBypassPermissions:
-		icon = "⏵⏵"
+		icon = kit.CurrentSymbols.AutoAccept
 		label = " YOLO"
 		clr = kit.CurrentTheme.Yolo
 	default:

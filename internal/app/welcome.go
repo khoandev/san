@@ -8,12 +8,12 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"golang.org/x/term"
 
 	"github.com/genai-io/san/internal/app/kit"
 )
@@ -42,11 +42,10 @@ func welcomeBanner(info welcomeInfo) string {
 	return renderWelcome(info)
 }
 
+// welcomeUseColor delegates to kit.SupportsColor so the splash and the symbol
+// table agree on whether this output can carry styling and glyphs.
 func welcomeUseColor() bool {
-	if os.Getenv("NO_COLOR") != "" {
-		return false
-	}
-	return term.IsTerminal(int(os.Stdout.Fd()))
+	return kit.SupportsColor()
 }
 
 var (
@@ -59,7 +58,7 @@ var (
 // model-change line, and the cold-start loading line so the brand reads
 // identically across all three.
 func brandMark() string {
-	return brandWordStyle.Render("< SAN") + " " + brandStarStyle.Render("✦") + " " + brandWordStyle.Render("/>")
+	return brandWordStyle.Render("< SAN") + " " + brandStarStyle.Render(kit.CurrentSymbols.BrandStar) + " " + brandWordStyle.Render("/>")
 }
 
 func renderWelcome(info welcomeInfo) string {
@@ -94,7 +93,7 @@ func projectName(p string) string {
 }
 
 func plainWelcome(info welcomeInfo) string {
-	parts := []string{"< SAN ✦ />"}
+	parts := []string{fmt.Sprintf("< SAN %s />", kit.CurrentSymbols.BrandStar)}
 	if proj := projectName(info.CWD); proj != "" {
 		parts = append(parts, proj)
 	}

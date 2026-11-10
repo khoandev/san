@@ -80,7 +80,7 @@ func RenderCompactStatus(width int, spinnerView string, state CompactState) stri
 		return lipgloss.NewStyle().
 			Foreground(kit.CurrentTheme.Error).
 			PaddingLeft(1).
-			Render("✗ " + state.LastResult)
+			Render(kit.CurrentSymbols.Error + " " + state.LastResult)
 	default:
 		return ""
 	}

@@ -119,10 +119,10 @@ func (p *AutopilotSelector) renderImport() string {
 	b.WriteString(apDescStyle.Render("Load a preset into the panel, then press enter on the menu to apply it. A loaded mission starts ready."))
 	b.WriteString("\n\n")
 	for i, name := range p.presets {
-		mark := "  "
+		mark := strings.Repeat(" ", kit.Width(kit.CurrentSymbols.Cursor)+1)
 		label := apLabelStyle.Render(name)
 		if i == p.importCursor {
-			mark = apCursorStyle.Render("▸ ")
+			mark = apCursorStyle.Render(kit.CurrentSymbols.Cursor + " ")
 			label = apBreadcrumbSubStyle.Render(name)
 		}
 		b.WriteString(mark + label + "\n")

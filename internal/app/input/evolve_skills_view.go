@@ -146,10 +146,10 @@ func (p *evolvePanel) renderItemRow(i, width int) string {
 	// Reachable only from the modeList/modeConfirm render path.
 	focused := i == p.invCursor
 
-	caret := strings.Repeat(" ", cursorWidth)
+	caret := strings.Repeat(" ", cursorWidth())
 	nameStyle := skillNameStyle
 	if focused {
-		caret = selflearnCursorStyle.Render("▸ ")
+		caret = selflearnCursorStyle.Render(kit.CurrentSymbols.Cursor + " ")
 		nameStyle = skillNameFocusStyle
 	}
 
@@ -160,7 +160,7 @@ func (p *evolvePanel) renderItemRow(i, width int) string {
 	// The description fills the rest of the row, leaving room for
 	// the focused-row action hint on the right.
 	if it.desc != "" {
-		used := cursorWidth + 22 + 9
+		used := cursorWidth() + 22 + 9
 		descWidth := width - used - 20
 		if descWidth > 3 {
 			line += selflearnMutedStyle.Render(kit.TruncateText(it.desc, descWidth))
@@ -207,9 +207,8 @@ func (p *evolvePanel) renderView(width, height int) string {
 // rule filling the rest of the row.
 func sectionRule(label string, width int) string {
 	up := strings.ToUpper(label)
-	ruleLen := max(width-len(up)-1, 1)
-	return selflearnSubHeaderStyle.Render(up) + " " +
-		popupRuleStyle.Render(strings.Repeat("─", ruleLen))
+	ruleLen := max(width-lipgloss.Width(up)-1, 1)
+	return selflearnSubHeaderStyle.Render(up) + " " + kit.Rule(ruleLen)
 }
 
 func splitLines(s string) []string {

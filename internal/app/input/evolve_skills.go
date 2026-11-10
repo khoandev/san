@@ -24,6 +24,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/selflearn"
 	"github.com/genai-io/san/internal/setting"
 )
@@ -43,7 +44,7 @@ type EvolveDeps struct {
 
 // NewEvolveSelector builds the /evolve popup: the skill self-learning panel.
 func NewEvolveSelector(d EvolveDeps) PanelPopup {
-	return newPanelPopup("✦", "Self-Learning", "learns as you work",
+	return newPanelPopup(kit.CurrentSymbols.ThinkingStar, "Self-Learning", "learns as you work",
 		newEvolvePanel(d))
 }
 

@@ -837,6 +837,16 @@ func LoadTheme() string {
 	return s.Theme
 }
 
+// LoadIconStyle returns the configured icon style, already normalized to one of
+// the IconStyle* constants.
+func LoadIconStyle() string {
+	s, err := Load()
+	if err != nil || s == nil {
+		return DefaultIconStyle
+	}
+	return s.IconStyleKind()
+}
+
 // SaveTheme persists the chosen theme to ~/.san/settings.json.
 func SaveTheme(t string) error {
 	if err := NewLoader().SaveToUser(&Data{Theme: t}); err != nil {

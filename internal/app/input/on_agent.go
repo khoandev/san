@@ -390,10 +390,10 @@ func (s *AgentSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 			statusIcon = "◇"
 			statusStyle = kit.SelectorStatusNone()
 		} else if a.Enabled {
-			statusIcon = "●"
+			statusIcon = kit.CurrentSymbols.RadioOn
 			statusStyle = kit.SelectorStatusConnected()
 		} else {
-			statusIcon = "○"
+			statusIcon = kit.CurrentSymbols.RadioOff
 			statusStyle = kit.SelectorStatusNone()
 		}
 

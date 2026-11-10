@@ -33,8 +33,7 @@ func (p Panel) BodyHeight() int {
 // SeparatorLine returns a horizontal rule that spans the full inner width
 // of the panel (content width minus the box's horizontal Padding(_, 2)).
 func (p Panel) SeparatorLine() string {
-	style := lipgloss.NewStyle().Foreground(CurrentTheme.TextDim)
-	return style.Render(strings.Repeat("─", max(1, p.ContentWidth()-4)))
+	return Rule(p.ContentWidth() - 4)
 }
 
 // PadViewport pads the body content with blank lines so the panel keeps a

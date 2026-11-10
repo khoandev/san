@@ -27,7 +27,7 @@ func (m *model) autoMemory() system.MemoryStores {
 func memoryLine(entries []conv.MemoryEntry, width int) string {
 	var verbs []string
 	items := map[string][]string{}
-	icon := kit.MemoryMark
+	icon := kit.CurrentSymbols.MemoryMark
 	for _, e := range entries {
 		if e.Verb == "used" || e.Verb == "recalled" {
 			continue

@@ -51,7 +51,7 @@ func (p *AutopilotSelector) frame(header, body, hint string) string {
 // border+padding around the column without re-setting a width, so nothing
 // re-wraps.
 func panelFrame(width, height, w int, header, body, hint string) string {
-	rule := apFaintRuleStyle.Render(strings.Repeat("─", w))
+	rule := kit.Rule(w)
 	col := lipgloss.NewStyle().Width(w).Render(header + "\n" + rule + "\n\n" + body + "\n\n" + hint)
 	return lipgloss.Place(width, height-2, lipgloss.Center, lipgloss.Center, apCardStyle.Render(col))
 }
@@ -59,7 +59,7 @@ func panelFrame(width, height, w int, header, body, hint string) string {
 // header renders the title lockup ("✦ Autopilot") with a sub-view crumb when
 // inside an editor.
 func (p *AutopilotSelector) header(sub string) string {
-	left := apTitleGlyphStyle.Render("✦ ") + apTitleStyle.Render("Autopilot")
+	left := apTitleGlyphStyle.Render(kit.CurrentSymbols.ThinkingStar+" ") + apTitleStyle.Render("Autopilot")
 	if sub != "" {
 		left += apBreadcrumbDimStyle.Render("  ›  ") + apBreadcrumbSubStyle.Render(sub)
 	}
@@ -98,9 +98,9 @@ func (p *AutopilotSelector) renderMenu(width int) string {
 
 func (p *AutopilotSelector) cursorMark(i int) string {
 	if i == p.cursor {
-		return apCursorStyle.Render("▸ ")
+		return apCursorStyle.Render(kit.CurrentSymbols.Cursor + " ")
 	}
-	return "  "
+	return strings.Repeat(" ", kit.Width(kit.CurrentSymbols.Cursor)+1)
 }
 
 // renderEntry draws "▸ Mission   the goal it works toward …   ship it · ready":
@@ -129,7 +129,7 @@ func (p *AutopilotSelector) renderEntry(i int, row apRow, width int) string {
 func (p *AutopilotSelector) renderToggle(i int, row apRow) string {
 	mark, labelStyle, descStyle := "[ ]", apLabelStyle, apDescStyle
 	if row.on && !row.disabled {
-		mark = "[✓]"
+		mark = "[" + kit.CurrentSymbols.Success + "]"
 	}
 	switch {
 	case row.disabled || row.idle:
@@ -160,9 +160,6 @@ var (
 			BorderForeground(kit.CurrentTheme.Border).
 			Padding(1, 2)
 
-	// apFaintRuleStyle is the barely-there hairline used for the header
-	// separator and the section dividers so they don't overshadow content.
-	apFaintRuleStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim).Faint(true)
 	// Section labels sit quietly (muted, not accent-bold) so "STEER" / "MISSION"
 	// read as soft signposts, not headings competing with the copilot breadcrumb.
 	apSectionStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Bold(true)

@@ -1,11 +1,10 @@
 package kit
 
 import (
+	"strings"
+
 	"charm.land/lipgloss/v2"
 )
-
-// ToolIconWidth now lives in symbols.go: it follows the live glyph table
-// rather than a fixed column count, because an emoji icon is double-width.
 
 // Selector styles — lazy functions to pick up the current theme at render time.
 
@@ -18,6 +17,20 @@ const FocusBar = "▎"
 // FocusBarStyle colors the FocusBar in the brand accent.
 func FocusBarStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(CurrentTheme.Focus)
+}
+
+// FaintRuleStyle is the one horizontal-rule style across the UI: a
+// barely-there divider on the dim text tone. Panels, popups and the docked
+// cards all draw their separators through it (via Rule) so a rule never
+// competes with the content it divides and no surface drifts to its own tone.
+func FaintRuleStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(CurrentTheme.TextDim).Faint(true)
+}
+
+// Rule renders a faint horizontal rule exactly width cells wide (at least one,
+// so a narrow column still draws a divider).
+func Rule(width int) string {
+	return FaintRuleStyle().Render(strings.Repeat("─", max(1, width)))
 }
 
 // SelectorSelectedLabelStyle styles the label of a focused row: bright + bold,

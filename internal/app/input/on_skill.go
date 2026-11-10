@@ -255,13 +255,13 @@ func (s *SkillSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 		var statusStyle lipgloss.Style
 		switch sk.State {
 		case coreskill.StateActive:
-			statusIcon = "●"
+			statusIcon = kit.CurrentSymbols.RadioOn
 			statusStyle = kit.SelectorStatusConnected()
 		case coreskill.StateEnable:
 			statusIcon = "◐"
 			statusStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Warning)
 		default:
-			statusIcon = "○"
+			statusIcon = kit.CurrentSymbols.RadioOff
 			statusStyle = kit.SelectorStatusNone()
 		}
 

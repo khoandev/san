@@ -104,7 +104,7 @@ func (e agentEnvelope) renderWithIdentity(p RenderContext) string {
 	}
 	if e.kind == envelopeMessage && e.attributed && e.from != "" {
 		body := strings.Join(strings.Fields(e.text()), " ")
-		return renderAgentMessageLine("●", "From", e.from, body, p.Width, p.AgentIdentities, p.AgentColors, p.MemberColors) + "\n"
+		return renderAgentMessageLine(kit.CurrentSymbols.LiveDot, "From", e.from, body, p.Width, p.AgentIdentities, p.AgentColors, p.MemberColors) + "\n"
 	}
 	if e.kind == envelopeTask && e.attributed {
 		identity, found := p.AgentIdentities[e.taskID]

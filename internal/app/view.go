@@ -94,7 +94,12 @@ func (m *model) viewString() (string, *tea.Cursor) {
 // screen, which is worse than showing no text at all.
 func (m *model) renderDockedModalView(ov overlayPanel, separator, trackerView string) string {
 	m.resizeDockedPanel()
-	modal := "\n" + separator + "\n"
+	// A card-framed overlay draws its own top border; adding the full-width
+	// separator would put two rules on the same boundary.
+	modal := "\n"
+	if fo, ok := ov.(interface{ DrawsOwnFrame() bool }); !ok || !fo.DrawsOwnFrame() {
+		modal += separator + "\n"
+	}
 	if context := m.interactionQueueContext(); context != "" {
 		modal += context + "\n"
 	}
@@ -573,13 +578,16 @@ func styleWorkflowActivity(activity string, frame int) string {
 		if !ok {
 			continue
 		}
-		switch marker {
-		case "●":
+		// internal/workflow emits these markers as literals, so match the
+		// literal as well as the live table's value; match on whichever
+		// arrives and redraw it in the current style.
+		switch {
+		case marker == "●" || marker == kit.CurrentSymbols.LiveDot:
 			marker = running
-		case "✓":
-			marker = activityDoneStyle.Render(marker)
-		case "✗":
-			marker = activityFailedStyle.Render(marker)
+		case marker == "✓" || marker == kit.CurrentSymbols.Success:
+			marker = activityDoneStyle.Render(kit.CurrentSymbols.Success)
+		case marker == "✗" || marker == kit.CurrentSymbols.Error:
+			marker = activityFailedStyle.Render(kit.CurrentSymbols.Error)
 		default:
 			continue
 		}

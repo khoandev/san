@@ -465,7 +465,7 @@ func (s *ProviderSelector) refreshAuthMethod(item providerAuthMethodItem, authId
 		if err != nil {
 			result.Message = fmt.Sprintf("⚠ %d models loaded with refresh warning", len(models))
 		} else {
-			result.Message = fmt.Sprintf("● %d models", len(models))
+			result.Message = fmt.Sprintf("%s %d models", kit.CurrentSymbols.RadioOn, len(models))
 		}
 		return result
 	}

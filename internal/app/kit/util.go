@@ -147,7 +147,7 @@ func RenderEnvVarStatus(envVar string) string {
 	// carries the signal — green ✓ when configured, dim ✗ when not.
 	name := DimStyle().Render(envVar)
 	if secret.Resolve(envVar) != "" {
-		return name + " " + SelectorStatusConnected().Render("✓")
+		return name + " " + SelectorStatusConnected().Render(CurrentSymbols.Success)
 	}
-	return name + " " + SelectorStatusNone().Render("✗")
+	return name + " " + SelectorStatusNone().Render(CurrentSymbols.Error)
 }

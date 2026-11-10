@@ -128,7 +128,7 @@ var (
 // "start failed" message; the handback / action / mission-done notices below
 // carry their own arrow + colour.
 func autopilotHint(detail string) string {
-	return autopilotHintMark.Render("⏵ autopilot") + autopilotHintDim.Render(" · "+detail)
+	return autopilotHintMark.Render(kit.CurrentSymbols.AutoPilot+" autopilot") + autopilotHintDim.Render(" · "+detail)
 }
 
 // autopilotReturn formats the amber "↩ autopilot · <detail>" notice — the arrow
@@ -152,7 +152,7 @@ func autopilotHandback(detail string) string {
 // (answered a question for you) — green = it kept the session moving, matching
 // the ⎿ continuation mark and the auto-approved decision hint.
 func autopilotAction(detail string) string {
-	return autopilotDoneMark.Render("⏵ autopilot") + autopilotHintDim.Render(" · "+detail)
+	return autopilotDoneMark.Render(kit.CurrentSymbols.AutoPilot+" autopilot") + autopilotHintDim.Render(" · "+detail)
 }
 
 // autopilotMissionDone is the green notice shown when the copilot judges the
@@ -160,7 +160,7 @@ func autopilotAction(detail string) string {
 // handback. AutoPilot stays on (retireAutopilotMission drops to the passive
 // baseline), so the human keeps the auto-approve safety net.
 func autopilotMissionDone() string {
-	return autopilotDoneMark.Render("✓ autopilot") + autopilotHintDim.Render(" · mission complete")
+	return autopilotDoneMark.Render(kit.CurrentSymbols.Success+" autopilot") + autopilotHintDim.Render(" · mission complete")
 }
 
 // marshalAutoPilot encodes the live config for session persistence, returning

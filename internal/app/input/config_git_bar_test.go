@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/setting"
 )
 
@@ -116,9 +117,9 @@ func TestAppearanceOptionsStayVisibleInShortPanel(t *testing.T) {
 			t.Fatalf("row %d: body exceeded available height: %q", i, body)
 		}
 		plain := ansi.Strip(body)
-		hovered := strings.Contains(plain, "▸ ● "+opt.label) || strings.Contains(plain, "▸ ○ "+opt.label)
+		hovered := strings.Contains(plain, kit.FocusBar+" "+kit.CurrentSymbols.RadioOn+" "+opt.label) || strings.Contains(plain, kit.FocusBar+" "+kit.CurrentSymbols.RadioOff+" "+opt.label)
 		if isAppearanceToggle(opt) || opt.kind == kindBashPreview || opt.kind == kindAgentPreview {
-			hovered = strings.Contains(plain, "▸ "+opt.label)
+			hovered = strings.Contains(plain, kit.FocusBar+" "+opt.label)
 		}
 		if !strings.Contains(plain, opt.section) || !hovered {
 			t.Fatalf("row %d: current section/option scrolled out of view: %q", i, plain)

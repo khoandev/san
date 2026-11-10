@@ -344,9 +344,9 @@ func (s SelfLearnIndicatorSnapshot) Render() string {
 			return ""
 		}
 		if s.Summary != "" {
-			return "✓ " + s.Summary
+			return kit.CurrentSymbols.Success + " " + s.Summary
 		}
-		return fmt.Sprintf("✓ %d changes", s.Changes)
+		return fmt.Sprintf("%s %d changes", kit.CurrentSymbols.Success, s.Changes)
 	case selflearnFailed:
 		return "× review failed"
 	default:

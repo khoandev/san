@@ -38,9 +38,9 @@ const (
 // toolResultIcon returns the icon for tool results based on error state.
 func toolResultIcon(isError bool) string {
 	if isError {
-		return "✗"
+		return kit.CurrentSymbols.Error
 	}
-	return "⎿"
+	return kit.CurrentSymbols.ToolResult
 }
 
 // InputPrompt marks the input line, in the live textarea and in scrollback
@@ -135,7 +135,7 @@ var (
 // say the copilot, not the human, typed it (the same "⎿" trailer a tool result
 // hangs under the call it came from).
 func RenderAutopilotMark(note string) string {
-	return autopilotStepStyle.Render("  ⎿  autopilot") +
+	return autopilotStepStyle.Render(fmt.Sprintf("  %s  autopilot", kit.CurrentSymbols.ToolResult)) +
 		toolResultStyle.Render(" · "+note) + "\n"
 }
 
@@ -263,7 +263,7 @@ const continuationGutter = "  "
 // continue a turn whose marker was already emitted.
 func contentGutter(showBullet bool) string {
 	if showBullet {
-		return bulletStyle.Render("● ")
+		return bulletStyle.Render(kit.CurrentSymbols.LiveDot + " ")
 	}
 	return continuationGutter
 }
@@ -274,7 +274,7 @@ func contentGutter(showBullet bool) string {
 // the single leading glyph.
 func thinkingGutter(showIcon bool) string {
 	if showIcon {
-		return ThinkingStyle.Render(kit.ThinkingMark + " ")
+		return ThinkingStyle.Render(kit.CurrentSymbols.ThinkingStar + " ")
 	}
 	return continuationGutter
 }
@@ -597,11 +597,11 @@ func RenderAgentNotice(content string, width int, colors map[string]int) string 
 			name, body = n, " · "+note
 		}
 		if name != "" && !strings.Contains(name, " ") {
-			return renderMemberLine("●", "From", name, body, width, colors) + "\n"
+			return renderMemberLine(kit.CurrentSymbols.LiveDot, "From", name, body, width, colors) + "\n"
 		}
 	}
 	content = strings.Join(strings.Fields(content), " ")
-	line := agentNoticeStyle.Render("●") + toolCallStyle.Render(" "+content)
+	line := agentNoticeStyle.Render(kit.CurrentSymbols.LiveDot) + toolCallStyle.Render(" "+content)
 	return kit.TruncateText(line, max(1, width)) + "\n"
 }
 
@@ -789,7 +789,7 @@ func RenderToolCalls(params ToolCallsParams) string {
 				}
 				if rowWidth > 0 {
 					// Keep the Agent identity visible before reserving its timer.
-					if lipgloss.Width(detail) > max(0, rowWidth-lipgloss.Width("● Agent")) {
+					if lipgloss.Width(detail) > max(0, rowWidth-lipgloss.Width(kit.CurrentSymbols.LiveDot+" Agent")) {
 						detail = ""
 					}
 					rowWidth = max(1, rowWidth-lipgloss.Width(detail))
@@ -799,17 +799,17 @@ func RenderToolCalls(params ToolCallsParams) string {
 				label = kit.TruncateText(label, max(1, rowWidth-kit.ToolIconWidth()))
 			}
 			if to, body := sendMessageParts(tc.Input); tc.Name == tool.ToolSendMessage && to != "" {
-				sb.WriteString(renderAgentMessageLine("●", "To", to, body, params.Width, params.AgentIdentities, params.AgentColors, params.MemberColors) + "\n")
+				sb.WriteString(renderAgentMessageLine(kit.CurrentSymbols.LiveDot, "To", to, body, params.Width, params.AgentIdentities, params.AgentColors, params.MemberColors) + "\n")
 			} else if hasResult {
-				sb.WriteString(appendRowDetail(renderAgentColoredLine(label, rowWidth, "●", color)+"\n", detail))
+				sb.WriteString(appendRowDetail(renderAgentColoredLine(label, rowWidth, kit.CurrentSymbols.LiveDot, color)+"\n", detail))
 			} else {
 				// The live dot breathes off the frame counter; on the call a
 				// permission prompt is asking about that would advertise a
 				// subagent as working before it was allowed to spawn.
-				icon := "●"
+				icon := kit.CurrentSymbols.LiveDot
 				if params.agentExecuting(tc) && !params.parkedOnUser(tc.ID) {
 					if identified {
-						icon = lipgloss.NewStyle().Foreground(color).Faint(params.Frame%6 < 2).Render("●")
+						icon = lipgloss.NewStyle().Foreground(color).Faint(params.Frame%6 < 2).Render(kit.CurrentSymbols.LiveDot)
 					} else {
 						icon = kit.LiveDot(params.Frame)
 					}
@@ -851,7 +851,7 @@ func RenderToolCalls(params ToolCallsParams) string {
 			detail := runningRowDetail(tc, params)
 			rowWidth := params.Width
 			if rowWidth > 0 {
-				detail = xansi.Truncate(detail, max(0, rowWidth-lipgloss.Width("● "+tc.Name)), "")
+				detail = xansi.Truncate(detail, max(0, rowWidth-lipgloss.Width(kit.CurrentSymbols.LiveDot+" "+tc.Name)), "")
 				rowWidth = max(1, rowWidth-lipgloss.Width(detail))
 			}
 			var row string
@@ -910,10 +910,10 @@ func RenderToolCalls(params ToolCallsParams) string {
 // modalNamesNoCall.
 func toolCallIcon(tc core.ToolCall, params ToolCallsParams) string {
 	if _, done := params.ResultMap[tc.ID]; done {
-		return "●"
+		return kit.CurrentSymbols.LiveDot
 	}
 	if params.parkedOnUser(tc.ID) {
-		return "●"
+		return kit.CurrentSymbols.LiveDot
 	}
 
 	idx := -1
@@ -924,7 +924,7 @@ func toolCallIcon(tc core.ToolCall, params ToolCallsParams) string {
 		}
 	}
 	if idx == -1 {
-		return "●"
+		return kit.CurrentSymbols.LiveDot
 	}
 
 	// In parallel mode every in-flight call breathes; sequentially, only the
@@ -933,7 +933,7 @@ func toolCallIcon(tc core.ToolCall, params ToolCallsParams) string {
 		return params.SpinnerView
 	}
 
-	return "●"
+	return kit.CurrentSymbols.LiveDot
 }
 
 // runningRowDetail returns a dim " · 12s · 1.2k lines" suffix for a tool call

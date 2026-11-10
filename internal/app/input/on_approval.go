@@ -295,7 +295,7 @@ func (p *ApprovalModel) wrappedPreview(width int, compact bool) []string {
 	}
 	// Keep the compact header, but make the complete requester/title available
 	// in the scrollable region rather than losing safety-relevant identity.
-	if ansi.StringWidth("● "+p.getTitle()) > width {
+	if ansi.StringWidth(kit.CurrentSymbols.LiveDot+" "+p.getTitle()) > width {
 		preview = p.getTitle() + "\n" + preview
 	}
 	if compact {
@@ -315,7 +315,7 @@ func (p *ApprovalModel) renderInline() string {
 	if h <= 0 {
 		h = 24
 	}
-	header := []string{approvalTitleStyle().Render(kit.TruncateText("● "+p.getTitle(), w)), approvalHintStyle().Render(kit.TruncateText(p.request.PermissionMode+" · cwd: "+strconv.QuoteToGraphic(p.request.WorkingDirectory), w))}
+	header := []string{approvalTitleStyle().Render(kit.TruncateText(kit.CurrentSymbols.LiveDot+" "+p.getTitle(), w)), approvalHintStyle().Render(kit.TruncateText(p.request.PermissionMode+" · cwd: "+strconv.QuoteToGraphic(p.request.WorkingDirectory), w))}
 	compact := h < len(header)+len(p.options())+2
 	if compact {
 		// On very short panels, keep the operation inspectable before cwd chrome.

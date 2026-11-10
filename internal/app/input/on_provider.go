@@ -313,8 +313,8 @@ type providerStatusDisplayInfo struct {
 
 // providerStatusDisplayMap maps provider status to display information.
 var providerStatusDisplayMap = map[llm.Status]providerStatusDisplayInfo{
-	llm.StatusConnected: {"●", kit.SelectorStatusConnected(), ""},
-	llm.StatusAvailable: {"○", kit.SelectorStatusReady(), "(available)"},
+	llm.StatusConnected: {kit.CurrentSymbols.RadioOn, kit.SelectorStatusConnected(), ""},
+	llm.StatusAvailable: {kit.CurrentSymbols.RadioOff, kit.SelectorStatusReady(), "(available)"},
 }
 
 // providerGetStatusDisplay returns the icon, style, and description for a provider status.

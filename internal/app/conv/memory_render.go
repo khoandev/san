@@ -108,7 +108,7 @@ func (p RenderContext) memoryStepView(msg core.ChatMessage, idx int) string {
 // renderMemoryRead replaces the compact file operation with a contextual
 // memory notice. Only a completed, successful read uses the past-tense label.
 func renderMemoryRead(tc core.ToolCall, op memoryOp, params ToolCallsParams) string {
-	marker := toolCallStyle.Render(kit.MemoryMark)
+	marker := toolCallStyle.Render(kit.CurrentSymbols.MemoryMark)
 	verb := "read"
 	if _, done := params.ResultMap[tc.ID]; !done {
 		verb = "reading"
@@ -195,7 +195,7 @@ func renderMemoryRecallNotice(content string, width int) string {
 	}
 	var sb strings.Builder
 	for _, title := range data.Titles {
-		sb.WriteString(renderMemoryNotice(toolCallStyle.Render(kit.MemoryMark), "recalled", title, width))
+		sb.WriteString(renderMemoryNotice(toolCallStyle.Render(kit.CurrentSymbols.MemoryMark), "recalled", title, width))
 	}
 	return sb.String()
 }

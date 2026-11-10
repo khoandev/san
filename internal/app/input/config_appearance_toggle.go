@@ -68,14 +68,16 @@ func renderPreviewStepper(opt appearanceOption, hovered bool, width int) string 
 	return withDesc(head+arrow("‹ ")+selected.Render(value)+arrow(" ›"), opt.desc, width)
 }
 
-// appearanceRowHead is a control row's caret and padded label, plus the style
-// of its selected value: the active-tab accent while the row has the cursor.
+// appearanceRowHead is a control row's focus bar and padded label, plus the
+// style of its selected value: the active-tab accent while the row has the
+// cursor. The focus bar is the same affordance the radio rows and the other
+// pickers use, so a row has one signal for "you are here".
 func appearanceRowHead(opt appearanceOption, hovered bool) (string, lipgloss.Style) {
-	caret, label, selected := "  ", appearanceLabelStyle.Render(opt.label), appearanceToggleSelectedStyle
+	bar, label, selected := strings.Repeat(" ", kit.Width(kit.FocusBar)+1), appearanceLabelStyle.Render(opt.label), appearanceToggleSelectedStyle
 	if hovered {
-		caret, label, selected = appearanceCursorStyle.Render("▸ "), appearanceCursorStyle.Render(opt.label), appearanceToggleFocusedStyle
+		bar, label, selected = kit.FocusBarStyle().Render(kit.FocusBar)+" ", kit.SelectorSelectedLabelStyle().Render(opt.label), appearanceToggleFocusedStyle
 	}
-	return caret + label + strings.Repeat(" ", max(18-lipgloss.Width(opt.label), 1)), selected
+	return bar + label + strings.Repeat(" ", max(18-lipgloss.Width(opt.label), 1)), selected
 }
 
 // withDesc appends the row's description when it fits.

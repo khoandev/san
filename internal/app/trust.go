@@ -160,9 +160,9 @@ func (p trustPrompt) View() tea.View {
 	b.WriteString("\n  " + dim.Render(wrap("  ", "Trust covers every worktree of this repository. Only trust code you know.")) + "\n\n")
 	for i, label := range []string{"Yes, trust this folder", "No, continue without its configuration"} {
 		if i == p.cursor {
-			b.WriteString(active.Render("  ▸ "+label) + "\n")
+			b.WriteString(active.Render("  "+kit.CurrentSymbols.Cursor+" "+label) + "\n")
 		} else {
-			b.WriteString("    " + label + "\n")
+			b.WriteString("  " + strings.Repeat(" ", kit.Width(kit.CurrentSymbols.Cursor)+1) + label + "\n")
 		}
 	}
 	b.WriteString("\n" + dim.Render("  ↑/↓ move · enter confirm · esc quit") + "\n")

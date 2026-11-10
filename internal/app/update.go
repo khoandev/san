@@ -381,6 +381,16 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.conv.AddNotice("Theme set to " + msg.Theme)
 		return m, nil
+	case input.IconStyleSavedMsg:
+		// The panel already installed the symbol table (kit.InitSymbols) and
+		// persisted the style; refresh the in-memory handle so re-opening
+		// /settings reflects it. Glyphs already committed to scrollback keep
+		// the style they were drawn with — committed output is immutable.
+		if err := m.services.Setting.Reload(m.env.CWD); err != nil {
+			log.Logger().Warn("reload settings after icon-style save failed", zap.Error(err))
+		}
+		m.conv.AddNotice("Icons set to " + msg.Style)
+		return m, nil
 	case input.ContextBarSavedMsg:
 		// Update the live display flag so the status line reflects the choice
 		// immediately, then refresh the in-memory handle for re-opens.

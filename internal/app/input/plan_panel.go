@@ -437,6 +437,11 @@ func (p *PlanPanel) handleEditorKey(msg tea.KeyMsg) tea.Cmd {
 // rewritten there, so the editor keeps the whole screen.
 func (p *PlanPanel) Docked() bool { return p.active && !p.editing }
 
+// DrawsOwnFrame reports that the docked card carries its own rounded border, so
+// the docked layout must not also draw the full-width separator above it — two
+// rules one row apart is exactly the decoration this panel does not need.
+func (p *PlanPanel) DrawsOwnFrame() bool { return true }
+
 // Render implements overlayPanel.
 func (p *PlanPanel) Render() string {
 	if !p.active {
@@ -461,7 +466,7 @@ func (p *PlanPanel) Render() string {
 // stays on screen.
 func (p *PlanPanel) card() string {
 	w := p.innerWidth()
-	rule := apFaintRuleStyle.Render(strings.Repeat("─", w))
+	rule := kit.Rule(w)
 	col := lipgloss.NewStyle().Width(w).Render(
 		p.header("") + "\n" + rule + "\n\n" + p.body() + "\n\n" + p.hint())
 	return apCardStyle.Render(col)
@@ -494,7 +499,7 @@ func (p *PlanPanel) innerWidth() int {
 }
 
 func (p *PlanPanel) header(sub string) string {
-	left := apTitleGlyphStyle.Render("✦ ") + apTitleStyle.Render("Execution Panel")
+	left := apTitleGlyphStyle.Render(kit.CurrentSymbols.ThinkingStar+" ") + apTitleStyle.Render("Execution Panel")
 	if sub != "" {
 		left += apBreadcrumbDimStyle.Render("  ›  ") + apBreadcrumbSubStyle.Render(sub)
 	}
@@ -704,19 +709,19 @@ func stepMark(step plan.Step, current bool) (string, lipgloss.Style) {
 		case plan.StepBlocked:
 			return "!", planWarnStyle
 		case plan.StepInProgress:
-			return "▸", planAccentStyle
+			return kit.CurrentSymbols.Cursor, planAccentStyle
 		}
-		return "▸", planAccentStyle
+		return kit.CurrentSymbols.Cursor, planAccentStyle
 	}
 	switch step.Status {
 	case plan.StepCompleted:
-		return "✓", planDoneStyle
+		return kit.CurrentSymbols.Success, planDoneStyle
 	case plan.StepSkipped:
 		return "-", apSummaryStyle
 	case plan.StepBlocked:
 		return "!", planWarnStyle
 	case plan.StepInProgress:
-		return "▸", planAccentStyle
+		return kit.CurrentSymbols.Cursor, planAccentStyle
 	default:
 		return "·", apSummaryStyle
 	}

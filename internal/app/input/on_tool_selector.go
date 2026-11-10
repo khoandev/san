@@ -195,10 +195,10 @@ func (s *ToolSelector) renderItemList(sb *strings.Builder, panel kit.Panel) {
 		var statusStyle lipgloss.Style
 		held := s.held[t.Name]
 		if s.effectiveDisabled(scope, t.Name) && held == "" {
-			statusIcon = "○"
+			statusIcon = kit.CurrentSymbols.RadioOff
 			statusStyle = kit.SelectorStatusNone()
 		} else {
-			statusIcon = "●"
+			statusIcon = kit.CurrentSymbols.RadioOn
 			statusStyle = kit.SelectorStatusConnected()
 		}
 

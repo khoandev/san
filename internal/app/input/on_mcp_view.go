@@ -14,13 +14,13 @@ import (
 func mcpStatusDisplay(status coremcp.ServerStatus) (icon, label string) {
 	switch status {
 	case coremcp.StatusConnected:
-		return "●", "connected"
+		return kit.CurrentSymbols.RadioOn, "connected"
 	case coremcp.StatusConnecting:
 		return "◌", "connecting"
 	case coremcp.StatusError:
-		return "✗", "error"
+		return kit.CurrentSymbols.Error, "error"
 	default:
-		return "○", "disconnected"
+		return kit.CurrentSymbols.RadioOff, "disconnected"
 	}
 }
 

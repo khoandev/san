@@ -26,11 +26,12 @@ type Suggestion struct {
 
 type Matcher func(query string) []Suggestion
 
+// suggestionBoxStyle frames the slash/import menu above the composer. It is a
+// plain indented column, not a bordered card: the menu sits directly on the
+// composer's separator, so a box would stack two horizontal rules a row apart.
+// The focused row's FocusBar is the menu's only selection affordance.
 func suggestionBoxStyle() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(kit.CurrentTheme.Border).
-		Padding(0, 1)
+	return lipgloss.NewStyle().Padding(0, 1)
 }
 
 func selectedSuggestionStyle() lipgloss.Style {
@@ -585,7 +586,7 @@ func (s *State) renderfileSuggestions(width int) string {
 	}
 	lines = append(lines, headerStyle.Render(header), "")
 
-	maxPathLen := boxWidth - 8
+	maxPathLen := boxWidth - 4
 	for i, file := range items {
 		suffix := ""
 		if file.IsDir {
@@ -626,7 +627,7 @@ func (s *State) renderCommandSuggestions(width int) string {
 	items := s.suggestions[start:end]
 
 	boxWidth := max(width-2, 40)
-	innerWidth := boxWidth - 4 // border and padding
+	innerWidth := boxWidth - 2 // horizontal padding
 
 	var lines []string
 	headerStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim).Bold(true)

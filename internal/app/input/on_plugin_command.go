@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/genai-io/san/internal/app/kit"
 	coreplugin "github.com/genai-io/san/internal/plugin"
 )
 
@@ -75,7 +76,7 @@ func pluginHandleList(reg *coreplugin.Registry) (string, error) {
 		pluginWriteSummary(&sb, p)
 	}
 
-	sb.WriteString("\nLegend: ● enabled  ○ disabled  👤 user  📁 project  💻 local")
+	sb.WriteString(fmt.Sprintf("\nLegend: %s enabled  %s disabled  👤 user  📁 project  💻 local", kit.CurrentSymbols.RadioOn, kit.CurrentSymbols.RadioOff))
 	sb.WriteString("\n\nCommands:\n")
 	sb.WriteString("  /plugin install <ref>    Install a plugin from a marketplace\n")
 	sb.WriteString("  /plugin marketplace ...  Manage plugin marketplaces\n")
@@ -87,9 +88,9 @@ func pluginHandleList(reg *coreplugin.Registry) (string, error) {
 }
 
 func pluginWriteSummary(sb *strings.Builder, p *coreplugin.Plugin) {
-	status := "○"
+	status := kit.CurrentSymbols.RadioOff
 	if p.Enabled {
-		status = "●"
+		status = kit.CurrentSymbols.RadioOn
 	}
 
 	fmt.Fprintf(sb, "  %s %s %s (%s)\n", status, p.Scope.Icon(), p.FullName(), p.Scope)

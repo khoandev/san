@@ -43,8 +43,7 @@ func (s *PluginSelector) contentWidth() int {
 
 // sepLine is 4 cells narrower than kit.Panel.SeparatorLine.
 func (s *PluginSelector) sepLine() string {
-	sepStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
-	return sepStyle.Render(strings.Repeat("─", s.contentWidth()-4))
+	return kit.Rule(s.contentWidth() - 4)
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────
@@ -248,10 +247,10 @@ func (s *PluginSelector) renderDiscoverList(sb *strings.Builder) {
 			continue
 		}
 
-		icon := "○"
+		icon := kit.CurrentSymbols.RadioOff
 		iconStyle := dimStyle
 		if p.Installed {
-			icon = "●"
+			icon = kit.CurrentSymbols.RadioOn
 			iconStyle = kit.SelectorStatusConnected()
 		}
 
@@ -314,7 +313,7 @@ func (s *PluginSelector) renderMarketplacesList(sb *strings.Builder) {
 			official = " ★"
 		}
 
-		line := fmt.Sprintf("%s %s%s", kit.SelectorStatusConnected().Render("●"), m.ID, dimStyle.Render(official))
+		line := fmt.Sprintf("%s %s%s", kit.SelectorStatusConnected().Render(kit.CurrentSymbols.RadioOn), m.ID, dimStyle.Render(official))
 		sb.WriteString(kit.RenderSelectableRow(line, displayIdx == s.selectedIdx))
 		sb.WriteString("\n")
 
@@ -494,7 +493,7 @@ func (s *PluginSelector) renderMarketplaceDetail() string {
 		sb.WriteString("\n")
 		for _, p := range s.registry.List() {
 			if idx := strings.Index(p.Source, "@"); idx != -1 && p.Source[idx+1:] == m.ID {
-				sb.WriteString("    " + kit.SelectorStatusConnected().Render("●") + " " + p.Name())
+				sb.WriteString("    " + kit.SelectorStatusConnected().Render(kit.CurrentSymbols.RadioOn) + " " + p.Name())
 				sb.WriteString("\n")
 			}
 		}
@@ -611,10 +610,10 @@ func (s *PluginSelector) renderBrowsePlugins() string {
 		for i := s.scrollOffset; i < endIdx; i++ {
 			p := s.browsePlugins[i]
 
-			icon := "○"
+			icon := kit.CurrentSymbols.RadioOff
 			iconStyle := dimStyle
 			if p.Installed {
-				icon = "●"
+				icon = kit.CurrentSymbols.RadioOn
 				iconStyle = kit.SelectorStatusConnected()
 			}
 
@@ -681,7 +680,7 @@ func (s *PluginSelector) inlineActionStatus() string {
 		return kit.SelectorStatusError().Render("   ⚠ " + s.lastMessage)
 	default:
 		return lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success).
-			Render("   ✓ " + s.lastMessage)
+			Render("   " + kit.CurrentSymbols.Success + " " + s.lastMessage)
 	}
 }
 
@@ -701,7 +700,7 @@ func (s *PluginSelector) renderFooter(sb *strings.Builder, hint string) {
 				sb.WriteString(kit.SelectorStatusError().Render("  ⚠ " + s.lastMessage))
 			} else {
 				successStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success)
-				sb.WriteString(successStyle.Render("  ✓ " + s.lastMessage))
+				sb.WriteString(successStyle.Render("  " + kit.CurrentSymbols.Success + " " + s.lastMessage))
 			}
 			sb.WriteString("\n")
 		}
@@ -748,9 +747,9 @@ func (s *PluginSelector) renderViewport(content string, scroll int) string {
 
 func pluginStatusIconAndStyle(enabled bool) (string, lipgloss.Style) {
 	if enabled {
-		return "●", kit.SelectorStatusConnected()
+		return kit.CurrentSymbols.RadioOn, kit.SelectorStatusConnected()
 	}
-	return "○", kit.SelectorStatusNone()
+	return kit.CurrentSymbols.RadioOff, kit.SelectorStatusNone()
 }
 
 func pluginBuildComponentList(p *pluginItem) []string {
@@ -760,7 +759,7 @@ func pluginBuildComponentList(p *pluginItem) []string {
 		count int
 	}
 	counts := []componentCount{
-		{"✦", "Skills", p.Skills},
+		{kit.CurrentSymbols.ThinkingStar, "Skills", p.Skills},
 		{"⚑", "Agents", p.Agents},
 		{"⌘", "Commands", p.Commands},
 		{"↪", "Hooks", p.Hooks},

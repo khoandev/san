@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/setting"
 )
 
@@ -134,7 +135,7 @@ func TestAppearanceBodyRecordsPositions(t *testing.T) {
 	for i, opt := range p.options {
 		p.cursor = i
 		body := p.renderBody(70)
-		if row := ansi.Strip(body.lines[body.cursorRow]); !strings.Contains(row, opt.label) || !strings.HasPrefix(row, "▸ ") {
+		if row := ansi.Strip(body.lines[body.cursorRow]); !strings.Contains(row, opt.label) || !strings.HasPrefix(row, kit.FocusBar+" ") {
 			t.Fatalf("cursor metadata does not point to %s: %q", opt.label, row)
 		}
 		if heading := ansi.Strip(body.lines[body.sectionRow]); !strings.HasPrefix(heading, opt.section) {

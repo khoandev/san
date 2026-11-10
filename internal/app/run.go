@@ -65,6 +65,9 @@ func Run(opts setting.RunOptions) (runErr error) {
 	if userQuit, err := kit.ResolveTheme(setting.LoadTheme(), setting.SaveTheme); userQuit || err != nil {
 		return err
 	}
+	// Install the glyph table before the first frame, so the splash and the
+	// status line already draw in the user's chosen style.
+	kit.InitSymbols(setting.LoadIconStyle())
 	if cwd, err := os.Getwd(); err == nil {
 		if userQuit, err := resolveWorkspaceTrust(cwd); userQuit || err != nil {
 			return err

@@ -77,7 +77,7 @@ func (m themeSelectorModel) View() tea.View {
 		cursor := "  "
 		style := themeItemStyle()
 		if i == m.cursor {
-			cursor = "▶ "
+			cursor = CurrentSymbols.ExecuteBadge + " "
 			style = themeActiveStyle()
 		}
 		fmt.Fprintf(&s, "%s%s  %s\n", cursor, style.Render(opt.label), themeDescStyle().Render(opt.desc))

@@ -99,9 +99,9 @@ func (p *agentRolePick) render(width int) string {
 	end := min(start+agentRoleListRows, len(p.choices))
 	for i := start; i < end; i++ {
 		choice := p.choices[i]
-		mark, label := "  ", apLabelStyle.Render(choice.label)
+		mark, label := strings.Repeat(" ", kit.Width(kit.CurrentSymbols.Cursor)+1), apLabelStyle.Render(choice.label)
 		if i == p.cursor {
-			mark, label = apCursorStyle.Render("▸ "), apBreadcrumbSubStyle.Render(choice.label)
+			mark, label = apCursorStyle.Render(kit.CurrentSymbols.Cursor+" "), apBreadcrumbSubStyle.Render(choice.label)
 		}
 		line := mark + label
 		if choice.detail != "" {

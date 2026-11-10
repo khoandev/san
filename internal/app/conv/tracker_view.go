@@ -311,21 +311,21 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 
 	switch phase {
 	case itemApproval:
-		return renderItemLine(indent, mutedStyle.Render("●"), idTag, activeText(t), mutedStyle.Render("[awaiting approval]"), width)
+		return renderItemLine(indent, mutedStyle.Render(kit.CurrentSymbols.LiveDot), idTag, activeText(t), mutedStyle.Render("[awaiting approval]"), width)
 	case itemAborted:
 		abortedStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Error)
 		if detail := todo.BackgroundStatusDetail(t); detail == "stopped" || detail == "killed" || detail == todo.StatusDetailInterrupted {
 			abortedStyle = mutedStyle
 		}
 		detail := mutedStyle.Render("[" + todo.BackgroundStatusDetail(t) + "]")
-		return renderItemLine(indent, abortedStyle.Render("●"), idTag, subject, detail, width)
+		return renderItemLine(indent, abortedStyle.Render(kit.CurrentSymbols.LiveDot), idTag, subject, detail, width)
 
 	case itemFinished:
 		detail := ""
 		if todo.BackgroundTaskID(t) != "" {
 			detail = mutedStyle.Render("[completed]")
 		}
-		return renderItemLine(indent, tint(trackerCompletedStyle).Render("●"), idTag, tint(lipgloss.NewStyle()).Render(subject), detail, width)
+		return renderItemLine(indent, tint(trackerCompletedStyle).Render(kit.CurrentSymbols.LiveDot), idTag, tint(lipgloss.NewStyle()).Render(subject), detail, width)
 
 	case itemStalled:
 		// Nothing is executing this item, so draw it at rest. Reaching here
@@ -356,7 +356,7 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 				detail = blockedStyle.Render("← " + strings.Join(blockerRefs, ", "))
 			}
 		}
-		return renderItemLine(indent, tint(trackerPendingStyle).Render("○"), idTag, tint(lipgloss.NewStyle()).Render(subject), detail, width)
+		return renderItemLine(indent, tint(trackerPendingStyle).Render(kit.CurrentSymbols.RadioOff), idTag, tint(lipgloss.NewStyle()).Render(subject), detail, width)
 	}
 }
 

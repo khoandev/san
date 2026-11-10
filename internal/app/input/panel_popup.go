@@ -218,7 +218,7 @@ func (c *PanelPopup) Render() string {
 	// the hint, and the card's border + padding + a screen margin.
 	bodyHeight := max(4, c.height-headerLines-12)
 
-	rule := popupRuleStyle.Render(strings.Repeat("─", w))
+	rule := kit.Rule(w)
 
 	body := p.Render(w, bodyHeight)
 
@@ -274,7 +274,7 @@ func (c *PanelPopup) renderHeader(width int) string {
 
 	line1 := left
 	if p := c.activePanel(); p != nil && p.Dirty() {
-		right := popupUnsavedDotStyle.Render("●") + " " + popupUnsavedTextStyle.Render("unsaved")
+		right := popupUnsavedDotStyle.Render(kit.CurrentSymbols.LiveDot) + " " + popupUnsavedTextStyle.Render("unsaved")
 		gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 		line1 = left + strings.Repeat(" ", gap) + right
 	}
@@ -341,9 +341,6 @@ var (
 	popupTaglineStyle  = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Italic(true)
 	popupCrumbDimStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
 	popupCrumbStyle    = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Text).Bold(true)
-
-	// Barely-there hairline under the header — a soft divider, not a heading.
-	popupRuleStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim).Faint(true)
 
 	// "● unsaved" tag — muted, so it's noticeable without shouting in a hue.
 	popupUnsavedDotStyle  = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Bold(true)

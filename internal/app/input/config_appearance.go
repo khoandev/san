@@ -82,11 +82,20 @@ type SkillCommandsSavedMsg struct {
 	On bool
 }
 
+// IconStyleSavedMsg is emitted after the appearance panel installs and persists
+// an icon style so the app can refresh its settings handle and confirm the
+// choice. kit.InitSymbols has already been called by the time this fires, so
+// the next frame draws the new glyphs.
+type IconStyleSavedMsg struct {
+	Style string
+}
+
 // appearanceKind tags which setting a row applies when selected.
 type appearanceKind int
 
 const (
 	kindTheme appearanceKind = iota
+	kindIconStyle
 	kindContextBar
 	kindGitBar
 	kindThinkingDisplay
@@ -97,14 +106,16 @@ const (
 
 // appearanceOption is one selectable row. section heads the group it belongs
 // to (printed once, above the group's first row). Exactly one value field is
-// meaningful, selected by kind: theme for kindTheme, barOn for either bar kind,
-// thinkingDisplay for kindThinkingDisplay.
+// meaningful, selected by kind: theme for kindTheme, iconStyle for
+// kindIconStyle, barOn for either bar kind, thinkingDisplay for
+// kindThinkingDisplay.
 type appearanceOption struct {
 	section         string
 	kind            appearanceKind
 	label           string
 	desc            string
 	theme           string // kindTheme: the theme value to apply
+	iconStyle       string // kindIconStyle: the icon style to apply
 	barOn           bool   // kindContextBar / kindGitBar / kindSkillCommands: the on/off value to apply
 	thinkingDisplay string // kindThinkingDisplay: the display mode to apply
 	previewLines    int    // kindBashPreview: the line count to apply
@@ -112,7 +123,8 @@ type appearanceOption struct {
 
 // appearanceOptions is the full, section-ordered row list. The theme group
 // comes first so the cursor can park on the current theme at Enter (and so
-// indexOfTheme returns the same indices the first-run selector uses).
+// indexOfTheme returns the same indices the first-run selector uses); the
+// icon group closes the list.
 func appearanceOptions() []appearanceOption {
 	return []appearanceOption{
 		{section: "COLOR THEME", kind: kindTheme, label: "Dark", desc: "Dark background terminal", theme: "dark"},
@@ -126,6 +138,13 @@ func appearanceOptions() []appearanceOption {
 		{section: "SHELL OUTPUT", kind: kindBashPreview, label: "Preview lines", desc: "Last lines while a command runs"},
 		{section: "AGENT OUTPUT", kind: kindAgentPreview, label: "Agent preview", desc: "Activity and result preview lines"},
 		{section: "SLASH MENU", kind: kindSkillCommands, label: "Skills", desc: "List skills in the / menu"},
+		// Icons last: the group is a personal display choice like the rest, but
+		// keeping it off the top leaves the theme and the status bars — the
+		// rows people change most — in the first screenful.
+		{section: "ICONS", kind: kindIconStyle, label: "Auto", desc: "Follow the terminal — plain ASCII when it cannot draw glyphs", iconStyle: setting.IconStyleAuto},
+		{section: "ICONS", kind: kindIconStyle, label: "Symbols", desc: "The quiet set: ● ✦ ✓ ○", iconStyle: setting.IconStyleUnicode},
+		{section: "ICONS", kind: kindIconStyle, label: "Emoji", desc: "Colorful, double-width: 🟢 ✨ ✅ ⚪", iconStyle: setting.IconStyleEmoji},
+		{section: "ICONS", kind: kindIconStyle, label: "Nerd Font", desc: "Private-use glyphs — needs a patched terminal font", iconStyle: setting.IconStyleNerd},
 	}
 }
 
@@ -139,6 +158,7 @@ type appearancePanel struct {
 	// group. A group is "dirty" while the cursor hovers a row that diverges
 	// from its baseline.
 	themeBaseline         string
+	iconBaseline          string
 	barBaseline           bool
 	gitBarBaseline        bool
 	thinkingBaseline      string
@@ -160,6 +180,7 @@ func (p *appearancePanel) Title() string { return "appearance" }
 func (p *appearancePanel) Enter() {
 	p.options = appearanceOptions()
 	p.themeBaseline = "auto"
+	p.iconBaseline = setting.DefaultIconStyle
 	p.barBaseline = false
 	p.gitBarBaseline = false
 	p.thinkingBaseline = setting.DefaultThinkingDisplay
@@ -171,6 +192,7 @@ func (p *appearancePanel) Enter() {
 			if data.Theme != "" {
 				p.themeBaseline = data.Theme
 			}
+			p.iconBaseline = data.IconStyleKind()
 			p.barBaseline = data.ShowContextBar()
 			p.gitBarBaseline = data.ShowGitBar()
 			p.thinkingBaseline = data.ThinkingDisplayMode()
@@ -179,9 +201,29 @@ func (p *appearancePanel) Enter() {
 			p.skillCommandsBaseline = data.ShowSkillCommands()
 		}
 	}
+	// Say what "auto" resolves to right now, so the row explains itself
+	// instead of asking the user to know the terminal's capabilities.
+	if i := indexOfIconStyle(setting.IconStyleAuto); i >= 0 {
+		p.options[i].desc = "Follow the terminal — now " + iconStyleLabel(kit.ResolveIconStyle(setting.IconStyleAuto))
+	}
 	p.resetBarChoices()
 	p.cursor = indexOfTheme(p.themeBaseline)
 	p.saveErr = nil
+}
+
+// iconStyleLabel names a resolved icon style for the panel, matching the row
+// label it corresponds to (ASCII is the plain table, which has no row).
+func iconStyleLabel(style string) string {
+	switch style {
+	case setting.IconStyleUnicode:
+		return "Symbols"
+	case setting.IconStyleEmoji:
+		return "Emoji"
+	case setting.IconStyleNerd:
+		return "Nerd Font"
+	default:
+		return "ASCII"
+	}
 }
 
 // Dirty reports whether the hovered row diverges from its group's saved
@@ -246,6 +288,21 @@ func (p *appearancePanel) apply(opt appearanceOption) (tea.Cmd, bool) {
 		}
 		p.themeBaseline = opt.theme
 		return func() tea.Msg { return ThemeSavedMsg{Theme: opt.theme} }, true
+	case kindIconStyle:
+		// Install the table first so the change is visible on the next frame,
+		// then persist. InitSymbols does no terminal I/O, so it is safe to
+		// call mid-program. On a failed save the previous table is put back
+		// verbatim — not by re-resolving the baseline, which for "auto"
+		// depends on the terminal and may differ from what is on screen.
+		previous := kit.CurrentSymbols
+		kit.InitSymbols(opt.iconStyle)
+		if err := setting.SaveIconStyle(opt.iconStyle); err != nil {
+			kit.CurrentSymbols = previous
+			p.saveErr = err
+			return nil, false
+		}
+		p.iconBaseline = opt.iconStyle
+		return func() tea.Msg { return IconStyleSavedMsg{Style: opt.iconStyle} }, true
 	case kindContextBar:
 		if err := setting.SaveContextBar(opt.barOn); err != nil {
 			p.saveErr = err
@@ -303,33 +360,35 @@ func (p *appearancePanel) HintLine() string {
 }
 
 // renderAppearanceSection renders a section heading followed by a rule that
-// fills the remaining width.
+// fills the remaining width. It delegates to the shared sectionRule so every
+// panel draws headings with one label style and one rule.
 func renderAppearanceSection(title string, width int) string {
-	ruleLen := max(width-lipgloss.Width(title)-1, 1)
-	return appearanceSectionStyle.Render(title) + " " + appearanceRuleStyle.Render(strings.Repeat("─", ruleLen))
+	return sectionRule(title, width)
 }
 
 // renderRadioRow renders one selectable row of a /settings radio group: the
-// hover caret, the ○/● radio, a label padded to a common column so the
-// descriptions line up, and the "current" tag on the persisted choice.
-// Shared by every panel with a radio group so the tabs cannot drift apart.
+// focus bar, the ○/● radio marking the persisted choice, and a label padded to
+// a common column so the descriptions line up. Shared by every panel with a
+// radio group so the tabs cannot drift apart.
+//
+// The radio alone says which value is saved — an extra "current" tag repeated
+// it — and only the focus bar carries a hue, so a row has one signal for
+// "you are here" and none competing with it.
 func renderRadioRow(label, desc string, hovered, current bool) string {
-	caret := "  "
+	caret := strings.Repeat(" ", kit.Width(kit.FocusBar)+1)
 	rendered := appearanceLabelStyle.Render(label)
 	if hovered {
-		caret = appearanceCursorStyle.Render("▸ ")
-		rendered = appearanceCursorStyle.Render(label)
+		caret = kit.FocusBarStyle().Render(kit.FocusBar) + " "
+		rendered = kit.SelectorSelectedLabelStyle().Render(label)
 	}
 
-	radio := appearanceRadioOffStyle.Render("○")
-	tag := ""
+	radio := appearanceRadioOffStyle.Render(kit.CurrentSymbols.RadioOff)
 	if current {
-		radio = appearanceRadioOnStyle.Render("●")
-		tag = "  " + appearanceCurrentStyle.Render("current")
+		radio = appearanceRadioOnStyle.Render(kit.CurrentSymbols.RadioOn)
 	}
 
 	labelCell := rendered + strings.Repeat(" ", max(10-lipgloss.Width(label), 1))
-	return caret + radio + " " + labelCell + appearanceDescStyle.Render(desc) + tag
+	return caret + radio + " " + labelCell + appearanceDescStyle.Render(desc)
 }
 
 // radioHintLine is the shared bottom hint for a radio-group panel.
@@ -352,9 +411,32 @@ func (p *appearancePanel) isCurrent(opt appearanceOption) bool {
 		return opt.previewLines == p.agentPreviewBaseline
 	case kindSkillCommands:
 		return opt.barOn == p.skillCommandsBaseline
+	case kindIconStyle:
+		return opt.iconStyle == p.iconBaseline
 	default:
 		return opt.theme == p.themeBaseline
 	}
+}
+
+// indexOfIconStyle returns the row index of the given icon-style value, or the
+// first icon row when it is unknown / unset.
+func indexOfIconStyle(value string) int {
+	first := -1
+	for i, opt := range appearanceOptions() {
+		if opt.kind != kindIconStyle {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		if opt.iconStyle == value {
+			return i
+		}
+	}
+	if first < 0 {
+		return 0
+	}
+	return first
 }
 
 // indexOfTheme returns the row index of the given theme value, or 0 (the
@@ -369,13 +451,9 @@ func indexOfTheme(value string) int {
 }
 
 var (
-	appearanceSectionStyle  = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent).Bold(true)
-	appearanceRuleStyle     = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim).Faint(true)
-	appearanceCursorStyle   = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent).Bold(true)
 	appearanceLabelStyle    = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Text)
 	appearanceDescStyle     = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
-	appearanceCurrentStyle  = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success)
-	appearanceRadioOnStyle  = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success)
+	appearanceRadioOnStyle  = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextBright).Bold(true)
 	appearanceRadioOffStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
 	appearanceErrorStyle    = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Error)
 )

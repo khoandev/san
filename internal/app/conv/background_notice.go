@@ -26,7 +26,7 @@ func renderBackgroundShellCall(toolName, input, taskID string, width int) string
 		label += " · " + description
 	}
 	label = kit.TruncateText(label, max(1, width-kit.ToolIconWidth()))
-	header := renderAgentColoredLine(label, width, "●", backgroundIdentityColor(taskID))
+	header := renderAgentColoredLine(label, width, kit.CurrentSymbols.LiveDot, backgroundIdentityColor(taskID))
 	return header + "\n" + kit.RenderCommandBlock(command, width)
 }
 
@@ -61,7 +61,7 @@ func (e agentEnvelope) renderTaskNotice(width int, name string, color kit.Adapti
 		title = kit.TruncateText(name, nameBudget)
 	}
 	identity := lipgloss.NewStyle().Foreground(color)
-	line := identity.Render("●") + " "
+	line := identity.Render(kit.CurrentSymbols.LiveDot) + " "
 	if title != "" {
 		line += identity.Render(title) + " "
 	}

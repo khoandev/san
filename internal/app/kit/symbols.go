@@ -62,6 +62,9 @@ type Symbols struct {
 	ExecuteBadge string
 	// AutoAccept leads the "accept edits", autopilot and YOLO mode indicator.
 	AutoAccept string
+	// AutoPilot leads the one-line autopilot notices ("⏵ autopilot · …"). It is
+	// a single mark, distinct from the mode indicator's AutoAccept pair.
+	AutoPilot string
 	// GroupMark leads the session's group identity ("◆ host/self").
 	GroupMark string
 	// ToolResult leads a tool's result trailer line ("⎿ …").
@@ -89,6 +92,7 @@ var unicodeSymbols = Symbols{
 	PlanBadge:     "✎",
 	ExecuteBadge:  "▶",
 	AutoAccept:    "⏵⏵",
+	AutoPilot:     "⏵",
 	GroupMark:     "◆",
 	ToolResult:    "⎿",
 	BrandStar:     "✦",
@@ -111,6 +115,7 @@ var emojiSymbols = Symbols{
 	PlanBadge:     "📝",
 	ExecuteBadge:  "▶️",
 	AutoAccept:    "⏩",
+	AutoPilot:     "🤖",
 	GroupMark:     "👥",
 	ToolResult:    "📎",
 	BrandStar:     "✨",
@@ -132,6 +137,7 @@ var nerdSymbols = Symbols{
 	PlanBadge:     "\uf040", // nf-fa-pencil
 	ExecuteBadge:  "\uf04b", // nf-fa-play
 	AutoAccept:    "\uf04e", // nf-fa-forward
+	AutoPilot:     "\uf085", // nf-fa-cogs
 	GroupMark:     "\uf0c0", // nf-fa-users
 	ToolResult:    "\uf149", // nf-fa-level-down
 	BrandStar:     "\uf005", // nf-fa-star
@@ -139,8 +145,9 @@ var nerdSymbols = Symbols{
 }
 
 // The ASCII table is the fallback for output that cannot carry the assumed
-// glyphs. It is deliberately narrow: one ASCII character wherever the Unicode
-// table has one, so column math that measured the Unicode cell still holds.
+// glyphs. It is deliberately narrow: exactly one ASCII character in every field
+// the Unicode table fills with one, so a row that reserved a single column for
+// a mark still aligns when the output downgrades.
 var plainSymbols = Symbols{
 	LiveDot:       "*",
 	ThinkingStar:  "*",
@@ -148,12 +155,13 @@ var plainSymbols = Symbols{
 	Success:       "v",
 	Error:         "x",
 	Warning:       "!",
-	RadioOn:       "(*)",
-	RadioOff:      "( )",
+	RadioOn:       "*",
+	RadioOff:      "o",
 	Cursor:        ">",
 	PlanBadge:     "P",
 	ExecuteBadge:  ">",
-	AutoAccept:    ">>",
+	AutoAccept:    "$",
+	AutoPilot:     "$",
 	GroupMark:     "#",
 	ToolResult:    "\\",
 	BrandStar:     "*",
@@ -187,8 +195,10 @@ func InitSymbols(style string) string {
 // ResolveIconStyle maps a stored style to the style that will actually be
 // drawn. It is the only place that maps "auto" to a table:
 //
-//   - An explicit unicode, emoji or nerd choice is honored as-is: the user
-//     overrode the guess, and NO_COLOR is a statement about color, not glyphs.
+//   - An explicit unicode, emoji, nerd or plain choice is honored as-is: the
+//     user overrode the guess, and NO_COLOR is a statement about color, not
+//     glyphs. (No caller stores plain; it is accepted so a test or a caller
+//     forcing the ASCII table gets it.)
 //   - "auto" (or anything unrecognized) consults the environment: a
 //     non-color/non-TTY stdout, or NO_COLOR, falls back to plain ASCII; else
 //     SAN_ICON_STYLE (unicode, emoji, nerd) picks a table, SAN_NERD_FONT or NF
@@ -204,7 +214,7 @@ func ResolveIconStyle(style string) string {
 // mapping is testable without a terminal.
 func resolveIconStyle(style string, color bool, getenv func(string) string) string {
 	switch style {
-	case IconStyleUnicode, IconStyleEmoji, IconStyleNerd:
+	case IconStyleUnicode, IconStyleEmoji, IconStyleNerd, IconStylePlain:
 		return style
 	}
 	if !color || getenv("NO_COLOR") != "" {

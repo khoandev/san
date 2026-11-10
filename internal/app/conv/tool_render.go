@@ -19,11 +19,6 @@ import (
 )
 
 var (
-	headerStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(kit.CurrentTheme.Border).
-			Padding(0, 1)
-
 	truncatedStyle = lipgloss.NewStyle().
 			Foreground(kit.CurrentTheme.Muted).
 			Italic(true)
@@ -683,7 +678,7 @@ func renderAskUserCall(input, icon string, width int) string {
 
 func renderAskUserResultInline(data ToolResultData) string {
 	if data.IsError {
-		return toolResultStyle.Render(fmt.Sprintf("  ✗  %s", data.Content)) + "\n"
+		return toolResultStyle.Render(fmt.Sprintf("  %s  %s", kit.CurrentSymbols.Error, data.Content)) + "\n"
 	}
 	if strings.Contains(data.Content, "User cancelled") {
 		return toolResultStyle.Render("  ↳ Cancelled") + "\n"
@@ -825,12 +820,12 @@ func renderTaskResultInline(data ToolResultData, mdRenderer *MDRenderer) string 
 
 	if process != "" {
 		for line := range strings.SplitSeq(process, "\n") {
-			sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  ⎿  %s", line)) + "\n")
+			sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  %s  %s", kit.CurrentSymbols.ToolResult, line)) + "\n")
 		}
 	}
 
 	if response != "" {
-		sb.WriteString(agentLabelStyle.Render("  ⎿  Response:") + "\n")
+		sb.WriteString(agentLabelStyle.Render(fmt.Sprintf("  %s  Response:", kit.CurrentSymbols.ToolResult)) + "\n")
 		rendered := response
 		if mdRenderer != nil {
 			if md, err := mdRenderer.agentBodyRenderer().Render(response); err == nil {
@@ -842,7 +837,7 @@ func renderTaskResultInline(data ToolResultData, mdRenderer *MDRenderer) string 
 		}
 	}
 
-	resultLine := "  ⎿  Done"
+	resultLine := fmt.Sprintf("  %s  Done", kit.CurrentSymbols.ToolResult)
 	if doneStats != "" {
 		resultLine += " (" + doneStats + ")"
 	}
@@ -1022,11 +1017,11 @@ func formatAgentDefinition(agent agentInput, width int) string {
 		meta = append(meta, "background")
 	}
 	if len(meta) > 0 {
-		sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  ⎿  [%s]", strings.Join(meta, ", "))) + "\n")
+		sb.WriteString(toolResultStyle.Render(fmt.Sprintf("  %s  [%s]", kit.CurrentSymbols.ToolResult, strings.Join(meta, ", "))) + "\n")
 	}
 
 	if agent.Prompt != "" {
-		sb.WriteString(agentLabelStyle.Render("  ⎿  Prompt:") + "\n")
+		sb.WriteString(agentLabelStyle.Render(fmt.Sprintf("  %s  Prompt:", kit.CurrentSymbols.ToolResult)) + "\n")
 		wrapWidth := width - lipgloss.Width(agentContentIndent)
 		for line := range strings.SplitSeq(agent.Prompt, "\n") {
 			for _, wrapped := range wrapLine(line, wrapWidth) {
@@ -1443,7 +1438,7 @@ func renderBashDescription(description string, width int) string {
 }
 
 func renderToolLine(label string, width int) string {
-	return renderToolLineWithIcon(label, width, "●")
+	return renderToolLineWithIcon(label, width, kit.CurrentSymbols.LiveDot)
 }
 
 func renderToolLineWithIcon(label string, width int, iconText string) string {
