@@ -1226,7 +1226,7 @@ func selectorWithModels(t *testing.T, width int, models []providerModelItem) (Pr
 	for i := range models {
 		items[i] = providerListItem{Kind: providerItemModel, Model: &models[i]}
 	}
-	s.modelColumns = measureModelColumns(items, s.panel().ContentWidth()-modelPanelInset)
+	s.modelColumns = measureModelNameWidth(items, s.panel().ContentWidth()-modelPanelInset)
 	return s, items
 }
 
@@ -1241,9 +1241,9 @@ func columnOf(row, want string) int {
 	return lipgloss.Width(row[:idx])
 }
 
-// The two score columns draw the dataset's own numbers: five dots for where
-// the score sits, the number itself, "~" on an Arena rank so it is not read as
-// an index, and "--" for a model the dataset never measured.
+// The two score columns draw the dataset's own numbers and nothing else: the
+// metric's icon, then the number, with "~" on an Arena rank so it is not read
+// as an index, and "--" for a model the dataset never measured.
 func TestModelRowShowsTheScoreColumns(t *testing.T) {
 	models := []providerModelItem{
 		{
@@ -1264,14 +1264,14 @@ func TestModelRowShowsTheScoreColumns(t *testing.T) {
 	s, items := selectorWithModels(t, 100, models)
 
 	measured := xansi.Strip(s.renderModelRow(items[0], false))
-	for _, want := range []string{"◈●●●○○", "59.1", "⌘●●●●○", "78"} {
+	for _, want := range []string{"◈", "59.1", "⌘", "78"} {
 		if !strings.Contains(measured, want) {
 			t.Errorf("the measured row is missing %q: %q", want, measured)
 		}
 	}
 
 	ranked := xansi.Strip(s.renderModelRow(items[1], false))
-	for _, want := range []string{"◈●●●●○", "~1463"} {
+	for _, want := range []string{"◈", "~1463"} {
 		if !strings.Contains(ranked, want) {
 			t.Errorf("the ranked row is missing %q: %q", want, ranked)
 		}
@@ -1287,6 +1287,14 @@ func TestModelRowShowsTheScoreColumns(t *testing.T) {
 			t.Errorf("an unmeasured row is missing %q: %q", want, unmeasured)
 		}
 	}
+
+	// A score is a number, not a progress bar: no dots on any row.
+	for i := range items {
+		row := xansi.Strip(s.renderModelRow(items[i], false))
+		if strings.ContainsAny(row, "●○") {
+			t.Errorf("row %d still draws the dot scale: %q", i, row)
+		}
+	}
 }
 
 // The legend names the columns, and only the tab that has them carries it.
@@ -1297,6 +1305,9 @@ func TestTheScoreLegendOnlyOnTheModelsTab(t *testing.T) {
 	s.visibleItems = items
 
 	modelsView := xansi.Strip(s.Render())
+	if strings.Contains(modelsView, "●●") {
+		t.Error("the legend still describes a dot scale")
+	}
 	for _, want := range []string{"◈ intelligence", "⌘ coding", "~ arena Elo", "-- not measured"} {
 		if !strings.Contains(modelsView, want) {
 			t.Errorf("the Models tab is missing the legend's %q", want)

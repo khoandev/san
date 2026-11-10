@@ -317,24 +317,7 @@ func (s *ProviderSelector) rebuildModelsTab() {
 		}
 	}
 
-	s.modelColumns = measureModelColumns(s.visibleItems, s.panel().ContentWidth()-modelPanelInset)
-}
-
-// modelColumnWidths sizes the Models tab grid.
-//
-// The widths are measured from what is actually listed rather than fixed, for
-// two reasons. A fixed name column is either too narrow for the longest ID a
-// vendor ships — Ollama and the aggregators serve names past 50 columns — which
-// pushes that row's figures out of line with every other row, or too wide for
-// the rest, which strands the figures far from the names. And the whole row has
-// to fit the panel: a row wider than the overlay wraps, and the list code
-// assumes one line per item, so a wrapped row desynchronizes scrolling for
-// everything below it.
-type modelColumnWidths struct {
-	name int
-	// gap is the space between the grid's cells: two columns normally, one
-	// when the panel can only fit the narrowest name otherwise.
-	gap int
+	s.modelColumns = measureModelNameWidth(s.visibleItems, s.panel().ContentWidth()-modelPanelInset)
 }
 
 const (
@@ -347,14 +330,14 @@ const (
 	// modelWindowColumnWidth fits the widest window any catalog states
 	// ("204.8k") and never varies, so windows line up on their units.
 	modelWindowColumnWidth = 6
-	// modelScoreColumnWidth is one score cell: the metric's icon, five dots,
-	// a space, and the number. The number keeps five columns of its own so an
-	// Elo ("~1463") and an index ("59.1") end in the same place.
-	modelScoreColumnWidth = 12
-	// modelScoreNumberWidth is the number's share of that cell.
+	// modelScoreNumberWidth is a score cell's number: wide enough for an Elo
+	// ("~1463") and an index ("59.1"), so both end in the same place.
 	modelScoreNumberWidth = 5
-	// modelScoreDots is how many dots the cell draws.
-	modelScoreDots = 5
+	// modelScoreColumnWidth is that number plus the metric's icon and the
+	// space between them.
+	modelScoreColumnWidth = modelScoreNumberWidth + 2
+	// modelColumnGap is the space between the grid's cells.
+	modelColumnGap = 2
 	// modelPanelInset is the panel's own horizontal padding: the box is
 	// rendered at ContentWidth with Padding(1, 2), so a row has four columns
 	// less than the panel reports to work with.
@@ -364,19 +347,21 @@ const (
 // modelRowFixedWidth is everything on a row that is not the name: the
 // selection prefix, the "[ ]" indicator, the window column, the two score
 // cells, and the gaps between them.
-func modelRowFixedWidth(gap int) int {
-	return 4 + 3 + modelWindowColumnWidth + 2*modelScoreColumnWidth + 4*gap
+func modelRowFixedWidth() int {
+	return 4 + 3 + modelWindowColumnWidth + 2*modelScoreColumnWidth + 4*modelColumnGap
 }
 
-// measureModelColumns sizes the grid to the rows it will hold, then shrinks the
-// name column until the whole row fits rowWidth — the width the panel leaves
-// after its own padding.
+// measureModelNameWidth sizes the name column to the rows it will hold, capped
+// at modelNameColumnMax, then trims it so the whole row fits rowWidth — the
+// width the panel leaves after its own padding. A row wider than the panel
+// wraps, and the list code assumes one line per item, so a wrapped row
+// desynchronizes scrolling for everything below it.
 //
-// The score cells never shrink: at the panel's narrowest the row's fixed part
-// plus the narrowest name column would overrun by one column, so the gaps
-// tighten from two to one instead. Labels are the part that goes without room,
-// never a score column.
-func measureModelColumns(items []providerListItem, rowWidth int) modelColumnWidths {
+// The score cells never shrink; labels are the part that goes without room,
+// never a score column. At the panel's floor (ContentWidth 60, a row of 56) the
+// fixed part leaves the name 21 columns, well above modelNameColumnMin, so the
+// trim only binds on a name long enough to reach modelNameColumnMax.
+func measureModelNameWidth(items []providerListItem, rowWidth int) int {
 	longest := 0
 	for _, item := range items {
 		if item.Kind != providerItemModel || item.Model == nil {
@@ -385,19 +370,7 @@ func measureModelColumns(items []providerListItem, rowWidth int) modelColumnWidt
 		longest = max(longest, lipgloss.Width(modelDisplayName(*item.Model)))
 	}
 	longest = min(longest, modelNameColumnMax)
-
-	widths := modelColumnWidths{name: longest, gap: 2}
-	if room := rowWidth - modelRowFixedWidth(widths.gap); room < widths.name {
-		widths.name = room
-	}
-	if widths.name >= modelNameColumnMin {
-		return widths
-	}
-	// Too tight for the wider gaps: tighten them before the name gives up a
-	// column, since a name that cannot be read is worse than cells that touch.
-	widths.gap = 1
-	widths.name = max(min(longest, rowWidth-modelRowFixedWidth(widths.gap)), modelNameColumnMin)
-	return widths
+	return max(min(longest, rowWidth-modelRowFixedWidth()), modelNameColumnMin)
 }
 
 // modelDisplayName is what a row calls a model: whatever name the provider

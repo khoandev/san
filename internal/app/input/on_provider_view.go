@@ -2,7 +2,6 @@ package input
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -265,8 +264,7 @@ func (s *ProviderSelector) renderModelRow(item providerListItem, isSelected bool
 	// A grid, not a sentence. The name, the window and the two scores each
 	// take a column of their own, so the figures line up on their units; only
 	// the labels, which have no shape to align, trail as free text.
-	cols := s.modelColumns
-	name := padRight(modelDisplayName(*m), cols.name)
+	name := padRight(modelDisplayName(*m), s.modelColumns)
 
 	window, windowStyle := kit.FormatTokenCount(m.ContextWindow), kit.DimStyle()
 	if m.ContextWindow == 0 {
@@ -286,16 +284,16 @@ func (s *ProviderSelector) renderModelRow(item providerListItem, isSelected bool
 		windowStyle.Render(padLeft(window, modelWindowColumnWidth)),
 		modelScoreCell("◈", intelligence),
 		modelScoreCell("⌘", coding),
-	}, strings.Repeat(" ", cols.gap))
+	}, strings.Repeat(" ", modelColumnGap))
 
 	// Then what the catalog says about the model, in whatever room is left on
 	// the row, so a long list of labels never wraps.
 	if labels := modelLabels(*m); labels != "" {
 		// The line already carries the widest selection prefix, so what is
 		// left is measured straight against the row.
-		budget := s.panel().ContentWidth() - modelPanelInset - lipgloss.Width(line) - cols.gap
+		budget := s.panel().ContentWidth() - modelPanelInset - lipgloss.Width(line) - modelColumnGap
 		if budget >= 8 {
-			line += strings.Repeat(" ", cols.gap) + kit.DimStyle().Render(kit.TruncateText(labels, budget))
+			line += strings.Repeat(" ", modelColumnGap) + kit.DimStyle().Render(kit.TruncateText(labels, budget))
 		}
 	}
 
@@ -336,23 +334,19 @@ func modelLabels(m providerModelItem) string {
 
 // ── Score cells ─────────────────────────────────────────────────────────────
 
-// modelScoreCell draws one score in a cell of its own: the metric's icon, five
-// dots for where the score sits, and the number itself — prefixed with "~" when
-// the number is an Arena rank rather than an index, so the two are never read
-// as one scale. A model the dataset does not measure shows "--" in the same
-// cell, not a zero: a zero would be a claim the dataset never made.
+// modelScoreCell draws one score in a cell of its own: the metric's icon and
+// the number itself, right-aligned so an index and an Elo end in the same
+// column. The number is prefixed with "~" when it is an Arena rank rather than
+// an index, so the two are never read as one scale. A model the dataset does
+// not measure shows "--" in the same cell, not a zero: a zero would be a claim
+// the dataset never made.
 func modelScoreCell(icon string, score *llm.ModelScore) string {
 	dim := kit.DimStyle()
 	if score == nil || score.Value <= 0 {
 		return dim.Render(padRight(icon+" --", modelScoreColumnWidth))
 	}
-	lit := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Text)
-	filled := modelScoreLevel(*score)
 	number := padLeft(formatModelScore(*score), modelScoreNumberWidth)
-	return dim.Render(icon) +
-		lit.Render(strings.Repeat("●", filled)) +
-		dim.Render(strings.Repeat("○", modelScoreDots-filled)) +
-		" " + lit.Render(number)
+	return dim.Render(icon) + " " + lipgloss.NewStyle().Foreground(kit.CurrentTheme.Text).Render(number)
 }
 
 // formatModelScore renders the number on the dataset's own scale, and says
@@ -364,21 +358,11 @@ func formatModelScore(score llm.ModelScore) string {
 	return fmt.Sprintf("%g", score.Value)
 }
 
-// modelScoreLevel maps a score onto the five dots. An index spans 0-100; an
-// Arena rank is an Elo, and 1000-1550 is the band the scale covers.
-func modelScoreLevel(score llm.ModelScore) int {
-	fraction := score.Value / 20
-	if score.Elo() {
-		fraction = (score.Value - 1000) / 110
-	}
-	return min(max(int(math.Round(fraction)), 0), modelScoreDots)
-}
-
 // renderScoreLegend names the two score columns, under the search box on the
-// Models tab. "●●●○○" and "--" are only obvious once someone has said what they
-// mean, and the Elo marker is easy to mistake for part of the number.
+// Models tab. "--" is only obvious once someone has said what it means, and
+// the Elo marker is easy to mistake for part of the number.
 func (s *ProviderSelector) renderScoreLegend() string {
-	legend := "◈ intelligence · ⌘ coding · ●●●○○ out of 5 · ~ arena Elo · -- not measured"
+	legend := "◈ intelligence · ⌘ coding · ~ arena Elo · -- not measured"
 	width := max(1, s.panel().ContentWidth()-modelPanelInset-2)
 	return kit.DimStyle().PaddingLeft(2).Render(kit.TruncateText(legend, width))
 }

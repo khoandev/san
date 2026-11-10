@@ -162,9 +162,10 @@ type ProviderSelector struct {
 
 	// Flattened visible-items list (rebuilt on state changes)
 	visibleItems []providerListItem
-	// modelColumns sizes the Models tab grid to whatever is currently listed,
-	// recomputed with visibleItems.
-	modelColumns modelColumnWidths
+	// modelColumns is the width of the name column, sized to whatever is
+	// currently listed and recomputed with visibleItems. Every other column on
+	// a model row has a fixed width.
+	modelColumns int
 	selectedIdx  int
 	scrollOffset int
 	maxVisible   int
