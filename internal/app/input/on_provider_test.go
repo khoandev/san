@@ -609,7 +609,8 @@ func TestUpdateFilterMatchesModelIDDisplayNameAndProvider(t *testing.T) {
 	m := NewProviderSelector()
 	m.activeTab = providerTabModels
 	m.allModels = []providerModelItem{
-		{ID: "gpt-5", DisplayName: "GPT-5", ProviderName: "openai"},
+		{ID: "gpt-5", DisplayName: "GPT-5", ProviderName: "openai",
+			Scores: &llm.ModelScores{Intelligence: &llm.ModelScore{Value: 61, Metric: "aa_intelligence_index"}}},
 		{ID: "claude-sonnet", DisplayName: "Claude Sonnet", ProviderName: "anthropic"},
 	}
 	m.connectedProviders = []providerProviderItem{
@@ -1088,6 +1089,26 @@ func TestInteractiveConnectMarksTheSelectedRow(t *testing.T) {
 }
 
 // A model row is a grid: name, window, then the labels. The window is what
+// A free-tier model is shown under the name of the model underneath its ID,
+// while the ID itself keeps the marker the gateway filters on.
+func TestFreeModelRowKeepsTheIDAndDropsTheMarker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+
+	item := newProviderModelItem(llm.ModelInfo{
+		ID:          "deepseek-v4.1-flash-free",
+		Name:        "DeepSeek V4.1 Flash Free",
+		DisplayName: "DeepSeek V4.1 Flash Free",
+	}, string(llm.OpenCodeZen), llm.AuthAPIKey, nil)
+
+	if item.ID != "deepseek-v4.1-flash-free" {
+		t.Fatalf("the ID lost the free-tier marker: %q", item.ID)
+	}
+	if strings.Contains(item.DisplayName, "Free") {
+		t.Errorf("the display name still carries the marker: %q", item.DisplayName)
+	}
+}
+
 // models get compared on, so it takes an aligned column of its own — and a
 // model San could not size shows a warning in its place, because without one
 // the context percentage cannot render and auto-compaction cannot fire.
@@ -1124,20 +1145,29 @@ func TestModelRowShowsTheGrid(t *testing.T) {
 // start in the same place however wide its own name and figures are.
 func TestModelRowsShareOneGrid(t *testing.T) {
 	models := []providerModelItem{
-		{ID: "short", DisplayName: "Wide", ContextWindow: 1_000_000, Thinks: true},
+		{ID: "short", DisplayName: "Wide", ContextWindow: 1_000_000, Thinks: true,
+			Scores: &llm.ModelScores{Intelligence: &llm.ModelScore{Value: 59.1, Metric: "aa_intelligence_index"}}},
 		{ID: "long", DisplayName: "MiniMax-M2.7-Highspeed", ContextWindow: 204_800, Thinks: true},
 		{ID: "narrow", DisplayName: "Narrow", ContextWindow: 16_000, Thinks: true},
 	}
 	s, items := selectorWithModels(t, 100, models)
 
-	var columns []int
+	var labels, intelligence, coding []int
 	for _, item := range items {
 		row := xansi.Strip(s.renderModelRow(item, false))
-		columns = append(columns, strings.Index(row, "thinking"))
+		labels = append(labels, columnOf(row, "thinking"))
+		intelligence = append(intelligence, columnOf(row, "◈"))
+		coding = append(coding, columnOf(row, "⌘"))
 	}
-	for i := range columns {
-		if columns[i] != columns[0] {
-			t.Fatalf("labels start in different columns: %v", columns)
+	for i := range labels {
+		if labels[i] != labels[0] {
+			t.Fatalf("labels start in different columns: %v", labels)
+		}
+		if intelligence[i] != intelligence[0] {
+			t.Fatalf("intelligence starts in different columns: %v", intelligence)
+		}
+		if coding[i] != coding[0] {
+			t.Fatalf("coding starts in different columns: %v", coding)
 		}
 	}
 }
@@ -1151,6 +1181,10 @@ func TestALongModelNameCannotOverflowThePanel(t *testing.T) {
 			ID:            "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M",
 			DisplayName:   "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M",
 			ContextWindow: 262_144, Thinks: true,
+			Scores: &llm.ModelScores{
+				Intelligence: &llm.ModelScore{Value: 1463.38, Metric: "arena_text_elo"},
+				Coding:       &llm.ModelScore{Value: 78, Metric: "aa_coding_index"},
+			},
 		},
 		{ID: "short", DisplayName: "Wide", ContextWindow: 1_000_000, Thinks: true},
 	}
@@ -1162,6 +1196,19 @@ func TestALongModelNameCannotOverflowThePanel(t *testing.T) {
 			if got := lipgloss.Width(row); got > s.panel().ContentWidth() {
 				t.Errorf("width %d: row is %d cols wide, panel holds %d: %q",
 					width, got, s.panel().ContentWidth(), row)
+			}
+			// The panel's padding is part of its width, so this is the bound
+			// that actually keeps a row from wrapping.
+			if got := lipgloss.Width(row); got > s.panel().ContentWidth()-modelPanelInset {
+				t.Errorf("width %d: row is %d cols wide, the box holds %d: %q",
+					width, got, s.panel().ContentWidth()-modelPanelInset, row)
+			}
+			// Both score columns survive at every width the panel can take;
+			// the labels are the part that goes without room.
+			for _, icon := range []string{"◈", "⌘"} {
+				if !strings.Contains(row, icon) {
+					t.Errorf("width %d: the %s column is gone: %q", width, icon, row)
+				}
 			}
 		}
 	}
@@ -1179,6 +1226,98 @@ func selectorWithModels(t *testing.T, width int, models []providerModelItem) (Pr
 	for i := range models {
 		items[i] = providerListItem{Kind: providerItemModel, Model: &models[i]}
 	}
-	s.modelColumns = measureModelColumns(items, s.panel().ContentWidth())
+	s.modelColumns = measureModelColumns(items, s.panel().ContentWidth()-modelPanelInset)
 	return s, items
+}
+
+// columnOf is the display column a substring starts in, not the byte offset:
+// the score cells carry multi-byte glyphs, so the two diverge exactly where
+// these rows are measured.
+func columnOf(row, want string) int {
+	idx := strings.Index(row, want)
+	if idx < 0 {
+		return -1
+	}
+	return lipgloss.Width(row[:idx])
+}
+
+// The two score columns draw the dataset's own numbers: five dots for where
+// the score sits, the number itself, "~" on an Arena rank so it is not read as
+// an index, and "--" for a model the dataset never measured.
+func TestModelRowShowsTheScoreColumns(t *testing.T) {
+	models := []providerModelItem{
+		{
+			ID: "measured", DisplayName: "Measured", ContextWindow: 200_000,
+			Scores: &llm.ModelScores{
+				Intelligence: &llm.ModelScore{Value: 59.1, Metric: "aa_intelligence_index"},
+				Coding:       &llm.ModelScore{Value: 78, Metric: "aa_coding_index"},
+			},
+		},
+		{
+			ID: "ranked", DisplayName: "Ranked", ContextWindow: 200_000,
+			Scores: &llm.ModelScores{
+				Intelligence: &llm.ModelScore{Value: 1463.38, Metric: "arena_text_elo"},
+			},
+		},
+		{ID: "unmeasured", DisplayName: "Unmeasured", ContextWindow: 200_000},
+	}
+	s, items := selectorWithModels(t, 100, models)
+
+	measured := xansi.Strip(s.renderModelRow(items[0], false))
+	for _, want := range []string{"◈●●●○○", "59.1", "⌘●●●●○", "78"} {
+		if !strings.Contains(measured, want) {
+			t.Errorf("the measured row is missing %q: %q", want, measured)
+		}
+	}
+
+	ranked := xansi.Strip(s.renderModelRow(items[1], false))
+	for _, want := range []string{"◈●●●●○", "~1463"} {
+		if !strings.Contains(ranked, want) {
+			t.Errorf("the ranked row is missing %q: %q", want, ranked)
+		}
+	}
+	// The coding half is absent for this one, and says so.
+	if !strings.Contains(ranked, "⌘ --") {
+		t.Errorf("a missing coding score did not render as --: %q", ranked)
+	}
+
+	unmeasured := xansi.Strip(s.renderModelRow(items[2], false))
+	for _, want := range []string{"◈ --", "⌘ --"} {
+		if !strings.Contains(unmeasured, want) {
+			t.Errorf("an unmeasured row is missing %q: %q", want, unmeasured)
+		}
+	}
+}
+
+// The legend names the columns, and only the tab that has them carries it.
+func TestTheScoreLegendOnlyOnTheModelsTab(t *testing.T) {
+	models := []providerModelItem{{ID: "a", DisplayName: "A", ContextWindow: 200_000}}
+	s, items := selectorWithModels(t, 100, models)
+	s.active = true
+	s.visibleItems = items
+
+	modelsView := xansi.Strip(s.Render())
+	for _, want := range []string{"◈ intelligence", "⌘ coding", "~ arena Elo", "-- not measured"} {
+		if !strings.Contains(modelsView, want) {
+			t.Errorf("the Models tab is missing the legend's %q", want)
+		}
+	}
+
+	s.activeTab = providerTabProviders
+	if strings.Contains(xansi.Strip(s.Render()), "◈ intelligence") {
+		t.Error("the legend rendered on a tab with no score columns")
+	}
+}
+
+// A row's scores come from the listing when it carried them, which is where a
+// fresh ListModels puts them.
+func TestNewProviderModelItemKeepsTheListingsScores(t *testing.T) {
+	scores := &llm.ModelScores{Intelligence: &llm.ModelScore{Value: 59.1, Metric: "aa_intelligence_index"}}
+	item := newProviderModelItem(llm.ModelInfo{
+		ID: "claude-opus-5-5", Name: "Claude Opus 5.5", DisplayName: "Claude Opus 5.5", Scores: scores,
+	}, "anthropic", llm.AuthAPIKey, nil)
+
+	if item.Scores != scores {
+		t.Errorf("scores = %+v, want the listing's own", item.Scores)
+	}
 }

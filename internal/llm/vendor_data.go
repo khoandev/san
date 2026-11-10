@@ -71,6 +71,9 @@ type modelSpec struct {
 
 	// San's own fields, for what models.dev cannot say.
 	Replacement string `json:"replacement,omitempty"`
+	// BenchmarkID pins the model to a row of the llmbenchmark.ai dataset,
+	// for a model whose ID cannot be matched to one by spelling.
+	BenchmarkID string `json:"benchmark_id,omitempty"`
 	// AlwaysReasons marks a model that rejects a request to stop reasoning,
 	// so it offers no off rung. Claude Fable 5 is one.
 	AlwaysReasons bool `json:"always_reasons,omitempty"`
@@ -231,6 +234,9 @@ func (s modelSpec) overlay(top modelSpec) modelSpec {
 	}
 	if top.Replacement != "" {
 		s.Replacement = top.Replacement
+	}
+	if top.BenchmarkID != "" {
+		s.BenchmarkID = top.BenchmarkID
 	}
 	s.AlwaysReasons = s.AlwaysReasons || top.AlwaysReasons
 	return s

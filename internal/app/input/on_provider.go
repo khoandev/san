@@ -98,13 +98,16 @@ type providerModelItem struct {
 	Replacement   string
 	TextOnly      bool
 	Thinks        bool
+	// Scores are the benchmark figures the row draws, when a cached dataset
+	// knows the model. Nil is the common case.
+	Scores *llm.ModelScores
 }
 
 func newProviderModelItem(mdl llm.ModelInfo, providerName string, authMethod llm.AuthMethod, current *llm.CurrentModelInfo) providerModelItem {
 	return providerModelItem{
 		ID:            mdl.ID,
 		Name:          mdl.Name,
-		DisplayName:   mdl.DisplayName,
+		DisplayName:   modelInfoName(mdl, providerName, authMethod),
 		ProviderName:  providerName,
 		AuthMethod:    authMethod,
 		IsCurrent:     current != nil && current.ModelID == mdl.ID && string(current.Provider) == providerName && current.AuthMethod == authMethod,
@@ -114,7 +117,32 @@ func newProviderModelItem(mdl llm.ModelInfo, providerName string, authMethod llm
 		Replacement:   mdl.Replacement,
 		TextOnly:      mdl.TextOnly,
 		Thinks:        mdl.Reasoning != nil,
+		Scores:        modelScoresFor(mdl, providerName),
 	}
+}
+
+// modelScoresFor is the row's scores: what the listing carried, or a lookup
+// for a listing written before scores existed. The helper answers from the
+// cached dataset without touching the network, so a stale cache still draws.
+func modelScoresFor(mdl llm.ModelInfo, providerName string) *llm.ModelScores {
+	if mdl.Scores != nil {
+		return mdl.Scores
+	}
+	return llm.ModelScoresFor(llm.ProviderID(providerName), mdl.ID)
+}
+
+// modelInfoName resolves the name a model row shows. A free-tier model is
+// named by the model underneath its ID rather than by the listing's marker;
+// every other model keeps whatever name its provider gave it.
+func modelInfoName(mdl llm.ModelInfo, providerName string, authMethod llm.AuthMethod) string {
+	fallback := mdl.DisplayName
+	if fallback == "" {
+		fallback = mdl.Name
+	}
+	if fallback == "" {
+		fallback = mdl.ID
+	}
+	return llm.ModelDisplayName(llm.ProviderID(providerName), authMethod, mdl.ID, fallback)
 }
 
 // ProviderSelector holds the state for the unified model & provider kit.

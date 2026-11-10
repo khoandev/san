@@ -252,6 +252,7 @@ func (p *vendorProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	}
 
 	listed := slices.DeleteFunc(p.endpoint.Models(), func(m ai.Model) bool { return !m.Stage.Available() })
+	provider, authMethod := parseProviderKey(p.name)
 	out := make([]ModelInfo, 0, len(listed))
 	for _, m := range listed {
 		// The listing is filtered on the same rule the seed is: Zen's deprecated
@@ -259,7 +260,14 @@ func (p *vendorProvider) ListModels(ctx context.Context) ([]ModelInfo, error) {
 		if p.vendor.ID == opencodeVendorID && !openCodeExposed(m) {
 			continue
 		}
-		out = append(out, toModelInfo(p.models.resolve(m)))
+		info := toModelInfo(p.models.resolve(m))
+		// A free-tier ID names a model the listing spells with a marker; show
+		// the name of the model underneath it.
+		info.DisplayName = ModelDisplayName(provider, authMethod, info.ID, modelInfoDisplayName(info))
+		// The benchmark pair, when the cached dataset knows the model. Most
+		// entries stay nil, which the picker draws as a blank column.
+		info.Scores = ModelScoresFor(provider, info.ID)
+		out = append(out, info)
 	}
 	return out, nil
 }

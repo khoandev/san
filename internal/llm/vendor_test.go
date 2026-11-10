@@ -800,9 +800,18 @@ func TestOpenCodeListsOnlyFreeModels(t *testing.T) {
 		t.Fatal("no vendor row serves OpenCode Zen")
 	}
 	p := newVendorProvider("opencode-zen:api_key", vendor, endpoint.Config{APIKey: "public"})
+	provider, authMethod := parseProviderKey(p.name)
 	for _, m := range p.endpoint.Models() {
 		if !opencodeFreeModel(m.ID) {
 			t.Errorf("the seed carries the billed model %q", m.ID)
+		}
+		// The picker's name is what a projection of the seed renders, and no
+		// free model may show the marker: the tier is told by the provider, not
+		// by every row.
+		info := toModelInfo(p.models.resolve(m))
+		name := ModelDisplayName(provider, authMethod, info.ID, modelInfoDisplayName(info))
+		if strings.Contains(strings.ToLower(name), "free") {
+			t.Errorf("the seed would show %q for %s", name, m.ID)
 		}
 	}
 	if len(p.endpoint.Models()) == 0 {

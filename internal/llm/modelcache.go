@@ -124,6 +124,10 @@ func (s *Store) CachedModelDisplayName(id string) string {
 			if name == "" {
 				name = m.Name
 			}
+			// A listing cached before the free-tier data was corrected still
+			// carries the marker on the name; the store is a read-side helper,
+			// so it cleans the name it hands back rather than the file.
+			name = CleanModelDisplayName(m.ID, name)
 			if name != "" && name != id {
 				if displayName == "" || name < displayName {
 					displayName = name

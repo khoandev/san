@@ -2,6 +2,7 @@ package input
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -40,7 +41,14 @@ func (s *ProviderSelector) Render() string {
 
 	// Search box
 	sb.WriteString(s.renderSearchBox())
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
+	// The score columns exist on the Models tab alone, so the line that names
+	// them only belongs there.
+	if s.activeTab == providerTabModels {
+		sb.WriteString(s.renderScoreLegend())
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
 	if s.roleNotice != "" && !s.assigning() {
 		sb.WriteString(s.renderRoleNotice())
 		sb.WriteString("\n\n")
@@ -254,9 +262,9 @@ func (s *ProviderSelector) renderModelRow(item providerListItem, isSelected bool
 		indicatorStyle = kit.SelectorStatusConnected()
 	}
 
-	// A grid, not a sentence. The name and the window each take a column of
-	// their own, so the windows line up on their units; only the labels, which
-	// have no shape to align, trail as free text.
+	// A grid, not a sentence. The name, the window and the two scores each
+	// take a column of their own, so the figures line up on their units; only
+	// the labels, which have no shape to align, trail as free text.
 	cols := s.modelColumns
 	name := padRight(modelDisplayName(*m), cols.name)
 
@@ -267,17 +275,27 @@ func (s *ProviderSelector) renderModelRow(item providerListItem, isSelected bool
 		window, windowStyle = "⚠", lipgloss.NewStyle().Foreground(kit.CurrentTheme.Warning)
 	}
 
-	line := fmt.Sprintf("%s  %s  %s",
-		indicatorStyle.Render(indicator), name,
-		windowStyle.Render(padLeft(window, modelWindowColumnWidth)))
+	var intelligence, coding *llm.ModelScore
+	if m.Scores != nil {
+		intelligence, coding = m.Scores.Intelligence, m.Scores.Coding
+	}
+
+	line := strings.Join([]string{
+		indicatorStyle.Render(indicator),
+		name,
+		windowStyle.Render(padLeft(window, modelWindowColumnWidth)),
+		modelScoreCell("◈", intelligence),
+		modelScoreCell("⌘", coding),
+	}, strings.Repeat(" ", cols.gap))
 
 	// Then what the catalog says about the model, in whatever room is left on
 	// the row, so a long list of labels never wraps.
 	if labels := modelLabels(*m); labels != "" {
-		const prefixAndGap = 6 // up to 4 cols of selection prefix + a 2-col gap
-		budget := s.panel().ContentWidth() - lipgloss.Width(line) - prefixAndGap
+		// The line already carries the widest selection prefix, so what is
+		// left is measured straight against the row.
+		budget := s.panel().ContentWidth() - modelPanelInset - lipgloss.Width(line) - cols.gap
 		if budget >= 8 {
-			line += "  " + kit.DimStyle().Render(kit.TruncateText(labels, budget))
+			line += strings.Repeat(" ", cols.gap) + kit.DimStyle().Render(kit.TruncateText(labels, budget))
 		}
 	}
 
@@ -314,6 +332,55 @@ func modelLabels(m providerModelItem) string {
 		labels = append(labels, "thinking")
 	}
 	return strings.Join(labels, " · ")
+}
+
+// ── Score cells ─────────────────────────────────────────────────────────────
+
+// modelScoreCell draws one score in a cell of its own: the metric's icon, five
+// dots for where the score sits, and the number itself — prefixed with "~" when
+// the number is an Arena rank rather than an index, so the two are never read
+// as one scale. A model the dataset does not measure shows "--" in the same
+// cell, not a zero: a zero would be a claim the dataset never made.
+func modelScoreCell(icon string, score *llm.ModelScore) string {
+	dim := kit.DimStyle()
+	if score == nil || score.Value <= 0 {
+		return dim.Render(padRight(icon+" --", modelScoreColumnWidth))
+	}
+	lit := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Text)
+	filled := modelScoreLevel(*score)
+	number := padLeft(formatModelScore(*score), modelScoreNumberWidth)
+	return dim.Render(icon) +
+		lit.Render(strings.Repeat("●", filled)) +
+		dim.Render(strings.Repeat("○", modelScoreDots-filled)) +
+		" " + lit.Render(number)
+}
+
+// formatModelScore renders the number on the dataset's own scale, and says
+// which scale it is on.
+func formatModelScore(score llm.ModelScore) string {
+	if score.Elo() {
+		return fmt.Sprintf("~%.0f", score.Value)
+	}
+	return fmt.Sprintf("%g", score.Value)
+}
+
+// modelScoreLevel maps a score onto the five dots. An index spans 0-100; an
+// Arena rank is an Elo, and 1000-1550 is the band the scale covers.
+func modelScoreLevel(score llm.ModelScore) int {
+	fraction := score.Value / 20
+	if score.Elo() {
+		fraction = (score.Value - 1000) / 110
+	}
+	return min(max(int(math.Round(fraction)), 0), modelScoreDots)
+}
+
+// renderScoreLegend names the two score columns, under the search box on the
+// Models tab. "●●●○○" and "--" are only obvious once someone has said what they
+// mean, and the Elo marker is easy to mistake for part of the number.
+func (s *ProviderSelector) renderScoreLegend() string {
+	legend := "◈ intelligence · ⌘ coding · ●●●○○ out of 5 · ~ arena Elo · -- not measured"
+	width := max(1, s.panel().ContentWidth()-modelPanelInset-2)
+	return kit.DimStyle().PaddingLeft(2).Render(kit.TruncateText(legend, width))
 }
 
 // ── Providers tab rows ──────────────────────────────────────────────────────

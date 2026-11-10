@@ -11,9 +11,9 @@ import (
 	"github.com/genai-io/san/internal/setting"
 )
 
-// refreshModelData keeps the model lineups, limits and prices current, off
-// the startup path; what it fetches applies from the next start.
-// SAN_DISABLE_MODEL_REFRESH turns it off for an offline machine.
+// refreshModelData keeps the model lineups, limits, prices and benchmark
+// scores current, off the startup path; what it fetches applies from the next
+// start. SAN_DISABLE_MODEL_REFRESH turns it off for an offline machine.
 func refreshModelData() tea.Cmd {
 	return func() tea.Msg {
 		if setting.Getenv("DISABLE_MODEL_REFRESH") != "" {
@@ -21,6 +21,11 @@ func refreshModelData() tea.Cmd {
 		}
 		if err := llm.RefreshModelData(context.Background()); err != nil {
 			log.Logger().Debug("model data refresh failed", zap.Error(err))
+		}
+		// Separate call rather than a shared one: the benchmark dataset is the
+		// larger download, and a models.dev failure must not skip it.
+		if err := llm.RefreshBenchmarkData(context.Background()); err != nil {
+			log.Logger().Debug("benchmark data refresh failed", zap.Error(err))
 		}
 		return nil
 	}

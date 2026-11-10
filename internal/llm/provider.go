@@ -165,6 +165,11 @@ type ModelInfo struct {
 	MaxOutput     int                  `json:"outputTokenLimit,omitempty"`
 	Reasoning     *ReasoningCapability `json:"reasoning,omitempty"`
 
+	// Scores are the benchmark figures the picker draws beside the name, when
+	// a cached dataset knows the model. Absent is the common case: the
+	// dataset covers a fraction of what San lists.
+	Scores *ModelScores `json:"scores,omitempty"`
+
 	// Replacement is the actionable half of a deprecation.
 	Lifecycle   ModelLifecycle `json:"lifecycle,omitempty"`
 	Replacement string         `json:"replacement,omitempty"`
