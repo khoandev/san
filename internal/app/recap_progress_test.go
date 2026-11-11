@@ -21,7 +21,7 @@ func TestRecapLiveUsesOnlyBreathingMark(t *testing.T) {
 			if err := m.services.Tracker.Update(item.ID, todo.WithStatus(todo.StatusCompleted)); err != nil {
 				t.Fatal(err)
 			}
-			facts = "  plan 1/2\n"
+			facts = "  todos 1/2\n"
 		}
 		var faint, peak string
 		for i := range 8 {

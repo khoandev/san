@@ -39,7 +39,14 @@ Rules:
   change here, not that another phrasing will pass.
 - Gather enough context first. Identify the goal, in-scope and out-of-scope
   work, technical constraints, risks, open questions, and the ordered steps.
+- Every step is one verifiable unit: small enough to finish in one turn, with a
+  verification that proves it. While the plan executes its steps are drawn as
+  the user's todo list, so write them as tasks a person can check off — one
+  outcome each, never a chapter heading that hides several.
 - If the request is ambiguous, ask 3 to 5 focused questions before planning.
+- If an instruction is still unclear afterwards — which file, which behaviour,
+  which constraint — ask before writing the plan. A guessed step costs the user
+  a whole plan, and the plan is approved before a single line is written.
 - When the plan is ready, reply with exactly one fenced block whose info string
   is plan, containing JSON shaped like this:
 

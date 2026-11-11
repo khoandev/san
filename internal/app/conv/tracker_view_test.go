@@ -10,6 +10,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/genai-io/san/internal/app/kit"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/todo"
 )
 
@@ -49,14 +51,14 @@ func TestRenderTrackerListShowsTaskStatus(t *testing.T) {
 	plain := stripANSI(view)
 
 	for _, want := range []string{
-		"Tasks",
-		"(50%)",
+		"Todos",
+		"1/2 done",
 		"●",
 		"Fix auth module",
 		"●",
 		"Fix payment module",
 		"[failed]",
-		"●",
+		"✓",
 		"Ship feature",
 		"○",
 		"Write tests",
@@ -172,6 +174,94 @@ func TestRenderTrackerListVisibility(t *testing.T) {
 	}
 }
 
+// Windowing must keep the rows that are moving: in-progress work is classified
+// from its recorded status (itemStalled), and it takes the slots before history
+// does.
+func TestRenderTrackerListKeepsRunningRowsOnOverflow(t *testing.T) {
+	items := make([]*todo.Item, 0, maxVisibleItems+3)
+	for i := 1; i <= maxVisibleItems+3; i++ {
+		id := strconv.Itoa(i)
+		items = append(items, &todo.Item{ID: id, Subject: "Task " + id, Status: todo.StatusCompleted})
+	}
+	items[len(items)-2].Status = todo.StatusInProgress // #10
+	items[len(items)-1].Status = todo.StatusInProgress // #11
+
+	plain := stripANSI(RenderTrackerList(TrackerListParams{
+		Items:        items,
+		StreamActive: true,
+		Width:        120,
+		Executing:    func(*todo.Item) bool { return true },
+	}))
+
+	for _, want := range []string{"#10", "#11"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("running task %s folded away behind finished work:\n%s", want, plain)
+		}
+	}
+	if !strings.Contains(plain, "3 completed") {
+		t.Fatalf("folded finished items were not summarized:\n%s", plain)
+	}
+}
+
+// A blocked plan step is work waiting on the person, so it keeps its row before
+// pending and finished work; the overflow line names how many are hidden.
+func TestRenderTrackerListSummarizesHiddenBlockedSteps(t *testing.T) {
+	items := make([]*todo.Item, 0, 11)
+	for i := 1; i <= 10; i++ {
+		id := strconv.Itoa(i)
+		items = append(items, &todo.Item{
+			ID:       id,
+			Subject:  "Blocked " + id,
+			Status:   todo.StatusPending,
+			Metadata: todo.PlanMetadata("plan-1", "step-"+id, string(plan.StepBlocked), "waiting on the API"),
+		})
+	}
+	items = append(items, &todo.Item{ID: "11", Subject: "Running", Status: todo.StatusInProgress})
+
+	plain := stripANSI(RenderTrackerList(TrackerListParams{
+		Items:        items,
+		StreamActive: true,
+		Width:        120,
+		Executing:    func(*todo.Item) bool { return true },
+	}))
+
+	if !strings.Contains(plain, "Running") {
+		t.Fatalf("the running row was folded away:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Blocked 10") {
+		t.Fatalf("the newest blocked row was folded away:\n%s", plain)
+	}
+	if strings.Contains(plain, "Blocked 1\n") {
+		t.Fatalf("the oldest blocked row should be the one hidden:\n%s", plain)
+	}
+	if !strings.Contains(plain, "3 blocked steps") {
+		t.Fatalf("hidden blocked rows were not summarized:\n%s", plain)
+	}
+}
+
+// phaseOf reads the plan's own step status: blocked is not a todo status, but
+// it must not read as a fresh pending row. A completed row outranks stale
+// metadata.
+func TestPhaseOfReadsBlockedPlanStep(t *testing.T) {
+	blocked := &todo.Item{
+		Subject:  "Wire the panel",
+		Status:   todo.StatusPending,
+		Metadata: todo.PlanMetadata("plan-1", "step-1", string(plan.StepBlocked), "the API moved"),
+	}
+	if got := phaseOf(blocked, false); got != itemBlocked {
+		t.Fatalf("blocked plan step phase = %d, want itemBlocked", got)
+	}
+
+	stale := &todo.Item{
+		Subject:  "Wire the panel",
+		Status:   todo.StatusCompleted,
+		Metadata: todo.PlanMetadata("plan-1", "step-1", string(plan.StepBlocked), "the API moved"),
+	}
+	if got := phaseOf(stale, false); got != itemFinished {
+		t.Fatalf("completed step phase = %d, want itemFinished", got)
+	}
+}
+
 // Completed rows yield space to unfinished work when the list overflows.
 func TestRenderTrackerListFoldsLeadingFinished(t *testing.T) {
 	tasks := make([]*todo.Item, 0, maxVisibleItems+3)
@@ -250,13 +340,13 @@ func TestRenderTrackerListLimitsBackgroundTasks(t *testing.T) {
 			count:         11,
 			status:        todo.StatusCompleted,
 			overrides:     map[int]string{1: "failed", 2: "killed", 3: "stopped", 4: todo.StatusDetailInterrupted},
-			wantSummaries: []string{"4 past tasks", "/tasks"},
+			wantSummaries: []string{"4 past tasks"},
 		},
 		{
 			name:          "many failed agents",
 			count:         11,
 			status:        "failed",
-			wantSummaries: []string{"11 past tasks", "/tasks"},
+			wantSummaries: []string{"11 past tasks"},
 		},
 		{
 			name:          "hidden failures stay in the summary",
@@ -264,7 +354,7 @@ func TestRenderTrackerListLimitsBackgroundTasks(t *testing.T) {
 			status:        todo.StatusInProgress,
 			overrides:     map[int]string{11: "failed"},
 			wantIDs:       []string{"3", "4", "5", "6", "7", "8", "9", "10"},
-			wantSummaries: []string{"2 more in progress", "1 past task", "/tasks"},
+			wantSummaries: []string{"2 more in progress", "1 past task"},
 		},
 	}
 	rowRE := regexp.MustCompile(`\bTask (\d+)\b`)
@@ -417,17 +507,165 @@ func TestRenderTrackerListBackgroundRowsDescribeWork(t *testing.T) {
 	}
 
 	plain := render()
-	if !strings.HasPrefix(plain, "  Tasks\n") || strings.Contains(plain, "%") || strings.Count(plain, "\n") != 2 {
-		t.Errorf("a worker should render under the shared Tasks heading without plan progress:\n%s", plain)
+	if !strings.HasPrefix(plain, "  Todos\n") || strings.Contains(plain, "%") || strings.Count(plain, "\n") != 2 {
+		t.Errorf("a worker should render under the Todos heading without progress counts:\n%s", plain)
 	}
 	if !strings.Contains(plain, "●  Save Jenkins script") || strings.Contains(plain, "bash") || taskIDRe.MatchString(plain) {
 		t.Errorf("worker row should lead with the work description:\n%s", plain)
 	}
 
-	plan := todo.Default().Create("Write tests", "", "", nil)
-	_ = todo.Default().Update(plan.ID, todo.WithStatus(todo.StatusCompleted))
-	if plain := render(); !strings.Contains(plain, "Tasks (100%)") || strings.Count(plain, "Tasks") != 1 {
-		t.Errorf("progress should count plan items only:\n%s", plain)
+	// A session todo counts toward the heading; a background worker does not.
+	own := todo.Default().Create("Write tests", "", "", nil)
+	_ = todo.Default().Update(own.ID, todo.WithStatus(todo.StatusCompleted))
+	if plain := render(); !strings.Contains(plain, "1/1 done") || strings.Count(plain, "Todos") != 1 {
+		t.Errorf("progress should count session todos, not background workers:\n%s", plain)
+	}
+}
+
+// The heading names the plan, counts its finished steps, and reports why the
+// executor is not moving — all on the one row the strip can spend on identity.
+func TestTrackerStripHeaderNamesPlanAndCounts(t *testing.T) {
+	planRow := func(id, subject, status string, kind plan.StepStatus) *todo.Item {
+		return &todo.Item{
+			ID:       id,
+			Subject:  subject,
+			Status:   status,
+			Metadata: todo.PlanMetadata("plan-1", "step-"+id, string(kind), ""),
+		}
+	}
+	items := []*todo.Item{
+		planRow("1", "read code", todo.StatusCompleted, plan.StepCompleted),
+		planRow("2", "move files", todo.StatusInProgress, plan.StepInProgress),
+		planRow("3", "add tests", todo.StatusPending, plan.StepPending),
+		planRow("4", "ship it", todo.StatusPending, plan.StepPending),
+	}
+	plain := stripANSI(RenderTrackerList(TrackerListParams{
+		Items:          items,
+		StreamActive:   true,
+		Width:          100,
+		PlanTitle:      "Split auth",
+		PlanStatusNote: "1 blocked step",
+		Paused:         true,
+		Awaiting:       true,
+		Executing:      func(*todo.Item) bool { return true },
+	}))
+
+	for _, want := range []string{
+		"Plan · Split auth",
+		"1/4 done",
+		"▰▱▱▱▱",
+		"1 blocked step",
+		"paused",
+		"waiting for you",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("heading lost %q:\n%s", want, plain)
+		}
+	}
+	// The rows follow the plan's own states, one row each.
+	for _, want := range []string{"✓  #1  read code", "●  #2  move files", "○  #3  add tests"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("row missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+// Finished plan steps stay on screen struck through, even once the turn is
+// idle: the list is the record of what just ran.
+func TestTrackerStripStrikesFinishedRows(t *testing.T) {
+	items := []*todo.Item{
+		{ID: "1", Subject: "read code", Status: todo.StatusCompleted,
+			Metadata: todo.PlanMetadata("plan-1", "step-1", string(plan.StepCompleted), "")},
+		{ID: "2", Subject: "old idea", Status: todo.StatusCompleted,
+			Metadata: todo.PlanMetadata("plan-1", "step-2", string(plan.StepSkipped), "")},
+	}
+	view := RenderTrackerList(TrackerListParams{Items: items, Width: 80, PlanTitle: "Split auth"})
+	if view == "" {
+		t.Fatal("a completed plan's rows disappeared while idle")
+	}
+	if on, off := strings.Count(view, "\x1b[9m"), strings.Count(view, "\x1b[29m"); on != 2 || off != 2 {
+		t.Fatalf("finished rows are not struck through (%d on, %d off):\n%q", on, off, view)
+	}
+	plain := stripANSI(view)
+	if !strings.Contains(plain, "Plan · Split auth") || !strings.Contains(plain, "2/2 done") {
+		t.Fatalf("completed plan heading is wrong:\n%s", plain)
+	}
+	if !strings.Contains(plain, "✓  #1  read code") || !strings.Contains(plain, "-  #2  old idea") {
+		t.Fatalf("finished rows lost their marks:\n%s", plain)
+	}
+}
+
+// A blocked step is waiting on the person: it keeps the warning mark and the
+// reason the plan store recorded, not a fresh pending row.
+func TestTrackerStripShowsBlockedReason(t *testing.T) {
+	blocked := &todo.Item{
+		ID:       "1",
+		Subject:  "wire the API",
+		Status:   todo.StatusPending,
+		Metadata: todo.PlanMetadata("plan-1", "step-1", string(plan.StepBlocked), "the upstream API moved"),
+	}
+	plain := stripANSI(RenderTrackerList(TrackerListParams{
+		Items:     []*todo.Item{blocked},
+		Width:     80,
+		PlanTitle: "Split auth",
+	}))
+	if !strings.Contains(plain, kit.CurrentSymbols.Warning+"  #1  wire the API") {
+		t.Fatalf("blocked row lost its warning mark:\n%s", plain)
+	}
+	if !strings.Contains(plain, "the upstream API moved") {
+		t.Fatalf("blocked row lost its reason:\n%s", plain)
+	}
+	if !strings.Contains(plain, "0/1 done") {
+		t.Fatalf("blocked step should not count as done:\n%s", plain)
+	}
+}
+
+// A plan's rows lead, and the session's own todos keep their own heading so
+// they never read as plan steps.
+func TestTrackerStripSeparatesPlanRowsFromOtherTodos(t *testing.T) {
+	items := []*todo.Item{
+		{ID: "1", Subject: "read code", Status: todo.StatusInProgress,
+			Metadata: todo.PlanMetadata("plan-1", "step-1", string(plan.StepInProgress), "")},
+		{ID: "2", Subject: "Audit handlers", Status: todo.StatusPending},
+	}
+	plain := stripANSI(RenderTrackerList(TrackerListParams{
+		Items:        items,
+		StreamActive: true,
+		Width:        80,
+		PlanTitle:    "Split auth",
+		Executing:    func(*todo.Item) bool { return true },
+	}))
+	planAt, todosAt, auditAt := strings.Index(plain, "Plan · Split auth"), strings.Index(plain, "Todos"), strings.Index(plain, "Audit handlers")
+	if planAt < 0 || todosAt < 0 || auditAt < 0 {
+		t.Fatalf("mixed list lost a heading:\n%s", plain)
+	}
+	if !(planAt < todosAt && todosAt < auditAt) {
+		t.Fatalf("plan rows and session todos are not separated:\n%s", plain)
+	}
+}
+
+func TestTrackerStripHeadingFitsNarrowTerminal(t *testing.T) {
+	items := []*todo.Item{
+		{ID: "1", Subject: "read the whole authentication module", Status: todo.StatusInProgress,
+			Metadata: todo.PlanMetadata("plan-1", "step-1", string(plan.StepInProgress), "")},
+		{ID: "2", Subject: "wire the API", Status: todo.StatusPending,
+			Metadata: todo.PlanMetadata("plan-1", "step-2", string(plan.StepBlocked), "the upstream API moved")},
+	}
+	for _, width := range []int{1, 4, 7, 12, 20, 40, 80} {
+		plain := stripANSI(RenderTrackerList(TrackerListParams{
+			Items:          items,
+			Width:          width,
+			PlanTitle:      "Split the authentication module end to end",
+			PlanStatusNote: "2 blocked steps need you",
+			Paused:         true,
+			Awaiting:       true,
+			Executing:      func(*todo.Item) bool { return true },
+		}))
+		for line := range strings.SplitSeq(strings.TrimSuffix(plain, "\n"), "\n") {
+			if lipgloss.Width(line) > width {
+				t.Fatalf("width %d: strip overflowed: %q", width, line)
+			}
+		}
 	}
 }
 

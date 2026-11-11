@@ -25,7 +25,7 @@ func TestHistoryOnlyFooterSitsAgainstInference(t *testing.T) {
 	plain := ansi.Strip(view.Content)
 	rows := strings.Split(plain, "\n")
 	for i, row := range rows {
-		if strings.Contains(row, "Tasks · 1 past task") {
+		if strings.Contains(row, "Todos · 1 past task") {
 			if i+2 >= len(rows) || !strings.Contains(rows[i+1], "On it") || !strings.HasPrefix(rows[i+2], "─") {
 				t.Fatalf("history should sit directly above inference and input:\n%s", plain)
 			}
@@ -70,7 +70,7 @@ func TestFooterIntegratedHistoryQueueAndInferenceOrder(t *testing.T) {
 				if strings.Count(plain, "✦") != 1 || at < 0 || at+1 >= len(lines) || !strings.HasPrefix(lines[at+1], "─") {
 					t.Fatalf("inference not single and adjacent to input:\n%s", plain)
 				}
-				for _, label := range []string{"Tasks", "/tasks", "active-footer-worker", "pending-msg"} {
+				for _, label := range []string{"Todos", "active-footer-worker", "pending-msg"} {
 					if index := strings.Index(plain, label); index >= 0 && index > strings.Index(plain, "✦ On it") {
 						t.Fatalf("%s placed below inference:\n%s", label, plain)
 					}

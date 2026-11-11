@@ -20,6 +20,7 @@ import (
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/log"
 	"github.com/genai-io/san/internal/setting"
+	"github.com/genai-io/san/internal/todo"
 )
 
 const recapTimeout = 2 * time.Minute
@@ -265,15 +266,26 @@ func (m *model) recapGoal() string {
 }
 
 // recapFacts is what San knows without asking the model, most urgent first:
-// what waits on the user, the plan's progress, the mission and the work running
-// in the background.
+// what waits on the user, the todo list's progress, the mission and the work
+// running in the background.
 func (m *model) recapFacts() string {
 	var facts []string
 	if needed := m.waitingOn(); needed != "" {
 		facts = append(facts, needed+" needed")
 	}
-	if done, plans := conv.PlanProgress(m.services.Tracker.List()); plans > 0 {
-		facts = append(facts, "plan "+strconv.Itoa(done)+"/"+strconv.Itoa(plans))
+	items := m.services.Tracker.List()
+	if done, total := conv.TodoProgress(items); total > 0 {
+		// A list projected from the plan reads as the plan's progress; the
+		// session's own todos read as todos. One counter, named for what it
+		// actually counts.
+		label := "todos "
+		for _, item := range items {
+			if todo.PlanID(item) != "" {
+				label = "plan "
+				break
+			}
+		}
+		facts = append(facts, label+strconv.Itoa(done)+"/"+strconv.Itoa(total))
 	}
 	if ap := m.env.AutoPilot; m.drivenMission() != "" {
 		state := string(ap.MissionState)

@@ -14,6 +14,7 @@ import (
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/app/kit"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/subagent"
 	"github.com/genai-io/san/internal/task"
@@ -433,21 +434,22 @@ func (m model) renderSelfLearnLive() string {
 	return ""
 }
 
-// renderTrackerList composes the strip above the composer: the plan's progress
-// row first, then the tracked tasks.
+// renderTrackerList composes the strip above the composer: one checklist of
+// the executing plan's steps and the session's tracked work. It is the only
+// place plan progress is drawn: a step is a row here, so there is no separate
+// "Plan step x/y" line to keep in sync with it.
 //
 // Pointer receiver: Executing below is a *model method value, so a value
 // receiver would take the address of the copy and force the whole model onto
 // the heap on every frame.
 //
-// The plan row is plan state, not a tracked item: it answers to Plan Mode
-// rather than to the ShowTasks toggle, and it is drawn even when no task is
-// running, because "which step is the executor on" is the question the strip
-// exists to answer while a plan runs.
+// The plan's rows are plan state, not tracked workers: they answer to Plan
+// Mode rather than to the ShowTasks toggle, and they are drawn even when no
+// task is running, because "which step is the executor on" is the question the
+// strip exists to answer while a plan runs.
 func (m *model) renderTrackerList() string {
-	planRow := m.renderPlanProgress()
-	if !m.conv.ShowTasks {
-		return planRow
+	if m.services.Tracker == nil {
+		return ""
 	}
 	items := m.services.Tracker.List()
 	var running []task.BackgroundTask
@@ -470,6 +472,13 @@ func (m *model) renderTrackerList() string {
 			items = filtered
 		}
 	}
+	if !m.conv.ShowTasks {
+		// Plan steps are the list the person asked the executor to work
+		// through; hiding tracked work must not hide them.
+		items = trackerPlanItems(items)
+		running = nil
+	}
+	title, note, paused, awaiting := m.trackerPlanHeading()
 	view := conv.RenderTrackerList(conv.TrackerListParams{
 		Items:            items,
 		StreamActive:     m.conv.Stream.Active,
@@ -488,36 +497,42 @@ func (m *model) renderTrackerList() string {
 			}
 			return task.TaskInfo{}
 		},
+		PlanTitle:      title,
+		PlanStatusNote: note,
+		Paused:         paused,
+		Awaiting:       awaiting,
 	})
-	return joinTrackerSections(planRow, appendLiveWorkflowViews(view, running, m.conv.Spinner.Frame(), m.env.Width))
+	return appendLiveWorkflowViews(view, running, m.conv.Spinner.Frame(), m.env.Width)
 }
 
-// renderPlanProgress is the plan's one-row progress line, empty unless a plan
-// is executing. The row itself is rendered by conv, so the app keeps no second
-// copy of its shape.
-func (m *model) renderPlanProgress() string {
+// trackerPlanItems keeps the rows projected from the executing plan.
+func trackerPlanItems(items []*todo.Item) []*todo.Item {
+	kept := make([]*todo.Item, 0, len(items))
+	for _, item := range items {
+		if todo.PlanID(item) != "" {
+			kept = append(kept, item)
+		}
+	}
+	return kept
+}
+
+// trackerPlanHeading names the plan the strip belongs to and why it is not
+// moving. It answers empty outside Execute Mode: plan rows exist only there
+// (see syncPlanTodos), and a heading without rows would announce nothing.
+func (m *model) trackerPlanHeading() (title, note string, paused, awaiting bool) {
+	if m.plan.Mode() != plan.ModeExecute {
+		return "", "", false, false
+	}
 	active, ok := m.plan.Active()
 	if !ok {
-		return ""
+		return "", "", false, false
 	}
-	row := conv.RenderPlanProgress(conv.PlanProgressParams{
-		Mode:  m.plan.Mode(),
-		Plan:  active,
-		Width: m.env.Width,
-	})
-	if row == "" {
-		return ""
+	title = active.Title
+	paused, awaiting = active.Paused, active.AwaitingStepChoice
+	if _, _, blocked, _ := active.Counts(); blocked > 0 {
+		note = kit.Plural(blocked, "blocked step")
 	}
-	return row + "\n"
-}
-
-// joinTrackerSections stacks the plan row over the task block with no blank
-// line between them: the strip sits directly above the composer.
-func joinTrackerSections(planRow, tasks string) string {
-	if planRow == "" {
-		return tasks
-	}
-	return planRow + tasks
+	return title, note, paused, awaiting
 }
 
 func appendLiveWorkflowViews(view string, running []task.BackgroundTask, frame, width int) string {

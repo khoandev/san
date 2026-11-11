@@ -567,3 +567,21 @@ func TestPlanModeRulesNameTheReadOnlyDelegates(t *testing.T) {
 		}
 	}
 }
+
+// An approved plan's steps are drawn as the user's todo list while the plan
+// executes, so the rules say what a step has to be: one verifiable outcome,
+// small enough to finish in a turn, and a question whenever an instruction is
+// still unclear.
+func TestPlanModeRulesDescribeVerifiableSteps(t *testing.T) {
+	for _, want := range []string{
+		"Every step is one verifiable unit",
+		"small enough to finish in one turn",
+		"user's todo list",
+		"write them as tasks a person can check off",
+		"ask before writing the plan",
+	} {
+		if !strings.Contains(PlanModeRules, want) {
+			t.Errorf("PlanModeRules should contain %q", want)
+		}
+	}
+}

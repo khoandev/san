@@ -53,6 +53,7 @@ func (m *model) planCommand(prompt string) (string, tea.Cmd) {
 func (m *model) enterPlanMode() {
 	m.plan.EnterPlanMode()
 	m.syncPlanPermissions()
+	m.syncPlanTodos()
 	m.persistPlan()
 	m.syncPlanModelDisplay()
 	m.syncPlanModelRuntime()
@@ -66,6 +67,7 @@ func (m *model) leavePlanMode() {
 	}
 	m.plan.ExitPlanMode()
 	m.syncPlanPermissions()
+	m.syncPlanTodos()
 	m.persistPlan()
 	m.syncPlanModelDisplay()
 	m.syncPlanModelRuntime()
@@ -198,6 +200,7 @@ func (m *model) onExecuteModeTurn(result core.Result) tea.Cmd {
 			// OnTurnEnd's own finalization writes the state, as it does for a
 			// step report; persisting here would race it.
 			m.syncPlanPermissions()
+			m.syncPlanTodos()
 			m.showPlanPanel()
 			m.conv.AddNotice("Step interrupted. Choose continue, restart, or skip in the Execution Panel.")
 		}
@@ -224,6 +227,7 @@ func (m *model) recordStepOutcome(step plan.Step, outcome plan.StepResult) tea.C
 		return nil
 	}
 	m.syncPlanPermissions()
+	m.syncPlanTodos()
 	if !advanced {
 		m.showPlanPanel()
 		m.conv.AddNotice(stepOutcomeNotice(outcome))
@@ -249,6 +253,7 @@ func (m *model) planNextStep() tea.Cmd {
 	}
 	active, _ := m.plan.Active()
 	m.syncPlanPermissions()
+	m.syncPlanTodos()
 	m.persistPlan()
 
 	chat := m.conv.Append(core.ChatMessage{
@@ -409,6 +414,9 @@ func (m *model) startFreshPlanSession() error {
 	// approved plan is the one thing that crosses over.
 	m.plan.Restore(state)
 	m.syncPlanPermissions()
+	// The new session starts with an empty tracker; the approved plan's steps
+	// become its first todo list.
+	m.syncPlanTodos()
 	if err := m.appendSessionState(); err != nil {
 		return err
 	}
@@ -503,6 +511,9 @@ func (m *model) planActionFailed(err error) tea.Cmd {
 // after any store mutation.
 func (m *model) afterPlanChange() {
 	m.syncPlanPermissions()
+	// The todo list is a projection of the plan, so it follows every change
+	// that can move a step, before the state is written.
+	m.syncPlanTodos()
 	m.persistPlan()
 }
 
@@ -524,6 +535,10 @@ func (m *model) refreshPlanPanel() {
 func (m *model) restorePlanState(state plan.State) {
 	m.plan.Restore(state)
 	m.syncPlanPermissions()
+	// A restored plan may have lost its projected rows with an older transcript
+	// (or a reset tracker); rebuilding them here keeps the list the person saw
+	// when they left.
+	m.syncPlanTodos()
 	// A session resumed mid-plan continues on the plan role's model, and the
 	// status line has to name it from the first frame. The runtime is always
 	// fresh here, so the next turn simply builds with it.
@@ -540,6 +555,7 @@ func (m *model) resetPlanState() {
 	// A compaction started for a plan in the old conversation cannot start a
 	// step in the new one.
 	m.pendingPlanExecID = ""
+	m.dropPlanTodos(func(string) bool { return true })
 	m.plan.Reset()
 	m.syncPlanPermissions()
 	m.syncPlanModelDisplay()

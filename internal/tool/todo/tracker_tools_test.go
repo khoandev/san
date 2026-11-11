@@ -115,3 +115,39 @@ func TestTrackerUpdateTool_ParsesJSONBlockedByAndPersistsFields(t *testing.T) {
 		t.Fatalf("blockedBy = %#v, want [%q]", updated.BlockedBy, blocker.ID)
 	}
 }
+
+// The model reads the schema, not the system prompt, at the moment it decides
+// whether to reach for a task tool. The descriptions therefore carry the
+// discipline: two steps or two files is enough to make a list (the old "3+"
+// threshold let ordinary multi-file work go untracked), one item is in progress
+// at a time, and completed needs evidence.
+func TestTrackerSchemasDemandTodoDiscipline(t *testing.T) {
+	create := (&TrackerCreateTool{}).Schema().Description
+	for _, want := range []string{
+		"2+ distinct steps",
+		"2+ files",
+		"More than one deliverable",
+		"exactly one task in_progress",
+		"before the first edit",
+		"is not evidence",
+	} {
+		if !strings.Contains(create, want) {
+			t.Errorf("TaskCreate description should contain %q", want)
+		}
+	}
+	if strings.Contains(create, "3+ distinct steps") {
+		t.Error("TaskCreate still asks for 3+ steps, which leaves two-step work untracked")
+	}
+
+	update := (&TrackerUpdateTool{}).Schema().Description
+	for _, want := range []string{
+		"exactly one task in_progress",
+		"done and verified",
+		"a read of the change",
+		"not on \"should work\"",
+	} {
+		if !strings.Contains(update, want) {
+			t.Errorf("TaskUpdate description should contain %q", want)
+		}
+	}
+}

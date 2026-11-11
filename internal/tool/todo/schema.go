@@ -9,17 +9,23 @@ func (t *TrackerCreateTool) Schema() core.ToolSchema {
 		Description: `Create a task to track progress on multi-step work. The task list is shown to the user above the input area.
 
 When to use:
-- Complex tasks requiring 3+ distinct steps
+- Work that needs 2+ distinct steps
+- Work that touches 2+ files
+- More than one deliverable in a single request
 - User provides multiple tasks at once
 
 When NOT to use:
-- Single straightforward task or trivial fix
+- A single trivial action: one read, one small edit, one question
 - Purely conversational or informational exchange
 
 Granularity: one task per logical deliverable (a file, a feature, a test suite).
 Don't create tasks for sub-steps within a single file or for "planning"/"summarizing".
 
 Tips:
+- Keep exactly one task in_progress at a time
+- Create the list before the first edit, not after the work is done
+- Mark a task completed only against fresh evidence (a passing test, a command's
+  output, a read of the change); "should work" is not evidence
 - Prefer sending ALL TaskCreate calls in a single message (parallel tool calls) for speed
 - Use imperative subjects ("Fix bug", "Add tests")
 - Provide activeForm for spinner display ("Fixing bug", "Adding tests")
@@ -88,8 +94,11 @@ func (t *TrackerUpdateTool) Schema() core.ToolSchema {
 		Description: `Update a task's status, details, or dependencies.
 
 Status: pending → in_progress → completed. Use "deleted" to remove.
+- Keep exactly one task in_progress at a time; a second one competes with it
 - Set in_progress BEFORE starting work
-- ONLY mark completed when FULLY done (not if tests fail or partial)
+- ONLY mark completed when FULLY done and verified — a passing test, a command's
+  output, or a read of the change. Not if tests fail or the work is partial, and
+  not on "should work"
 - After completing, call TaskGet for the next task
 - If blocked, keep as in_progress and create a new task for the blocker
 - Close out every in_progress task before ending your turn; one left open is

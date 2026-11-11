@@ -276,3 +276,30 @@ func TestCompactPrompt(t *testing.T) {
 		t.Error("CompactPrompt() should return non-empty string")
 	}
 }
+
+// The behavior part is where the todo policy lives, because it is a cross-tool
+// rule no single tool description can state: when work becomes a task list,
+// one item in progress at a time, evidence before completed, and a question
+// first when the request is unclear.
+func TestBehaviorPromptCarriesTheTodoPolicy(t *testing.T) {
+	prompt := Build(core.ScopeMain, WithEnvironment(Environment{Cwd: t.TempDir()})).Prompt()
+	for _, want := range []string{
+		"## Todos",
+		"two or more steps",
+		"two or more files",
+		"exactly one task in_progress",
+		"only on fresh evidence",
+		"ask 3 to 5 focused questions",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the behavior prompt should carry the todo policy (%q)", want)
+		}
+	}
+
+	// A subagent has no behavior part: the policy travels with the main agent,
+	// whose task list is the one drawn above the input.
+	sub := Build(core.ScopeSubagent).Prompt()
+	if strings.Contains(sub, "## Todos") {
+		t.Error("a subagent prompt should not carry the main agent's todo policy")
+	}
+}

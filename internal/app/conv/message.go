@@ -119,12 +119,6 @@ var (
 	autopilotStepStyle = lipgloss.NewStyle().
 				Foreground(kit.CurrentTheme.Success)
 
-	trackerPendingStyle = lipgloss.NewStyle().
-				Foreground(kit.CurrentTheme.Muted)
-
-	trackerCompletedStyle = lipgloss.NewStyle().
-				Foreground(kit.CurrentTheme.Success)
-
 	PendingImageStyle = lipgloss.NewStyle().
 				Foreground(kit.CurrentTheme.Primary)
 )

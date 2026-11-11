@@ -123,7 +123,10 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 	// tracker windows on its newest rows (see maxVisibleTasks) rather than
 	// assuming it renders a single turn's worth.
 	if m.services.Tracker.AllMarkedCompleted() && !slices.ContainsFunc(m.services.Tracker.List(), func(item *todo.Item) bool {
-		return !m.taskCompletionShown(todo.BackgroundTaskID(item))
+		// A projected plan step outlives the turn that closed it: the list a
+		// person just watched finish stays struck through until the plan is
+		// replaced or the session moves on (see syncPlanTodos).
+		return !m.taskCompletionShown(todo.BackgroundTaskID(item)) || todo.PlanID(item) != ""
 	}) {
 		m.services.Tracker.Reset()
 	}

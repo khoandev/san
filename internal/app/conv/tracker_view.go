@@ -8,12 +8,17 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/genai-io/san/internal/app/kit"
+	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/task"
 	"github.com/genai-io/san/internal/todo"
 )
 
 // maxVisibleItems caps task rows; overflow is summarized in one extra row.
 const maxVisibleItems = 8
+
+// trackerProgressCells is the width of the heading's progress bar: five cells
+// read at a glance and still leave room for a plan title on a narrow strip.
+const trackerProgressCells = 5
 
 // TrackerListParams holds the parameters for rendering a tracker list.
 type TrackerListParams struct {
@@ -40,11 +45,26 @@ type TrackerListParams struct {
 	// WorkerStatus provides display-only live activity and output-log health.
 	AwaitingApproval map[string]bool
 	WorkerStatus     func(taskID string) task.TaskInfo
+
+	// PlanTitle names the plan whose steps are projected into Items. Empty
+	// means no plan owns rows, and the strip is a plain todo list.
+	PlanTitle string
+	// PlanStatusNote is an optional attention note about the plan as a whole
+	// ("2 blocked steps"). It is drawn in the warning tone when width allows.
+	PlanStatusNote string
+	// Paused and Awaiting report the executor's own flags, so the heading can
+	// say why the plan is not moving.
+	Paused   bool
+	Awaiting bool
 }
 
-// RenderTrackerList renders the tracker panel above the input area.
-// Terminal workers leave after their notice is shown; abnormal history is summarized.
-// Finished plans stay until idle.
+// RenderTrackerList renders the checklist above the input area as the session's
+// one and only progress list: a plan's projected steps and the session's
+// tracked work share the glyphs, colors and strike through ChecklistState.
+// Terminal workers leave after their notice is shown; abnormal history is
+// summarized. A finished plan's rows stay struck through until the plan is
+// replaced. There is no separate plan-progress row: the plan's steps are rows
+// here, so progress has exactly one presentation.
 func RenderTrackerList(params TrackerListParams) string {
 	if len(params.Items) == 0 {
 		return ""
@@ -62,10 +82,15 @@ func RenderTrackerList(params TrackerListParams) string {
 		}
 		items = append(items, t)
 	}
-	plansDone, plans := PlanProgress(params.Items)
+	todosDone, todos := TodoProgress(params.Items)
+	planDone, planTotal := planTodoCounts(items)
 
-	// Completed plans may rest when idle, but history must not hide unfinished plans.
-	if !params.StreamActive && plansDone == len(items) {
+	// Completed work may rest when idle — but a plan's rows are the record of
+	// what just ran, so they stay struck through until the plan is replaced or
+	// the session leaves Execute Mode (see syncPlanTodos). That is also why the
+	// list is the only progress view: a finished step is a struck row here, not
+	// a counter somewhere else.
+	if !params.StreamActive && planTotal == 0 && todosDone == len(items) {
 		items = nil
 	}
 	if len(items) == 0 && history == 0 {
@@ -75,28 +100,25 @@ func RenderTrackerList(params TrackerListParams) string {
 	var sb strings.Builder
 	headerStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim).Bold(true)
 	mutedStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
-	header := "  " + headerStyle.Render("Tasks")
-	// Progress is the plan's: a background task finishing is not a step of it.
-	if plans > 0 {
-		header += " " + mutedStyle.Render(fmt.Sprintf("(%d%%)", plansDone*100/plans))
-	}
 	if len(items) > 0 {
-		sb.WriteString(kit.TruncateText(header, max(1, params.Width)) + "\n")
+		done, total := todosDone, todos
+		if planTotal > 0 {
+			done, total = planDone, planTotal
+		}
+		sb.WriteString(renderTrackerHeader(params, done, total, planTotal > 0) + "\n")
 	}
 
 	visible, hidden := visibleTrackerItems(items)
 	idWidth := itemIDWidth(visible)
-
+	planHeading := planTotal > 0
+	lastPlan := true
 	// Query executor liveness only for visible rows; counts use recorded status.
-	lastPlan := false
-	for i, t := range visible {
-		isPlan := todo.BackgroundTaskID(t) == ""
-		if plans > 0 && plans < len(items) && (i == 0 || isPlan != lastPlan) {
-			label := "Background workers"
-			if isPlan {
-				label = "Plan"
-			}
-			sb.WriteString(kit.TruncateText("  "+headerStyle.Render(label), max(1, params.Width)) + "\n")
+	for _, t := range visible {
+		isPlan := todo.PlanID(t) != ""
+		if planHeading && !isPlan && lastPlan {
+			// The plan heading names the first group; the session's own work
+			// gets its own quiet heading rather than reading as plan steps.
+			sb.WriteString(kit.TruncateText("  "+headerStyle.Render("Todos"), max(1, params.Width)) + "\n")
 		}
 		lastPlan = isPlan
 		phase := phaseOf(t, params.Executing != nil && params.Executing(t))
@@ -153,20 +175,13 @@ func RenderTrackerList(params TrackerListParams) string {
 	if history > 0 {
 		label := kit.Plural(history, "past task")
 		if len(items) == 0 {
-			label = "Tasks · " + label
+			label = "Todos · " + label
 		}
 		prefix := "  "
 		if folded != "" && params.Width > lipgloss.Width(label)+5 {
 			prefix = kit.TruncateText(folded, params.Width-lipgloss.Width(label)-3) + " · "
 		}
-		left := prefix + mutedStyle.Render(label)
-		const hint = "/tasks"
-		gap := params.Width - lipgloss.Width(left) - len(hint) - 2
-		if gap >= 2 {
-			folded = left + strings.Repeat(" ", gap) + mutedStyle.Render(hint)
-		} else {
-			folded = left
-		}
+		folded = prefix + mutedStyle.Render(label)
 	}
 	if folded != "" {
 		sb.WriteString(kit.TruncateText(folded, max(1, params.Width)) + "\n")
@@ -174,18 +189,88 @@ func RenderTrackerList(params TrackerListParams) string {
 	return sb.String()
 }
 
+// renderTrackerHeader is the strip's one heading: the plan's identity and its
+// progress, or "Todos" for a plain list. Optional segments are added left to
+// right only while they fit, so a narrow terminal loses the bar and notes
+// before it loses the name of the work.
+func renderTrackerHeader(params TrackerListParams, done, total int, plan bool) string {
+	width := max(1, params.Width)
+	label := "Todos"
+	if plan {
+		label = "Plan"
+		if title := strings.Join(strings.Fields(params.PlanTitle), " "); title != "" {
+			label = "Plan · " + title
+		}
+	}
+	headerStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim).Bold(true)
+	mutedStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
+	fits := func(candidate string) bool { return lipgloss.Width(candidate) <= width }
+
+	line := "  " + headerStyle.Render(label)
+	if total > 0 {
+		counts := mutedStyle.Render(fmt.Sprintf("%d/%d done", done, total))
+		if next := line + "  " + counts; fits(next) {
+			line = next
+			if bar := ProgressBar(done, total); fits(line + "  " + bar) {
+				line += "  " + bar
+			}
+		}
+	}
+	for _, note := range trackerNotes(params) {
+		if next := line + " · " + note; fits(next) {
+			line = next
+		}
+	}
+	return kit.TruncateText(line, width)
+}
+
+// trackerNotes is what the heading says about a plan that is not simply
+// running: an attention note, then the executor's own flags.
+func trackerNotes(params TrackerListParams) []string {
+	var notes []string
+	if note := strings.Join(strings.Fields(params.PlanStatusNote), " "); note != "" {
+		notes = append(notes, lipgloss.NewStyle().Foreground(kit.CurrentTheme.Warning).Render(note))
+	}
+	mutedStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
+	if params.Paused {
+		notes = append(notes, mutedStyle.Render("paused"))
+	}
+	if params.Awaiting {
+		notes = append(notes, mutedStyle.Render("waiting for you"))
+	}
+	return notes
+}
+
+// ProgressBar draws done/total as a five-cell bar. It is a heading's second
+// read: the counts say exactly, the bar says at a glance. Both headings that
+// carry counts (the strip above the composer and the Execution Panel's step
+// list) draw this one bar, so progress reads the same in both places.
+func ProgressBar(done, total int) string {
+	filled := 0
+	if total > 0 {
+		filled = min(max(done*trackerProgressCells/total, 0), trackerProgressCells)
+	}
+	filledStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success)
+	emptyStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDisabled)
+	return filledStyle.Render(strings.Repeat("▰", filled)) + emptyStyle.Render(strings.Repeat("▱", trackerProgressCells-filled))
+}
+
 // visibleTrackerItems keeps the newest items in each priority group, then draws
-// them in their original order. Successful completions yield space first.
+// them in their original order. Work that is moving, or that is waiting on the
+// person, keeps its rows before history does.
 func visibleTrackerItems(items []*todo.Item) ([]*todo.Item, [itemFinished + 1]int) {
 	var hidden [itemFinished + 1]int
 	if len(items) <= maxVisibleItems {
 		return items, hidden
 	}
 	for _, t := range items {
-		hidden[phaseOf(t, false)]++
+		hidden[windowPhase(t)]++
 	}
+	// Every phase must be allocated here: a phase left out keeps its whole
+	// count in hidden, which hides each of its rows. Running was missing once,
+	// so a list with more than eight rows drew none of its live work.
 	remaining := maxVisibleItems
-	for _, phase := range []itemPhase{itemStalled, itemAborted, itemWaiting, itemFinished} {
+	for _, phase := range []itemPhase{itemRunning, itemBlocked, itemStalled, itemAborted, itemWaiting, itemFinished} {
 		shown := min(hidden[phase], remaining)
 		hidden[phase] -= shown
 		remaining -= shown
@@ -194,7 +279,7 @@ func visibleTrackerItems(items []*todo.Item) ([]*todo.Item, [itemFinished + 1]in
 	skip := hidden
 	visible := make([]*todo.Item, 0, maxVisibleItems)
 	for _, t := range items {
-		phase := phaseOf(t, false)
+		phase := windowPhase(t)
 		if skip[phase] > 0 {
 			skip[phase]--
 			continue
@@ -204,23 +289,38 @@ func visibleTrackerItems(items []*todo.Item) ([]*todo.Item, [itemFinished + 1]in
 	return visible, hidden
 }
 
+// windowPhase ranks a row for the visible window. An item recorded in progress
+// ranks as running even when no executor is live right now: liveness would have
+// to be asked of every hidden row, and work that says it is in progress keeps
+// its row ahead of blocked and pending work either way.
+func windowPhase(t *todo.Item) itemPhase {
+	phase := phaseOf(t, false)
+	if phase == itemStalled {
+		return itemRunning
+	}
+	return phase
+}
+
 func renderFoldedLine(hidden [itemFinished + 1]int) string {
 	var parts []string
-	for _, group := range []struct {
-		phase itemPhase
-		label string
-	}{
-		{itemStalled, "more in progress"},
-		{itemAborted, "failed/stopped"},
-		{itemWaiting, "more pending"},
-		{itemFinished, "completed"},
-	} {
-		if n := hidden[group.phase]; n > 0 {
-			// The combined group also contains deliberate stops; only an
-			// individual failure row, not this mixed count, warrants error red.
-			text := fmt.Sprintf("%d %s", n, group.label)
-			parts = append(parts, text)
-		}
+	// Running and stalled rows share one summary: windowing classifies by the
+	// recorded status, and both read as work that is not finished.
+	if n := hidden[itemRunning] + hidden[itemStalled]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d more in progress", n))
+	}
+	if n := hidden[itemBlocked]; n > 0 {
+		parts = append(parts, kit.Plural(n, "blocked step"))
+	}
+	if n := hidden[itemAborted]; n > 0 {
+		// The combined group also contains deliberate stops; only an
+		// individual failure row, not this mixed count, warrants error red.
+		parts = append(parts, fmt.Sprintf("%d failed/stopped", n))
+	}
+	if n := hidden[itemWaiting]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d more pending", n))
+	}
+	if n := hidden[itemFinished]; n > 0 {
+		parts = append(parts, fmt.Sprintf("%d completed", n))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -240,13 +340,16 @@ const (
 	itemWaiting  itemPhase = iota // nothing has started it
 	itemRunning                   // in progress, with a live executor
 	itemStalled                   // marked in progress, but nothing is executing it
+	itemBlocked                   // a plan step waiting on the person
 	itemAborted                   // ended without finishing its work
 	itemFinished                  // ended having done its work
 )
 
-// PlanProgress counts the plan's items, leaving out background work, and how
-// many of them finished.
-func PlanProgress(items []*todo.Item) (done, total int) {
+// TodoProgress counts the session's own list — a plan's projected steps
+// included, since plan steps are todos — leaving background work out, and how
+// many of those finished. A caller that only wants one of the two groups asks
+// planTodoCounts instead.
+func TodoProgress(items []*todo.Item) (done, total int) {
 	for _, t := range items {
 		if todo.BackgroundTaskID(t) == "" {
 			total++
@@ -258,10 +361,32 @@ func PlanProgress(items []*todo.Item) (done, total int) {
 	return done, total
 }
 
+// planTodoCounts counts the plan-projected rows and how many finished. The join
+// is the plan ID in item metadata, which is what keeps a projected step
+// separable from the model's own todos.
+func planTodoCounts(items []*todo.Item) (done, total int) {
+	for _, t := range items {
+		if todo.PlanID(t) == "" {
+			continue
+		}
+		total++
+		if phaseOf(t, false) == itemFinished {
+			done++
+		}
+	}
+	return done, total
+}
+
 // phaseOf classifies an item. executing answers whether its executor is running;
 // it only distinguishes itemRunning from itemStalled, since an item that already
 // reached a terminal status has no worker left to ask about.
 func phaseOf(t *todo.Item, executing bool) itemPhase {
+	// A projected plan step carries the plan's own status, which has states the
+	// item statuses cannot express. Blocked is unfinished work waiting on the
+	// person, not a fresh pending row; completed still outranks stale metadata.
+	if t.Status != todo.StatusCompleted && todo.PlanStepStatus(t) == string(plan.StepBlocked) {
+		return itemBlocked
+	}
 	switch t.Status {
 	case todo.StatusCompleted:
 		if todo.EndedAbnormally(t) {
@@ -288,25 +413,45 @@ func activeText(t *todo.Item) string {
 	return text
 }
 
+// renderItem draws one checklist row. States with a status of their own
+// (finished, skipped, active, blocked, pending) share the checklist primitive;
+// approval, abort and stall keep the marks their phase has always drawn, since
+// their meaning is narrower than any one state.
 func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func(string) []string, frame int, agentColors map[string]string) string {
 	indent := "  "
 	mutedStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
-	idTag := ""
+
+	tag, tagWidth := "", 0
 	if todo.BackgroundTaskID(t) == "" {
-		idTag = fmt.Sprintf("%-*s", idWidth, "#"+t.ID)
+		tag, tagWidth = "#"+t.ID, idWidth
 	}
-	subject := t.Subject
+	idTag := ""
+	if tag != "" {
+		idTag = fmt.Sprintf("%-*s", idWidth, tag)
+	}
 
 	// A row owned by a background agent wears that agent's color (icon + text),
 	// mirroring its launch line in the flow; a plain todo keeps the status
 	// palette. Aborted rows stay error-red and stalled rows stay muted — those
 	// states carry more meaning than whose agent produced them.
 	agentFg, owned := agentForeground(t, agentColors)
-	tint := func(s lipgloss.Style) lipgloss.Style {
-		if owned {
-			return s.Foreground(agentFg)
-		}
-		return s
+	tint := kit.AdaptiveColor{}
+	if owned {
+		tint = agentFg
+	}
+
+	checklist := func(state ChecklistState, text, detail string) string {
+		return RenderChecklistRow(ChecklistRow{
+			State:    state,
+			Frame:    frame,
+			Indent:   indent,
+			Tag:      tag,
+			TagWidth: tagWidth,
+			Text:     text,
+			Detail:   detail,
+			Width:    width,
+			Tint:     tint,
+		}) + "\n"
 	}
 
 	switch phase {
@@ -318,14 +463,26 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 			abortedStyle = mutedStyle
 		}
 		detail := mutedStyle.Render("[" + todo.BackgroundStatusDetail(t) + "]")
-		return renderItemLine(indent, abortedStyle.Render(kit.CurrentSymbols.LiveDot), idTag, subject, detail, width)
+		return renderItemLine(indent, abortedStyle.Render(kit.CurrentSymbols.LiveDot), idTag, t.Subject, detail, width)
 
 	case itemFinished:
+		state := ChecklistDone
+		if todo.PlanStepStatus(t) == string(plan.StepSkipped) {
+			state = ChecklistSkipped
+		}
 		detail := ""
 		if todo.BackgroundTaskID(t) != "" {
-			detail = mutedStyle.Render("[completed]")
+			detail = "[completed]"
 		}
-		return renderItemLine(indent, tint(trackerCompletedStyle).Render(kit.CurrentSymbols.LiveDot), idTag, tint(lipgloss.NewStyle()).Render(subject), detail, width)
+		return checklist(state, t.Subject, detail)
+
+	case itemBlocked:
+		// The plan store, not the todo list, holds why the step stopped.
+		detail := ""
+		if reason := strings.TrimSpace(todo.PlanStepBlockReason(t)); reason != "" {
+			detail = "· " + reason
+		}
+		return checklist(ChecklistBlocked, t.Subject, detail)
 
 	case itemStalled:
 		// Nothing is executing this item, so draw it at rest. Reaching here
@@ -340,9 +497,9 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 		// flickered irregularly.
 		detail := ""
 		if elapsed := formatElapsedTime(t.StatusChangedAt); elapsed != "" {
-			detail = mutedStyle.Render("· " + elapsed)
+			detail = "· " + elapsed
 		}
-		return renderItemLine(indent, kit.LiveDot(frame), idTag, tint(lipgloss.NewStyle()).Render(activeText(t)), detail, width)
+		return checklist(ChecklistActive, activeText(t), detail)
 
 	default:
 		detail := ""
@@ -352,11 +509,10 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 				for i, b := range bl {
 					blockerRefs[i] = "#" + b
 				}
-				blockedStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Error)
-				detail = blockedStyle.Render("← " + strings.Join(blockerRefs, ", "))
+				detail = "← " + strings.Join(blockerRefs, ", ")
 			}
 		}
-		return renderItemLine(indent, tint(trackerPendingStyle).Render(kit.CurrentSymbols.RadioOff), idTag, tint(lipgloss.NewStyle()).Render(subject), detail, width)
+		return checklist(ChecklistPending, t.Subject, detail)
 	}
 }
 

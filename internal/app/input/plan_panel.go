@@ -7,12 +7,14 @@ package input
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/plan"
 )
@@ -91,6 +93,10 @@ type PlanPanel struct {
 	// context is where execution starts from. It survives a close, so the
 	// choice a person made once is what the next plan uses too.
 	context PlanContext
+	// frame advances the current step's live dot. The panel renders only on a
+	// change, so the app hands it the shared spinner frame on every tick; a
+	// step nothing is executing keeps a still dot.
+	frame int
 
 	editing bool
 	editor  textarea.Model
@@ -154,6 +160,19 @@ func (p *PlanPanel) Close() {
 
 // IsActive implements overlayPanel.
 func (p *PlanPanel) IsActive() bool { return p.active }
+
+// SetFrame advances the current step's live dot from the shared spinner clock.
+// The panel redraws only when something it reads changes, so an unchanged
+// frame is a no-op and a stopped clock leaves the dot still.
+func (p *PlanPanel) SetFrame(frame int) {
+	if p.frame == frame {
+		return
+	}
+	p.frame = frame
+	if p.active {
+		p.invalidate()
+	}
+}
 
 // Resize implements resizableOverlay.
 func (p *PlanPanel) Resize(width, height int) {
@@ -664,35 +683,63 @@ func (p *PlanPanel) steps(pl plan.Plan) string {
 	}
 	var b strings.Builder
 	completed, handled, blocked, total := pl.Counts()
-	head := fmt.Sprintf("STEPS  %d/%d done", completed, total)
-	if handled > completed {
-		head += fmt.Sprintf(" · %d handled", handled)
-	}
-	if blocked > 0 {
-		head += fmt.Sprintf(" · %d blocked", blocked)
-	}
-	b.WriteString(planSectionStyle.Render(head))
+	b.WriteString(p.stepsHeading(completed, handled, blocked, total))
 	b.WriteString("\n")
+	// The ordinal is the plan's own reading order, so it is the step's position
+	// in the list rather than its id: "3." says how far the plan has come,
+	// "#3f2a" says nothing a reader wants.
+	tagWidth := len(strconv.Itoa(len(pl.Steps))) + 1
 	for i, step := range pl.Steps {
 		if i >= p.stepRows() {
 			fmt.Fprintf(&b, "  %s\n", apSummaryStyle.Render(fmt.Sprintf("… %d more", len(pl.Steps)-i)))
 			break
 		}
-		current := i == pl.StepIndex && !pl.Terminal()
-		icon, style := stepMark(step, current)
-		line := fmt.Sprintf("  %s %d. %s", icon, i+1, step.Title)
-		if current {
-			line = style.Render(strings.TrimRight(line, " "))
-		} else {
-			line = style.Render(line)
+		// Only a blocked step carries a note here: why it stopped is the one
+		// thing the list cannot say with a glyph, and it is muted so the plan's
+		// own reason never outshouts the step it belongs to.
+		detail := ""
+		if reason := strings.TrimSpace(step.BlockReason); reason != "" && step.Status == plan.StepBlocked {
+			detail = "· " + reason
 		}
-		if step.Status == plan.StepBlocked && step.BlockReason != "" {
-			line += apSummaryStyle.Render(" — " + kit.TruncateText(step.BlockReason, max(16, p.innerWidth()-lipgloss.Width(line)-6)))
-		}
-		b.WriteString(line)
+		b.WriteString(conv.RenderChecklistRow(conv.ChecklistRow{
+			State:    stepChecklistState(pl, i),
+			Frame:    p.frame,
+			Tag:      strconv.Itoa(i+1) + ".",
+			TagWidth: tagWidth,
+			Text:     step.Title,
+			Detail:   detail,
+			Width:    p.innerWidth(),
+		}))
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// stepsHeading is the checklist's heading: the label the panel has always
+// drawn, then the counts, the bar and the flags the strip above the composer
+// draws too. Each segment joins only while it fits, so a narrow card keeps the
+// list itself before it keeps its decoration.
+func (p *PlanPanel) stepsHeading(completed, handled, blocked, total int) string {
+	width := p.innerWidth()
+	line := planSectionStyle.Render("STEPS")
+	fits := func(next string) bool { return lipgloss.Width(next) <= width }
+	if counts := apSummaryStyle.Render(fmt.Sprintf("%d/%d done", completed, total)); fits(line + "  " + counts) {
+		line += "  " + counts
+		if bar := conv.ProgressBar(completed, total); fits(line + "  " + bar) {
+			line += "  " + bar
+		}
+	}
+	if handled > completed {
+		if note := apSummaryStyle.Render(fmt.Sprintf("· %d handled", handled)); fits(line + " " + note) {
+			line += " " + note
+		}
+	}
+	if blocked > 0 {
+		if note := planWarnStyle.Render(fmt.Sprintf("· %d blocked", blocked)); fits(line + " " + note) {
+			line += " " + note
+		}
+	}
+	return line
 }
 
 // stepRows bounds the step list so the buttons never scroll off the card: the
@@ -703,28 +750,27 @@ func (p *PlanPanel) stepRows() int {
 	return max(2, min(p.bodyRows()-10, 8))
 }
 
-func stepMark(step plan.Step, current bool) (string, lipgloss.Style) {
-	if current {
-		switch step.Status {
-		case plan.StepBlocked:
-			return "!", planWarnStyle
-		case plan.StepInProgress:
-			return kit.CurrentSymbols.Cursor, planAccentStyle
-		}
-		return kit.CurrentSymbols.Cursor, planAccentStyle
-	}
-	switch step.Status {
+// stepChecklistState maps a plan step onto the shared checklist vocabulary, so
+// the panel's step list and the strip above the composer read as one system
+// instead of two presentations of the same progress. The current step reads as
+// active even before it starts: the accent is what says which row the executor
+// is on, and a blocked current step keeps its warning because why it stopped
+// outranks where it sits.
+func stepChecklistState(pl plan.Plan, i int) conv.ChecklistState {
+	switch pl.Steps[i].Status {
 	case plan.StepCompleted:
-		return kit.CurrentSymbols.Success, planDoneStyle
+		return conv.ChecklistDone
 	case plan.StepSkipped:
-		return "-", apSummaryStyle
+		return conv.ChecklistSkipped
 	case plan.StepBlocked:
-		return "!", planWarnStyle
+		return conv.ChecklistBlocked
 	case plan.StepInProgress:
-		return kit.CurrentSymbols.Cursor, planAccentStyle
-	default:
-		return "·", apSummaryStyle
+		return conv.ChecklistActive
 	}
+	if i == pl.StepIndex && !pl.Terminal() {
+		return conv.ChecklistActive
+	}
+	return conv.ChecklistPending
 }
 
 func (p *PlanPanel) buttons() string {
@@ -812,7 +858,6 @@ var (
 	planSectionStyle      = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Bold(true)
 	planBulletStyle       = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
 	planAccentStyle       = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent).Bold(true)
-	planDoneStyle         = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success)
 	planWarnStyle         = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Warning)
 	planButtonStyle       = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
 	planButtonActiveStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent).Bold(true).Reverse(true)

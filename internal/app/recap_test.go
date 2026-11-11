@@ -176,12 +176,28 @@ func TestRecapFacts(t *testing.T) {
 	if err := m.services.Tracker.Update(a.ID, todo.WithStatus(todo.StatusCompleted)); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.recapFacts(); got != "plan 1/2" {
+	if got := m.recapFacts(); got != "todos 1/2" {
 		t.Fatalf("facts = %q", got)
 	}
 	m.env.AutoPilot.Mission = "ship it\nwith notes"
 	if m.recapGoal() != "" {
 		t.Fatal("a mission AutoPilot does not drive is not the goal")
+	}
+}
+
+// A list projected from the plan is the plan's progress, so the recap names it
+// as the plan rather than counting the same rows as ordinary todos.
+func TestRecapFactsNamePlanList(t *testing.T) {
+	m := newRecapModel(t)
+	first := m.services.Tracker.Create("read code", "", "",
+		todo.PlanMetadata("plan-1", "step-1", "pending", ""))
+	m.services.Tracker.Create("move files", "", "",
+		todo.PlanMetadata("plan-1", "step-2", "in_progress", ""))
+	if err := m.services.Tracker.Update(first.ID, todo.WithStatus(todo.StatusCompleted)); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.recapFacts(); got != "plan 1/2" {
+		t.Fatalf("facts = %q", got)
 	}
 }
 

@@ -7,7 +7,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/plan"
 )
 
@@ -552,5 +554,184 @@ func TestPlanPanelDocksExceptWhileEditing(t *testing.T) {
 	p.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !p.Docked() {
 		t.Fatal("discarding the editor must return the panel to the dock")
+	}
+}
+
+// sgrOpening returns the escape sequence a style opens with, so a test can name
+// a theme color without hard-coding its RGB frames.
+func sgrOpening(style lipgloss.Style) string {
+	rendered := style.Render("x")
+	if i := strings.IndexByte(rendered, 'm'); i >= 0 {
+		return rendered[:i+1]
+	}
+	return ""
+}
+
+// panelRow returns the rendered row whose visible text contains label.
+func panelRow(t *testing.T, view, label string) string {
+	t.Helper()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(ansi.Strip(line), label) {
+			return line
+		}
+	}
+	t.Fatalf("no row for %q:\n%s", label, ansi.Strip(view))
+	return ""
+}
+
+// SGR strike-on and strike-off, as conv's checklist emits them.
+const (
+	testStrikeOn  = "\x1b[9m"
+	testStrikeOff = "\x1b[29m"
+)
+
+// The step list and the strip above the composer are one system: the same
+// states, the same glyphs, the same colors. A finished step keeps its row and
+// is struck through, the current one wears the accent, skipped work reads as
+// closed, and a blocked step says why.
+func TestPlanPanelStepsUseTheSharedChecklist(t *testing.T) {
+	p := NewPlanPanel()
+	pl := panelPlan("plan-mixed", "Mixed progress",
+		"read code", "move files", "rewrite tests", "wire the API", "ship it")
+	pl.Status = plan.StatusExecuting
+	pl.Steps[0].Status = plan.StepCompleted
+	pl.Steps[1].Status = plan.StepInProgress
+	pl.Steps[2].Status = plan.StepSkipped
+	pl.Steps[3].Status = plan.StepBlocked
+	pl.Steps[3].BlockReason = "tests failed"
+	pl.StepIndex = 1
+	p.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{pl}, ActiveID: pl.ID}, 100, 40)
+	view := p.Render()
+
+	done := panelRow(t, view, "read code")
+	if !strings.Contains(done, testStrikeOn) || !strings.Contains(done, testStrikeOff) {
+		t.Fatalf("a finished step is not struck through:\n%q", done)
+	}
+	if !strings.Contains(ansi.Strip(done), kit.CurrentSymbols.Success) {
+		t.Fatalf("a finished step lost its check glyph:\n%s", ansi.Strip(done))
+	}
+
+	current := panelRow(t, view, "move files")
+	if accent := sgrOpening(lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent).Bold(true)); !strings.Contains(current, accent) {
+		t.Fatalf("the current step does not use the accent %q:\n%q", accent, current)
+	}
+	if strings.Contains(current, testStrikeOn) {
+		t.Fatalf("the current step is struck through:\n%q", current)
+	}
+	if !strings.Contains(ansi.Strip(current), kit.CurrentSymbols.LiveDot) {
+		t.Fatalf("the current step lost the live dot:\n%s", ansi.Strip(current))
+	}
+
+	skipped := panelRow(t, view, "rewrite tests")
+	if !strings.Contains(skipped, testStrikeOn) {
+		t.Fatalf("a skipped step is not struck through:\n%q", skipped)
+	}
+	if !strings.Contains(ansi.Strip(skipped), "-  3.  rewrite tests") {
+		t.Fatalf("a skipped step lost its dash:\n%s", ansi.Strip(skipped))
+	}
+
+	blocked := panelRow(t, view, "wire the API")
+	if warning := sgrOpening(lipgloss.NewStyle().Foreground(kit.CurrentTheme.Warning)); !strings.Contains(blocked, warning) {
+		t.Fatalf("a blocked step does not use the warning color %q:\n%q", warning, blocked)
+	}
+	if !strings.Contains(ansi.Strip(blocked), "tests failed") {
+		t.Fatalf("a blocked step dropped its reason:\n%s", ansi.Strip(blocked))
+	}
+
+	pending := panelRow(t, view, "ship it")
+	if !strings.Contains(ansi.Strip(pending), kit.CurrentSymbols.RadioOff) {
+		t.Fatalf("a pending step lost the open circle:\n%s", ansi.Strip(pending))
+	}
+	if strings.Contains(pending, testStrikeOn) {
+		t.Fatalf("a pending step is struck through:\n%q", pending)
+	}
+
+	// The ordinal is the step's place in the plan, not its id.
+	for _, want := range []string{"1.  read code", "2.  move files", "5.  ship it"} {
+		if !strings.Contains(ansi.Strip(view), want) {
+			t.Fatalf("the step list lost its ordinal (%q):\n%s", want, ansi.Strip(view))
+		}
+	}
+}
+
+// The STEPS heading carries the same reads as the strip: the exact counts, the
+// five-cell bar, and the flags. A card too narrow for the bar keeps the counts.
+func TestPlanPanelStepsHeadingMirrorsTheStrip(t *testing.T) {
+	p := NewPlanPanel()
+	pl := panelPlan("plan-counts", "Split auth", "read", "move", "audit", "ship")
+	pl.Steps[0].Status = plan.StepCompleted
+	pl.Steps[1].Status = plan.StepSkipped
+	pl.Steps[2].Status = plan.StepBlocked
+	pl.Steps[2].BlockReason = "tests failed"
+	pl.Status = plan.StatusPendingApproval
+	p.Enter(plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{pl}, ActiveID: pl.ID}, 100, 40)
+
+	view := ansi.Strip(p.Render())
+	for _, want := range []string{"STEPS  1/4 done", "▰▱▱▱▱", "2 handled", "1 blocked"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the steps heading is missing %q:\n%s", want, view)
+		}
+	}
+
+	// At the narrowest card the bar is the first thing to go; the counts and
+	// the list itself stay.
+	p.Resize(30, 40)
+	narrow := ansi.Strip(p.Render())
+	if strings.Contains(narrow, "▰") || strings.Contains(narrow, "▱") {
+		t.Fatalf("the narrow card kept a bar it cannot fit:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, "1/4 done") || !strings.Contains(narrow, "read") {
+		t.Fatalf("the narrow card lost the counts or the list:\n%s", narrow)
+	}
+}
+
+// The current step's dot breathes on the shared spinner clock, so a plan on
+// screen never shows two different ideas of "now".
+func TestPlanPanelCurrentStepBreathesOnTheSharedClock(t *testing.T) {
+	p := NewPlanPanel()
+	running := runningStep()
+	p.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{running}, ActiveID: running.ID}, 100, 40)
+	first := p.Render()
+
+	p.SetFrame(3)
+	if second := p.Render(); second == first {
+		t.Fatal("the live dot did not advance with the shared clock")
+	}
+	p.SetFrame(3)
+	steady := p.Render()
+	if p.Render() != steady {
+		t.Fatal("an unchanged frame produced a different render")
+	}
+}
+
+// However long the plan, the executing card stays inside its budget and keeps
+// the buttons and the hint: the list is the one thing that yields.
+func TestPlanPanelExecutingCardKeepsBudgetAndButtons(t *testing.T) {
+	const width, height = 100, 30
+
+	steps := make([]string, 14)
+	for i := range steps {
+		steps[i] = fmt.Sprintf("step %d", i+1)
+	}
+	running := panelPlan("plan-long", "A long run", steps...)
+	running.Status = plan.StatusExecuting
+	running.Steps[0].Status = plan.StepCompleted
+	running.Steps[1].Status = plan.StepInProgress
+	running.StepIndex = 1
+
+	p := NewPlanPanel()
+	p.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{running}, ActiveID: running.ID}, width, height)
+	view := p.Render()
+
+	assertDockedCard(t, view, width, height)
+	for _, want := range []string{"Pause", "Skip step", "Cancel"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("the executing card dropped the %q button:\n%s", want, ansi.Strip(view))
+		}
+	}
+	// The list is what yields: past the budget the card shows a prefix of the
+	// steps rather than growing a row per step.
+	if strings.Contains(ansi.Strip(view), "step 14") {
+		t.Fatalf("the card grew past its budget to fit every step:\n%s", ansi.Strip(view))
 	}
 }
