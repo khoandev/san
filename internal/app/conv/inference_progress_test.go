@@ -35,13 +35,15 @@ func TestInferenceProgressRemainsVisibleAfterTextAndNotices(t *testing.T) {
 		ToolCallID: "write-1", ToolName: "Write", InputBytes: 33051,
 	}})
 	view := inferenceView(&m, 80)
-	for _, want := range []string{"I will write the HTML now.", "a background task completed", "On it · 1m 52s"} {
+	for _, want := range []string{"I will write the HTML now.", "a background task completed"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("missing %q in %q", want, view)
 		}
 	}
-	if strings.Count(view, "✦") != 1 || strings.Contains(view, "Generating") || strings.Contains(view, "bytes") || strings.Contains(view, "Waiting for model") {
-		t.Fatalf("incoming model data did not restore the quiet, single indicator: %q", view)
+	// Data flowing is the indicator: the checklist strip carries liveness, so
+	// no generic wait row repeats it in the transcript.
+	if strings.Contains(view, "✦") || strings.Contains(view, "On it") || strings.Contains(view, "Generating") || strings.Contains(view, "bytes") || strings.Contains(view, "Waiting for model") {
+		t.Fatalf("incoming model data should clear the quiet-wait row: %q", view)
 	}
 	if m.Stream.GeneratingTool != "Write" || m.Stream.GeneratedBytes != 33051 {
 		t.Fatal("quieter rendering discarded actual progress evidence")
@@ -52,12 +54,12 @@ func TestInferenceProgressRemainsVisibleAfterTextAndNotices(t *testing.T) {
 	if m.Messages[0].Content != "I will write the HTML now." {
 		t.Fatal("generation progress leaked into assistant content")
 	}
-	// A fully flushed commentary block still needs a live status, independent
-	// of its immutable scrollback or the last notice's identity.
+	// Committing the commentary must not resurrect a generic wait row: the
+	// checklist still shows the running step, and the connection is not quiet.
 	m.Messages[0].ContentCommittedLen = len(m.Messages[0].Content)
 	m.Messages[0].BulletEmitted = true
-	if view := inferenceView(&m, 80); strings.Count(view, "✦") != 1 || !strings.Contains(view, "1m 52s") {
-		t.Fatalf("committing commentary hid the live generation: %q", view)
+	if view := inferenceView(&m, 80); strings.Contains(view, "✦") || strings.Contains(view, "1m 52s") {
+		t.Fatalf("committing commentary restarted the generic wait row: %q", view)
 	}
 }
 

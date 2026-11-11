@@ -632,10 +632,18 @@ func RenderActiveBody(p RenderContext) string {
 		if msg.Role != core.ChatAssistant || !p.StreamActive || msg.ID == "" || msg.ID != p.StreamMessageID {
 			continue
 		}
+		// Probe with the same params the message render will use, so the tail
+		// row and its inline suppression agree: a wait row only exists once the
+		// connection has actually gone quiet.
 		params := AssistantParams{
 			StreamActive: true, IsLast: true,
-			Content:       sliceFrom(msg.Content, msg.ContentCommittedLen),
-			BulletEmitted: msg.BulletEmitted, ToolCalls: msg.ToolCalls,
+			Content:            sliceFrom(msg.Content, msg.ContentCommittedLen),
+			BulletEmitted:      msg.BulletEmitted,
+			ToolCalls:          msg.ToolCalls,
+			Frame:              p.Frame,
+			Width:              p.Width,
+			WaitStartedAt:      p.StreamStartedAt,
+			SuppressWaitingRow: p.Inferring,
 		}
 		if params.waitingRow() != "" {
 			waiting = true
