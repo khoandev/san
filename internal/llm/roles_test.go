@@ -170,8 +170,9 @@ func TestRoleResolverNilProviderPoolStillResolvesBareReferences(t *testing.T) {
 
 func TestRoleCatalogAndNames(t *testing.T) {
 	// The ladder is display order: the session's own model, then cheapest work
-	// to hardest. A retired per-agent name occupies no row of its own.
-	want := []ModelRole{RoleDefault, RoleFast, RoleStandard, RoleDeep}
+	// to hardest, then the advisor's own slot. A retired per-agent name occupies
+	// no row of its own.
+	want := []ModelRole{RoleDefault, RoleFast, RoleStandard, RoleDeep, RoleAdvisor}
 	got := RoleCatalog()
 	if len(got) != len(want) {
 		t.Fatalf("catalog has %d roles, want %d", len(got), len(want))

@@ -100,13 +100,11 @@ func ApplyPersonaOverlay(base, overlay *Data) *Data {
 	return mergeSettings(base, ov)
 }
 
-// mergeAdvisor merges the two fields the advisor has: an explicit enable in
-// the overlay wins, and a non-empty model overrides the base.
+// mergeAdvisor merges the advisor's switch: an explicit enable in the overlay
+// wins, so a project can turn the review on or off for its workspace. The
+// retired model slot is not configuration — the fold clears it on load.
 func mergeAdvisor(base, overlay AdvisorSettings) AdvisorSettings {
-	return AdvisorSettings{
-		Enable: coalescePtr(overlay.Enable, base.Enable),
-		Model:  coalesce(overlay.Model, base.Model),
-	}
+	return AdvisorSettings{Enable: coalescePtr(overlay.Enable, base.Enable)}
 }
 
 // mergeSelfLearn does a field-level merge of the L1 configuration: integers

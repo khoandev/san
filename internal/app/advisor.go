@@ -26,7 +26,6 @@ import (
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/log"
 	"github.com/genai-io/san/internal/session"
-	"github.com/genai-io/san/internal/setting"
 )
 
 const (
@@ -96,7 +95,7 @@ func (m *model) wireAdvisor() {
 	if !cfg.Enabled() {
 		return
 	}
-	provider, modelID := m.resolveAdvisorModel(cfg)
+	provider, modelID := m.resolveAdvisorModel()
 	if provider == nil || modelID == "" {
 		log.Logger().Warn("advisor is enabled but no model is connected")
 		return
@@ -153,72 +152,32 @@ func (m *model) teardownAdvisor() {
 	m.services.Advisor = nil
 }
 
-// advisorRole answers the model role a review runs on: the role the agents tab
-// assigns to the advisor (agents.roles.advisor), otherwise the deep rung — the
-// role the advisor exists for, a thorough review where the extra latency is
-// acceptable. A legacy advisor.model written as "@role" names the same slot;
-// loading and saving settings fold it onto agents.roles, so this reads it only
-// for settings built without that fold (a test, or a file edited mid-session).
-func (m *model) advisorRole(cfg setting.AdvisorSettings) llm.ModelRole {
-	if m.services.Setting != nil {
-		if assigned := m.services.Setting.AgentRole(setting.AgentAdvisor); assigned != "" {
-			return llm.ModelRole(assigned)
-		}
-	}
-	if role, isRole := llm.ParseRoleAlias(cfg.Model); isRole {
-		return llm.ModelRole(role)
-	}
-	return llm.RoleDeep
-}
+// advisorRole is the model role a review runs on. The advisor owns a slot of
+// its own in the role catalog, so this is a constant: which model fills it is a
+// routing choice made in /models like any other role's, and an unbound role
+// reviews on the session model. The retired advisor.model and
+// agents.roles.advisor spellings fold onto that binding when settings load.
+const advisorRole = llm.RoleAdvisor
 
-// advisorModelPin answers the concrete model reference that pins a review, if
-// one applies: advisor.model's old shape, which the agents tab has no control
-// for. A role reference is not a pin — advisorRole reads it — and an assigned
-// role supersedes a pin, the same precedence UpdateAgentsAt writes.
-func (m *model) advisorModelPin(cfg setting.AdvisorSettings) (string, bool) {
-	ref := strings.TrimSpace(cfg.Model)
-	if ref == "" {
-		return "", false
-	}
-	if _, isRole := llm.ParseRoleAlias(ref); isRole {
-		return "", false
-	}
-	if m.services.Setting != nil && m.services.Setting.AgentRole(setting.AgentAdvisor) != "" {
-		return "", false
-	}
-	return ref, true
-}
-
-// resolveAdvisorModel picks the review provider and model: a concrete
-// advisor.model pin when the file still carries one, else the role assigned to
-// the advisor resolved through the live modelRoles bindings, else the session
-// model. A nil provider means nothing is connected and no review can run.
-func (m *model) resolveAdvisorModel(cfg setting.AdvisorSettings) (llm.Provider, string) {
-	if ref, pinned := m.advisorModelPin(cfg); pinned {
-		target := m.resolveRoleWithOverride(llm.RoleDeep, ref)
-		return target.Provider, target.ModelID
-	}
-	target := m.resolveRole(m.advisorRole(cfg))
+// resolveAdvisorModel picks the review provider and model: the advisor role
+// resolved through the live modelRoles bindings, else the session model. A nil
+// provider means nothing is connected and no review can run.
+func (m *model) resolveAdvisorModel() (llm.Provider, string) {
+	target := m.resolveRole(advisorRole)
 	return target.Provider, target.ModelID
 }
 
 // advisorSignature is a stable fingerprint of everything that changes what a
-// review does: whether it runs, which role answers it, and the model that role
-// resolves to. ensureAgentRuntime compares it against the live runner's value,
-// so an /advisor save, a role change in the agents tab, a settings-file edit or
-// a model switch rebuilds the runner on the next turn.
+// review does: whether it runs and the model the advisor role resolves to.
+// ensureAgentRuntime compares it against the live runner's value, so an
+// /advisor toggle, a role reboot in /models, a settings-file edit or a model
+// switch rebuilds the runner on the next turn.
 func (m *model) advisorSignature() string {
-	cfg := m.env.Advisor
-	if !cfg.Enabled() {
+	if !m.env.Advisor.Enabled() {
 		return ""
 	}
-	if ref, pinned := m.advisorModelPin(cfg); pinned {
-		target := m.resolveRoleWithOverride(llm.RoleDeep, ref)
-		return "pin:" + ref + "\x00" + target.ModelID
-	}
-	role := m.advisorRole(cfg)
-	_, modelID := m.resolveRoleModel(role)
-	return "role:" + string(role) + "\x00" + modelID
+	_, modelID := m.resolveRoleModel(advisorRole)
+	return "advisor\x00" + modelID
 }
 
 // reviewCompletedTurn starts a review of what this turn added to the

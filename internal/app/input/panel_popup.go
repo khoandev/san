@@ -116,11 +116,8 @@ func (c *PanelPopup) SetAgentRoleSource(src AgentRoleSource) {
 
 func (c *PanelPopup) applyRoleSource() {
 	for _, p := range c.panels {
-		switch panel := p.(type) {
-		case *agentsPanel:
+		if panel, ok := p.(*agentPanel); ok {
 			panel.SetRoleSource(c.roleSource)
-		case *agentPanel:
-			panel.agents.SetRoleSource(c.roleSource)
 		}
 	}
 }

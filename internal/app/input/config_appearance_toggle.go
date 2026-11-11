@@ -46,20 +46,27 @@ func (p *appearancePanel) resetBarChoices() {
 // Unfocused controls use a neutral fill; the focused value shares the popup's
 // active-tab accent so color marks navigation, not every enabled preference.
 func renderBarToggle(opt appearanceOption, hovered bool, width int) string {
-	head, selected := appearanceRowHead(opt, hovered)
+	return renderToggleRow(opt.label, opt.desc, opt.barOn, hovered, width)
+}
+
+// renderToggleRow draws one Off/On switch in the shared control layout. It is
+// what every settings tab's switch looks like, so an on/off choice reads the
+// same on the Appearance tab and the Agent tab.
+func renderToggleRow(label, desc string, on, hovered bool, width int) string {
+	head, selected := appearanceRowHead(label, hovered)
 	offStyle, onStyle := appearanceToggleStyle, appearanceToggleStyle
-	if opt.barOn {
+	if on {
 		onStyle = selected
 	} else {
 		offStyle = selected
 	}
-	return withDesc(head+offStyle.Render("Off")+" "+onStyle.Render("On"), opt.desc, width)
+	return withDesc(head+offStyle.Render("Off")+" "+onStyle.Render("On"), desc, width)
 }
 
 // renderPreviewStepper draws the preview-lines row in the toggles' layout: the
 // count in one cell between ‹ › arrows, "Off" for 0.
 func renderPreviewStepper(opt appearanceOption, hovered bool, width int) string {
-	head, selected := appearanceRowHead(opt, hovered)
+	head, selected := appearanceRowHead(opt.label, hovered)
 	value := "Off"
 	if opt.previewLines > 0 {
 		value = strconv.Itoa(opt.previewLines)
@@ -72,12 +79,12 @@ func renderPreviewStepper(opt appearanceOption, hovered bool, width int) string 
 // style of its selected value: the active-tab accent while the row has the
 // cursor. The focus bar is the same affordance the radio rows and the other
 // pickers use, so a row has one signal for "you are here".
-func appearanceRowHead(opt appearanceOption, hovered bool) (string, lipgloss.Style) {
-	bar, label, selected := strings.Repeat(" ", kit.Width(kit.FocusBar)+1), appearanceLabelStyle.Render(opt.label), appearanceToggleSelectedStyle
+func appearanceRowHead(label string, hovered bool) (string, lipgloss.Style) {
+	bar, padded, selected := strings.Repeat(" ", kit.Width(kit.FocusBar)+1), appearanceLabelStyle.Render(label), appearanceToggleSelectedStyle
 	if hovered {
-		bar, label, selected = kit.FocusBarStyle().Render(kit.FocusBar)+" ", kit.SelectorSelectedLabelStyle().Render(opt.label), appearanceToggleFocusedStyle
+		bar, padded, selected = kit.FocusBarStyle().Render(kit.FocusBar)+" ", kit.SelectorSelectedLabelStyle().Render(label), appearanceToggleFocusedStyle
 	}
-	return bar + label + strings.Repeat(" ", max(18-lipgloss.Width(opt.label), 1)), selected
+	return bar + padded + strings.Repeat(" ", max(18-lipgloss.Width(label), 1)), selected
 }
 
 // withDesc appends the row's description when it fits.

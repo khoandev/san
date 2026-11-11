@@ -511,7 +511,7 @@ func TestAdvisorStatusReadsTheIndicator(t *testing.T) {
 // ever reaching a review.
 func TestWireAdvisorKeepsTheReviewCursor(t *testing.T) {
 	on := true
-	m := advisorRoleModel(t, nil, nil)
+	m := advisorRoleModel(t, nil)
 	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
 	m.advisorReviewed = 1
 
@@ -529,7 +529,7 @@ func TestWireAdvisorKeepsTheReviewCursor(t *testing.T) {
 // must not hand the whole existing history to the reviewer.
 func TestWireAdvisorStartsAtTheEndOfAnExistingConversation(t *testing.T) {
 	on := true
-	m := advisorRoleModel(t, nil, nil)
+	m := advisorRoleModel(t, nil)
 	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
 	m.services.Agent = &agent.Runtime{}
 	msgs := []core.Message{core.UserMessage("old", nil), core.AssistantMessage("done", "", nil)}
@@ -546,7 +546,7 @@ func TestWireAdvisorStartsAtTheEndOfAnExistingConversation(t *testing.T) {
 // cursor still points at it after the rewire, and the next turn end consumes it.
 func TestRewireKeepsAnUnreviewedDelta(t *testing.T) {
 	on := true
-	m := advisorRoleModel(t, nil, nil)
+	m := advisorRoleModel(t, nil)
 	m.env.Advisor = setting.AdvisorSettings{Enable: &on}
 	m.services.Agent = &agent.Runtime{}
 	msgs := []core.Message{

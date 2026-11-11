@@ -370,8 +370,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case input.AgentsConfigSavedMsg:
-		// The panel wrote the user/project file; the app owns the live config and
-		// the rewiring a changed one forces.
+		// The panel wrote the user settings file; the app owns the live config
+		// and the rewiring a changed one forces.
 		return m, m.handleAgentsConfigSaved(msg)
 	case input.ThemeSavedMsg:
 		// The panel already applied (kit.InitTheme) and persisted the theme;

@@ -19,10 +19,11 @@ import (
 // Resolution has one rule and no fallback chain:
 //
 //   - A role is one rung of a three-step ladder — fast, standard, deep — plus
-//     default, which is the session's own model. An unassigned role uses the
-//     session model. A reference that cannot be resolved — an unknown role, a
-//     vendor that is not connected — uses the session model too. Work never
-//     fails because configuration is incomplete or stale.
+//     default, which is the session's own model, and advisor, the slot reserved
+//     for the background reviewer. An unassigned role uses the session model. A
+//     reference that cannot be resolved — an unknown role, a vendor that is not
+//     connected — uses the session model too. Work never fails because
+//     configuration is incomplete or stale.
 //   - An assigned reference wins over the session model. A bare model id stays
 //     on the session's provider; "vendor/model" routes to that connected vendor.
 //   - A role's effort travels with whichever model answered it: the effort
@@ -58,10 +59,18 @@ const (
 	RoleStandard ModelRole = "standard"
 
 	// RoleDeep is thorough work where extra latency pays: Plan Mode's
-	// architect, the advisor's review of a completed turn, the reviewer agent
-	// and deep-tier delegation. Unassigned, the session's own model answers,
-	// which is the strongest model the user already chose.
+	// architect, the reviewer agent and deep-tier delegation. Unassigned, the
+	// session's own model answers, which is the strongest model the user
+	// already chose.
 	RoleDeep ModelRole = "deep"
+
+	// RoleAdvisor is the background reviewer's own slot: the model that
+	// inspects each finished turn. It is a role like the rungs, so the model a
+	// review runs on is bound in the models hub and nowhere else. Whether the
+	// review runs at all is the advisor's enable switch in /settings, not a
+	// routing choice — an unassigned advisor still reviews, on the session
+	// model.
+	RoleAdvisor ModelRole = "advisor"
 
 	// RoleSmol is a retired name for RoleFast.
 	// Deprecated: use RoleFast; LegacyRoleAlias still routes it.
@@ -121,16 +130,19 @@ type RoleSpec struct {
 }
 
 // roleCatalog is the built-in set in display order: the session's own model,
-// then the ladder from cheapest work to hardest. Roles are added here only when
-// san already has work to route through them: a slot nothing consumes is a
-// setting that changes nothing. Every rung is a slot a user tunes, and a
-// retired per-agent name is folded onto one of them by LegacyRoleAlias rather
-// than occupying a row of its own.
+// then the ladder from cheapest work to hardest, then the advisor. Roles are
+// added here only when san already has work to route through them: a slot
+// nothing consumes is a setting that changes nothing. Every rung is a slot a
+// user tunes, and a retired per-agent name is folded onto one of them by
+// LegacyRoleAlias rather than occupying a row of its own.
 var roleCatalog = []RoleSpec{
 	{Name: RoleDefault, Description: "Normal interactive work and the session's own model.", Consumer: "the main conversation's turns"},
 	{Name: RoleFast, Description: "Fast, inexpensive work: triage, judges, utilities and simple delegated tasks.", Consumer: "work triage, the permission and autopilot judges, hook completions, the self-learning review, and the quick and explore agents"},
 	{Name: RoleStandard, Description: "General subagent work with a clear definition of done.", Consumer: "the bundled task agent and standard-tier delegation"},
-	{Name: RoleDeep, Description: "Thorough work where extra latency pays: planning, review and hard tasks.", Consumer: "Plan Mode's architect, the advisor's review of a completed turn, the bundled reviewer agent and deep-tier delegation"},
+	{Name: RoleDeep, Description: "Thorough work where extra latency pays: planning, review and hard tasks.", Consumer: "Plan Mode's architect, the bundled reviewer agent and deep-tier delegation"},
+	// The advisor closes the list: its slot answers one thing, and it is the
+	// only role with a switch of its own in /settings.
+	{Name: RoleAdvisor, Description: "The background reviewer's model: it inspects each finished turn and may add one note.", Consumer: "the advisor, when it is switched on in /settings"},
 }
 
 // RoleCatalog returns the built-in roles in display order. The caller owns the

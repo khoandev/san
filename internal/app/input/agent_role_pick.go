@@ -21,13 +21,9 @@ import (
 type agentRoleChoiceKind int
 
 const (
-	// roleChoiceOff switches the advisor off: it is the only agent that can be
-	// turned off entirely, and the assignment is kept so turning it back on
-	// resumes the same role.
-	roleChoiceOff agentRoleChoiceKind = iota
 	// roleChoiceDefinition drops the assignment, leaving the agent on the role
 	// its own definition file declares.
-	roleChoiceDefinition
+	roleChoiceDefinition agentRoleChoiceKind = iota
 	// roleChoiceRole assigns the named role.
 	roleChoiceRole
 )

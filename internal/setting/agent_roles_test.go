@@ -1,6 +1,6 @@
 // The agents.roles block: the map that assigns a model role to a built-in
-// agent, its layered merge, its clone, and the fold that migrates the advisor's
-// retired per-agent model slot onto it.
+// agent, its layered merge, its clone, and the fold that moves the advisor's
+// retired model slots onto the "advisor" model role.
 package setting
 
 import (
@@ -42,13 +42,13 @@ func TestAgentRolesMergePerKey(t *testing.T) {
 // mutated through a cached copy.
 func TestAgentRolesCloneOwnsStorage(t *testing.T) {
 	src := &Data{Agents: AgentsSettings{AutoTier: boolPtr(true), Roles: map[string]string{
-		AgentAdvisor: "deep",
+		AgentTask: "standard",
 	}}}
 	clone := src.Clone()
-	clone.Agents.Roles[AgentAdvisor] = "fast"
+	clone.Agents.Roles[AgentTask] = "deep"
 	clone.Agents.Roles[AgentQuick] = "fast"
 
-	if got := src.AgentRole(AgentAdvisor); got != "deep" {
+	if got := src.AgentRole(AgentTask); got != "standard" {
 		t.Fatalf("clone shared the map: source role = %q", got)
 	}
 	if src.AgentRole(AgentQuick) != "" {
@@ -78,9 +78,6 @@ func TestAgentRoleLookupFoldsCase(t *testing.T) {
 	if got := data.AgentRole(AgentQuick); got != "" {
 		t.Fatalf("unassigned agent = %q, want empty", got)
 	}
-	if got := (&Data{}).AgentRole(AgentTask); got != "" {
-		t.Fatalf("empty settings = %q, want empty", got)
-	}
 }
 
 // The fold normalizes both halves of an entry: retired role names collapse onto
@@ -105,61 +102,76 @@ func TestFoldAgentRolesNormalizesEntries(t *testing.T) {
 	}
 }
 
-// advisor.model used to be the only place the advisor's model lived. A value
-// written as "@role" names a routing slot, so it moves onto agents.roles; a
-// concrete model reference is a pin and is left where it is.
-func TestFoldAgentRolesMigratesAdvisorModel(t *testing.T) {
+// The advisor's model used to live in two retired slots. Both move onto the one
+// place a role's model is configured now, modelRoles.advisor, and both are
+// cleared so a save stops writing them.
+func TestFoldAdvisorRoleMigratesRetiredSlots(t *testing.T) {
 	t.Run("role reference moves", func(t *testing.T) {
 		data := &Data{Advisor: AdvisorSettings{Model: "@fast"}}
 		foldSettings(data)
-		if got := data.AgentRole(AgentAdvisor); got != "fast" {
-			t.Fatalf("agents.roles.advisor = %q, want fast", got)
+		if got := data.ModelRole(AgentAdvisor); got != "@fast" {
+			t.Fatalf("modelRoles.advisor = %q, want @fast", got)
 		}
 		if data.Advisor.Model != "" {
 			t.Fatalf("advisor.model = %q, want it cleared", data.Advisor.Model)
 		}
 	})
 
-	t.Run("explicit assignment wins", func(t *testing.T) {
-		data := &Data{
-			Advisor: AdvisorSettings{Model: "@fast"},
-			Agents:  AgentsSettings{Roles: map[string]string{AgentAdvisor: "deep"}},
-		}
-		foldSettings(data)
-		if got := data.AgentRole(AgentAdvisor); got != "deep" {
-			t.Fatalf("agents.roles.advisor = %q, want the explicit deep", got)
-		}
-		if data.Advisor.Model != "" {
-			t.Fatalf("advisor.model = %q, want it cleared", data.Advisor.Model)
-		}
-	})
-
-	t.Run("concrete model stays pinned", func(t *testing.T) {
+	t.Run("concrete model moves", func(t *testing.T) {
 		data := &Data{Advisor: AdvisorSettings{Model: "anthropic/claude-sonnet-4-5"}}
 		foldSettings(data)
-		if got := data.AgentRole(AgentAdvisor); got != "" {
-			t.Fatalf("agents.roles.advisor = %q, want none", got)
+		if got := data.ModelRole(AgentAdvisor); got != "anthropic/claude-sonnet-4-5" {
+			t.Fatalf("modelRoles.advisor = %q, want the pin", got)
 		}
-		if data.Advisor.Model != "anthropic/claude-sonnet-4-5" {
-			t.Fatalf("advisor.model = %q, want the pin kept", data.Advisor.Model)
+		if data.Advisor.Model != "" {
+			t.Fatalf("advisor.model = %q, want it cleared", data.Advisor.Model)
 		}
 	})
 
-	t.Run("bare role name is not a role reference", func(t *testing.T) {
-		// A bare id is a model id everywhere else — llm.ParseRoleAlias needs
-		// the "@" — so it must not be mistaken for a role here.
-		data := &Data{Advisor: AdvisorSettings{Model: "fast"}}
+	t.Run("agents.roles.advisor becomes a role reference", func(t *testing.T) {
+		data := &Data{Agents: AgentsSettings{Roles: map[string]string{AgentAdvisor: "slow"}}}
 		foldSettings(data)
-		if got := data.AgentRole(AgentAdvisor); got != "" {
-			t.Fatalf("agents.roles.advisor = %q, want none", got)
+		if got := data.ModelRole(AgentAdvisor); got != "@deep" {
+			t.Fatalf("modelRoles.advisor = %q, want @deep (slow folded)", got)
+		}
+		if _, retired := data.Agents.Roles[AgentAdvisor]; retired {
+			t.Fatalf("agents.roles.advisor survived the fold: %v", data.Agents.Roles)
+		}
+	})
+
+	t.Run("agents.roles.advisor wins over advisor.model", func(t *testing.T) {
+		// The role assignment superseded the pin, exactly as the old panel
+		// wrote it.
+		data := &Data{
+			Advisor: AdvisorSettings{Model: "anthropic/claude-sonnet-4-5"},
+			Agents:  AgentsSettings{Roles: map[string]string{AgentAdvisor: "fast"}},
+		}
+		foldSettings(data)
+		if got := data.ModelRole(AgentAdvisor); got != "@fast" {
+			t.Fatalf("modelRoles.advisor = %q, want @fast", got)
+		}
+	})
+
+	t.Run("an explicit binding wins", func(t *testing.T) {
+		data := &Data{
+			ModelRoles: map[string]string{AgentAdvisor: "openai/gpt-5"},
+			Advisor:    AdvisorSettings{Model: "@fast"},
+			Agents:     AgentsSettings{Roles: map[string]string{AgentAdvisor: "deep"}},
+		}
+		foldSettings(data)
+		if got := data.ModelRole(AgentAdvisor); got != "openai/gpt-5" {
+			t.Fatalf("modelRoles.advisor = %q, want the explicit binding", got)
+		}
+		if data.Advisor.Model != "" {
+			t.Fatalf("advisor.model = %q, want it cleared", data.Advisor.Model)
 		}
 	})
 }
 
-// A file written before agents.roles existed keeps working: loading folds the
-// advisor's "@role" pin onto the new block, and the advisor keeps the model the
-// role resolves to.
-func TestLoadFoldsAdvisorModelOntoAgentRoles(t *testing.T) {
+// A file written before the advisor had a role of its own keeps working:
+// loading folds its retired slots onto modelRoles.advisor, so the review keeps
+// answering on the model it answered on before.
+func TestLoadFoldsRetiredAdvisorSlots(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
 	t.Setenv("HOME", home)
@@ -181,8 +193,8 @@ func TestLoadFoldsAdvisorModelOntoAgentRoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := loaded.AgentRole(AgentAdvisor); got != "fast" {
-		t.Fatalf("agents.roles.advisor = %q, want fast", got)
+	if got := loaded.ModelRole(AgentAdvisor); got != "@fast" {
+		t.Fatalf("modelRoles.advisor = %q, want @fast", got)
 	}
 	if loaded.Advisor.Model != "" {
 		t.Fatalf("advisor.model = %q, want it folded away", loaded.Advisor.Model)
@@ -192,25 +204,25 @@ func TestLoadFoldsAdvisorModelOntoAgentRoles(t *testing.T) {
 	}
 }
 
-// The JSON shape the block is documented as:
-// {"agents":{"roles":{"advisor":"deep","quick":"fast"}}}.
+// The JSON shape the blocks are documented as: a roles map of agents and a
+// standalone advisor switch.
 func TestAgentRolesJSONShape(t *testing.T) {
 	var data Data
-	if err := json.Unmarshal([]byte(`{"agents":{"roles":{"advisor":"deep","quick":"fast"}}}`), &data); err != nil {
+	if err := json.Unmarshal([]byte(`{"agents":{"roles":{"quick":"fast"}},"advisor":{"enable":true}}`), &data); err != nil {
 		t.Fatal(err)
-	}
-	if got := data.AgentRole(AgentAdvisor); got != "deep" {
-		t.Fatalf("decoded advisor role = %q", got)
 	}
 	if got := data.AgentRole(AgentQuick); got != "fast" {
 		t.Fatalf("decoded quick role = %q", got)
 	}
+	if !data.Advisor.Enabled() {
+		t.Fatal("decoded advisor switch = off")
+	}
 
-	encoded, err := json.Marshal(Data{Agents: AgentsSettings{Roles: map[string]string{AgentAdvisor: "deep"}}})
+	encoded, err := json.Marshal(Data{Agents: AgentsSettings{Roles: map[string]string{AgentQuick: "fast"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(encoded) != `{"agents":{"roles":{"advisor":"deep"}}}` {
+	if string(encoded) != `{"agents":{"roles":{"quick":"fast"}}}` {
 		t.Fatalf("encoded settings = %s", encoded)
 	}
 }
@@ -243,22 +255,21 @@ func readSettingsFile(t *testing.T, path string) Data {
 	return data
 }
 
-// One save writes the agent roles and the advisor block together, folds the
-// role names it writes, and leaves every other key in the file alone.
-func TestUpdateAgentsAtWritesBothBlocks(t *testing.T) {
+// One save writes the agent roles, folds the role names it writes, and leaves
+// every other key in the file alone — including the advisor switch, which this
+// write does not own.
+func TestUpdateAgentRolesAtWritesTheBlock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	file := writeUserSettingsFile(t, home, `{"theme":"dark","agents":{"autoTier":false},"modelRoles":{"fast":"openai/gpt-5-mini"}}`)
-	on := true
-	err := UpdateAgentsAt(
+	file := writeUserSettingsFile(t, home, `{"theme":"dark","agents":{"autoTier":false},"advisor":{"enable":true},"modelRoles":{"fast":"openai/gpt-5-mini"}}`)
+	err := UpdateAgentRolesAt(
 		map[string]string{" Reviewer ": "@slow", AgentQuick: "fast"},
-		AdvisorSettings{Enable: &on},
 		ScopeUser,
 	)
 	if err != nil {
-		t.Fatalf("UpdateAgentsAt: %v", err)
+		t.Fatalf("UpdateAgentRolesAt: %v", err)
 	}
 
 	data := readSettingsFile(t, file)
@@ -272,7 +283,7 @@ func TestUpdateAgentsAtWritesBothBlocks(t *testing.T) {
 		t.Errorf("agents.roles.quick = %q, want fast", got)
 	}
 	if !data.Advisor.Enabled() {
-		t.Error("advisor enable did not reach the file")
+		t.Error("the write cleared the advisor's switch")
 	}
 	// Every other setting survives: the root keys, the autoTier switch the tab
 	// does not own, and the model roles it does not edit.
@@ -287,44 +298,36 @@ func TestUpdateAgentsAtWritesBothBlocks(t *testing.T) {
 	}
 }
 
-// A project-scope save lands in the workspace's .san directory and leaves the
+// A project-scope write lands in the workspace's .san directory and leaves the
 // user's file as it was.
-func TestUpdateAgentsAtWritesProjectScope(t *testing.T) {
+func TestUpdateAgentRolesAtWritesProjectScope(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Chdir(work)
 
-	userFile := writeUserSettingsFile(t, home, `{"agents":{"roles":{"advisor":"deep"}}}`)
+	userFile := writeUserSettingsFile(t, home, `{"agents":{"roles":{"quick":"fast"}}}`)
 	if err := TrustWorkspace(work); err != nil {
 		t.Fatal(err)
 	}
-	err := UpdateAgentsAt(
-		map[string]string{AgentReviewer: "standard"},
-		AdvisorSettings{},
-		ScopeProject,
-	)
-	if err != nil {
-		t.Fatalf("UpdateAgentsAt: %v", err)
+	if err := UpdateAgentRolesAt(map[string]string{AgentReviewer: "standard"}, ScopeProject); err != nil {
+		t.Fatalf("UpdateAgentRolesAt: %v", err)
 	}
 
 	project := readSettingsFile(t, filepath.Join(".san", "settings.json"))
 	if got := project.AgentRole(AgentReviewer); got != "standard" {
 		t.Errorf("project agents.roles.reviewer = %q, want standard", got)
 	}
-	if got := project.AgentRole(AgentAdvisor); got != "" {
-		t.Errorf("project agents.roles.advisor = %q, want none", got)
-	}
 	user := readSettingsFile(t, userFile)
-	if got := user.AgentRole(AgentAdvisor); got != "deep" {
-		t.Errorf("user agents.roles.advisor = %q, want it untouched", got)
+	if got := user.AgentRole(AgentQuick); got != "fast" {
+		t.Errorf("user agents.roles.quick = %q, want it untouched", got)
 	}
 }
 
-// A save never writes a role that cannot resolve, and nothing reaches disk when
+// A write never stores a role that cannot resolve, and nothing reaches disk when
 // validation fails.
-func TestUpdateAgentsAtRejectsInvalidRole(t *testing.T) {
+func TestUpdateAgentRolesAtRejectsInvalidRole(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -341,8 +344,8 @@ func TestUpdateAgentsAtRejectsInvalidRole(t *testing.T) {
 		"empty role": {AgentTask: ""},
 	}
 	for name, roles := range cases {
-		if err := UpdateAgentsAt(roles, AdvisorSettings{}, ScopeUser); err == nil {
-			t.Errorf("%s: UpdateAgentsAt accepted %v", name, roles)
+		if err := UpdateAgentRolesAt(roles, ScopeUser); err == nil {
+			t.Errorf("%s: UpdateAgentRolesAt accepted %v", name, roles)
 		}
 	}
 	after, err := os.ReadFile(file)
@@ -358,8 +361,8 @@ func TestUpdateAgentsAtRejectsInvalidRole(t *testing.T) {
 // clone it hands every reader.
 func TestSettingsAgentRoleAndAgentRoles(t *testing.T) {
 	settings := New(NewData())
-	if got := settings.AgentRole(AgentAdvisor); got != "" {
-		t.Fatalf("unset advisor role = %q, want empty", got)
+	if got := settings.AgentRole(AgentReviewer); got != "" {
+		t.Fatalf("unset reviewer role = %q, want empty", got)
 	}
 	if got := settings.AgentRoles(); got != nil {
 		t.Fatalf("unset map = %v, want nil", got)
@@ -378,67 +381,32 @@ func TestSettingsAgentRoleAndAgentRoles(t *testing.T) {
 	}
 }
 
-// A legacy advisor.model written as "@role" survives the tab's save: the fold
-// moves it onto agents.roles.advisor before the block is replaced, so a save
-// that ships the effective bindings keeps the assignment instead of dropping it.
-func TestUpdateAgentsAtKeepsFoldedAdvisorRole(t *testing.T) {
+// The advisor's switch is its own block: writing it replaces the block without
+// touching the roles map or the retired model slot's migration.
+func TestUpdateAdvisorAtWritesOnlyTheSwitch(t *testing.T) {
 	home := t.TempDir()
-	work := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	t.Chdir(work)
 
-	file := writeUserSettingsFile(t, home, `{"advisor":{"enable":true,"model":"@deep"}}`)
-	if err := TrustWorkspace(work); err != nil {
-		t.Fatal(err)
-	}
-	effective, err := NewLoaderForCwd(work).Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The panel seeds its form from the effective settings, so this is the map
-	// a save ships — the assignment the fold produced, not the legacy key.
-	if err := UpdateAgentsAt(effective.Agents.Roles, effective.Advisor, ScopeUser); err != nil {
-		t.Fatalf("UpdateAgentsAt: %v", err)
+	file := writeUserSettingsFile(t, home, `{"agents":{"roles":{"quick":"fast"}},"modelRoles":{"fast":"openai/gpt-5-mini"}}`)
+	if err := UpdateAdvisorAt(AdvisorSettings{Enable: boolPtr(true)}, ScopeUser); err != nil {
+		t.Fatalf("UpdateAdvisorAt: %v", err)
 	}
 
 	data := readSettingsFile(t, file)
-	if got := data.AgentRole(AgentAdvisor); got != "deep" {
-		t.Fatalf("agents.roles.advisor = %q, want the fold's deep", got)
-	}
-	if data.Advisor.Model != "" {
-		t.Fatalf("advisor.model = %q, want the folded key gone", data.Advisor.Model)
-	}
 	if !data.Advisor.Enabled() {
-		t.Fatal("the save turned the advisor off")
+		t.Fatal("the switch did not reach the file")
 	}
-}
-
-// A concrete model pin the tab has no control for is not silently cleared by a
-// save that only assigns roles, and it is dropped once a role is assigned
-// (which supersedes it).
-func TestUpdateAgentsAtKeepsLegacyModelPin(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-
-	file := writeUserSettingsFile(t, home, `{"advisor":{"enable":true,"model":"anthropic/claude-sonnet-4-5"}}`)
-	if err := UpdateAgentsAt(map[string]string{AgentQuick: "fast"}, AdvisorSettings{Enable: boolPtr(true)}, ScopeUser); err != nil {
-		t.Fatalf("UpdateAgentsAt: %v", err)
+	if got := data.AgentRole(AgentQuick); got != "fast" {
+		t.Errorf("agents.roles.quick = %q, want it untouched", got)
 	}
-	data := readSettingsFile(t, file)
-	if data.Advisor.Model != "anthropic/claude-sonnet-4-5" {
-		t.Fatalf("advisor.model = %q, want the pin kept", data.Advisor.Model)
+	if got := data.ModelRole("fast"); got != "openai/gpt-5-mini" {
+		t.Errorf("modelRoles.fast = %q, want it untouched", got)
 	}
-
-	if err := UpdateAgentsAt(map[string]string{AgentAdvisor: "deep"}, AdvisorSettings{Enable: boolPtr(true)}, ScopeUser); err != nil {
-		t.Fatalf("UpdateAgentsAt: %v", err)
+	if err := UpdateAdvisorAt(AdvisorSettings{Enable: boolPtr(false)}, ScopeUser); err != nil {
+		t.Fatalf("UpdateAdvisorAt: %v", err)
 	}
-	data = readSettingsFile(t, file)
-	if data.Advisor.Model != "" {
-		t.Fatalf("advisor.model = %q, want it cleared once a role is assigned", data.Advisor.Model)
-	}
-	if got := data.AgentRole(AgentAdvisor); got != "deep" {
-		t.Fatalf("agents.roles.advisor = %q, want deep", got)
+	if data := readSettingsFile(t, file); data.Advisor.Enabled() {
+		t.Fatal("an explicit off did not persist")
 	}
 }

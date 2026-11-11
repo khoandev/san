@@ -188,3 +188,52 @@ func TestWidthMeasuresGlyphs(t *testing.T) {
 		}
 	}
 }
+
+// SymbolsFor answers the table a style draws, so a caller that must pin a table
+// (the splash's plain fallback) does not re-implement the mapping. "auto" only
+// reaches it already resolved; anything unknown stays on the default table.
+func TestSymbolsForAnswersEveryStyle(t *testing.T) {
+	for _, tt := range []struct {
+		style string
+		want  Symbols
+	}{
+		{IconStyleUnicode, unicodeSymbols},
+		{IconStyleEmoji, emojiSymbols},
+		{IconStyleNerd, nerdSymbols},
+		{IconStylePlain, plainSymbols},
+		{IconStyleAuto, unicodeSymbols},
+		{"crayon", unicodeSymbols},
+	} {
+		if got := SymbolsFor(tt.style); !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("SymbolsFor(%q) = %+v", tt.style, got)
+		}
+	}
+}
+
+// The plain table is what a pipe or a NO_COLOR run draws: one printable ASCII
+// cell per mark, so a column reserved for a glyph keeps its width when the
+// output leaves the terminal.
+func TestPlainTableIsOnePrintableASCIICell(t *testing.T) {
+	v := reflect.ValueOf(plainSymbols)
+	for i := range v.NumField() {
+		field := v.Field(i)
+		var marks []string
+		if field.Kind() == reflect.Slice {
+			for j := range field.Len() {
+				marks = append(marks, field.Index(j).String())
+			}
+		} else {
+			marks = append(marks, field.String())
+		}
+		for _, mark := range marks {
+			if got := Width(mark); got != 1 {
+				t.Errorf("plain %s = %q: %d cells, want 1", v.Type().Field(i).Name, mark, got)
+			}
+			for _, r := range mark {
+				if r < ' ' || r > '~' {
+					t.Errorf("plain %s = %q: %q is not printable ASCII", v.Type().Field(i).Name, mark, r)
+				}
+			}
+		}
+	}
+}

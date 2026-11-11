@@ -1,6 +1,6 @@
-// The advisor reviews on a model role, not on a hardcoded rung: agents.roles
-// decides which one, deep answers when the agents tab assigned nothing, and a
-// legacy advisor.model still means what it used to.
+// The advisor reviews on its own model role, not on a hardcoded rung and not on
+// a model setting of its own: modelRoles.advisor (bound in /models) decides,
+// and an unassigned role reviews on the session model.
 package app
 
 import (
@@ -11,16 +11,13 @@ import (
 )
 
 // advisorRoleModel builds the smallest model the advisor helpers read: a
-// session provider/model plus live settings carrying modelRoles and the agent
-// role assignments. No provider store is connected, so bare ids stay on the
-// session provider the way an unqualified binding does.
-func advisorRoleModel(t *testing.T, roles, agentRoles map[string]string) *model {
+// session provider/model plus live settings carrying modelRoles. No provider
+// store is connected, so bare ids stay on the session provider the way an
+// unqualified binding does.
+func advisorRoleModel(t *testing.T, roles map[string]string) *model {
 	t.Helper()
 	provider := &switchProviderStub{name: "anthropic"}
 	data := &setting.Data{ModelRoles: roles}
-	if agentRoles != nil {
-		data.Agents.Roles = agentRoles
-	}
 	return &model{
 		env: env{
 			LLMProvider:  provider,
@@ -33,95 +30,70 @@ func advisorRoleModel(t *testing.T, roles, agentRoles map[string]string) *model 
 	}
 }
 
-// The assignment wins over the deep default: moving the advisor row to another
-// role moves the review, with no per-model setting involved.
-func TestAdvisorReviewsOnTheAssignedRole(t *testing.T) {
-	bindings := map[string]string{"fast": "haiku", "standard": "worker", "deep": "opus"}
+// The advisor role's binding moves the review, with no per-advisor model setting
+// involved.
+func TestAdvisorReviewsOnItsRole(t *testing.T) {
+	bindings := map[string]string{"fast": "haiku", "deep": "opus", setting.AgentAdvisor: "opus"}
 
-	m := advisorRoleModel(t, bindings, nil)
-	if _, modelID := m.resolveAdvisorModel(setting.AdvisorSettings{}); modelID != "opus" {
-		t.Fatalf("unassigned advisor model = %q, want the deep role's opus", modelID)
+	m := advisorRoleModel(t, bindings)
+	if _, modelID := m.resolveAdvisorModel(); modelID != "opus" {
+		t.Fatalf("advisor model = %q, want the advisor role's opus", modelID)
 	}
 
-	m = advisorRoleModel(t, bindings, map[string]string{setting.AgentAdvisor: "fast"})
-	if _, modelID := m.resolveAdvisorModel(setting.AdvisorSettings{}); modelID != "haiku" {
-		t.Fatalf("assigned advisor model = %q, want the fast role's haiku", modelID)
+	// Moving the role moves the review; the other rungs have nothing to do with
+	// it.
+	m = advisorRoleModel(t, map[string]string{"fast": "haiku", "deep": "opus", setting.AgentAdvisor: "haiku"})
+	if _, modelID := m.resolveAdvisorModel(); modelID != "haiku" {
+		t.Fatalf("advisor model = %q, want the role's haiku", modelID)
 	}
 
-	// The lookup folds case, the way the agents.roles fold writes it.
-	m = advisorRoleModel(t, bindings, map[string]string{"Advisor": "standard"})
-	if _, modelID := m.resolveAdvisorModel(setting.AdvisorSettings{}); modelID != "worker" {
-		t.Fatalf("assigned advisor model = %q, want the standard role's worker", modelID)
-	}
-}
-
-// A legacy advisor.model keeps its old meanings: "@role" names a routing slot,
-// a concrete reference pins the model — until an agents-tab role assignment
-// supersedes the pin, the precedence UpdateAgentsAt writes to the file.
-func TestAdvisorLegacyModelStillApplies(t *testing.T) {
-	bindings := map[string]string{"fast": "haiku", "deep": "opus"}
-
-	m := advisorRoleModel(t, bindings, nil)
-	if _, modelID := m.resolveAdvisorModel(setting.AdvisorSettings{Model: "@fast"}); modelID != "haiku" {
-		t.Fatalf("legacy @fast model = %q, want haiku", modelID)
-	}
-	// A bare id stays on the session provider, so the pin is visible without a
-	// connected provider store.
-	if _, modelID := m.resolveAdvisorModel(setting.AdvisorSettings{Model: "claude-sonnet-4-5"}); modelID != "claude-sonnet-4-5" {
-		t.Fatalf("legacy pin = %q, want the pinned model", modelID)
-	}
-
-	assigned := advisorRoleModel(t, bindings, map[string]string{setting.AgentAdvisor: "deep"})
-	if _, modelID := assigned.resolveAdvisorModel(setting.AdvisorSettings{Model: "claude-sonnet-4-5"}); modelID != "opus" {
-		t.Fatalf("assigned role = %q, want it to supersede the pin", modelID)
+	// A binding written under another spelling of the key still answers.
+	m = advisorRoleModel(t, map[string]string{"Advisor": "sonnet"})
+	if _, modelID := m.resolveAdvisorModel(); modelID != "sonnet" {
+		t.Fatalf("advisor model = %q, want the bound sonnet", modelID)
 	}
 }
 
-// A role change has to reach a running session: the signature names the role it
-// resolved, so syncAdvisor rewires instead of keeping the old model.
+// An unassigned advisor role reviews on the session model, the same fallback
+// every unassigned role takes.
+func TestAdvisorRoleFallsBackToTheSessionModel(t *testing.T) {
+	m := advisorRoleModel(t, map[string]string{"deep": "opus"})
+	if _, modelID := m.resolveAdvisorModel(); modelID != "session-model" {
+		t.Fatalf("unassigned advisor model = %q, want the session model", modelID)
+	}
+
+	// A role bound to a vendor this session has not connected falls back too,
+	// rather than failing the review.
+	m = advisorRoleModel(t, map[string]string{setting.AgentAdvisor: "openai/gpt-5-mini"})
+	if _, modelID := m.resolveAdvisorModel(); modelID != "session-model" {
+		t.Fatalf("unresolvable role = %q, want the session model", modelID)
+	}
+}
+
+// A role change has to reach a running session: the signature names the model it
+// resolved, so syncAdvisor rewires instead of keeping the old one.
 func TestAdvisorSignatureFollowsTheRole(t *testing.T) {
 	on := true
 	cfg := setting.AdvisorSettings{Enable: &on}
-	bindings := map[string]string{"fast": "haiku", "deep": "opus"}
 
-	deep := advisorRoleModel(t, bindings, map[string]string{setting.AgentAdvisor: "deep"})
-	deep.env.Advisor = cfg
-	deepSig := deep.advisorSignature()
+	opus := advisorRoleModel(t, map[string]string{setting.AgentAdvisor: "opus"})
+	opus.env.Advisor = cfg
+	opusSig := opus.advisorSignature()
 
-	fast := advisorRoleModel(t, bindings, map[string]string{setting.AgentAdvisor: "fast"})
-	fast.env.Advisor = cfg
-	fastSig := fast.advisorSignature()
+	haiku := advisorRoleModel(t, map[string]string{setting.AgentAdvisor: "haiku"})
+	haiku.env.Advisor = cfg
+	haikuSig := haiku.advisorSignature()
 
-	if deepSig == fastSig {
-		t.Fatalf("role change did not move the signature: %q", deepSig)
+	if opusSig == haikuSig {
+		t.Fatalf("role change did not move the signature: %q", opusSig)
 	}
-	if deepSig == "" || fastSig == "" {
+	if opusSig == "" || haikuSig == "" {
 		t.Fatal("an enabled advisor needs a signature")
 	}
 
-	// A different model behind the same role moves it too: a modelRoles edit
-	// must rewire as well.
-	moved := advisorRoleModel(t, map[string]string{"fast": "sonnet", "deep": "opus"}, map[string]string{setting.AgentAdvisor: "fast"})
-	moved.env.Advisor = cfg
-	if moved.advisorSignature() == fastSig {
-		t.Fatalf("model change did not move the signature: %q", fastSig)
-	}
-
 	// A disabled advisor has no review to describe.
-	off := advisorRoleModel(t, bindings, nil)
+	off := advisorRoleModel(t, nil)
 	if got := off.advisorSignature(); got != "" {
 		t.Fatalf("disabled advisor signature = %q, want empty", got)
-	}
-}
-
-// An unconnected vendor in the role's binding still leaves the advisor on the
-// session model rather than failing the review.
-func TestAdvisorRoleFallsBackToTheSessionModel(t *testing.T) {
-	// A custom role is legal, and its binding names a vendor this session has
-	// not connected.
-	m := advisorRoleModel(t, map[string]string{"custom-role": "openai/gpt-5-mini"}, map[string]string{setting.AgentAdvisor: "custom-role"})
-	_, modelID := m.resolveAdvisorModel(setting.AdvisorSettings{})
-	if modelID != "session-model" {
-		t.Fatalf("unresolvable role = %q, want the session model", modelID)
 	}
 }

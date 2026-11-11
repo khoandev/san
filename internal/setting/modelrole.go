@@ -8,12 +8,13 @@ import (
 
 // foldSettings applies the migrations that keep a hand-written settings file
 // routing after a setting moves: retired role names fold onto the rung that
-// answers their work, and the advisor's old per-agent model slot moves onto
-// agents.roles. Every read and every write runs it, so a file written by an
-// older san keeps working and a save rewrites the legacy spelling.
+// answers their work, and the advisor's two retired model slots move onto the
+// "advisor" model role. Every read and every write runs it, so a file written
+// by an older san keeps working and a save rewrites the legacy spelling.
 func foldSettings(d *Data) {
 	foldModelRoles(d)
-	foldAgentRoles(d)
+	foldAdvisorRole(d)
+	d.Agents.Roles = foldAgentRoleMap(d.Agents.Roles)
 }
 
 // foldModelRoles rewrites the retired per-agent role names — smol, plan, task
@@ -54,42 +55,47 @@ func foldRoleMap(entries map[string]string) map[string]string {
 	return folded
 }
 
-// foldAgentRoles migrates the advisor's retired per-agent model slot onto
-// agents.roles and normalizes the agent→role map.
+// foldAdvisorRole moves the advisor's retired model slots onto modelRoles.advisor,
+// the one place a review's model is configured now:
 //
-// advisor.model written as "@<role>" names a routing slot, not a model: the
-// agents block is where a role is assigned now, so the entry moves there and
-// the old key is cleared. A concrete reference — "vendor/model" or a bare id —
-// is left alone, because it pins a model rather than naming a role, and only
-// the advisor has ever accepted one.
-func foldAgentRoles(d *Data) {
-	if role, ok := agentRoleRef(d.Advisor.Model); ok {
-		// An entry already assigned wins, however it is spelled; the retired
-		// slot only fills the gap.
-		if d.AgentRole(AgentAdvisor) == "" {
-			if d.Agents.Roles == nil {
-				d.Agents.Roles = make(map[string]string)
-			}
-			d.Agents.Roles[AgentAdvisor] = role
-		}
-		d.Advisor.Model = ""
+//   - agents.roles.advisor named the role of the review, which is the advisor
+//     slot filled with a role reference. It moves as "@<role>", the spelling
+//     that still expands through the bindings, so the review keeps answering on
+//     the model it answered on before.
+//   - advisor.model held either an "@role" reference or a concrete model pin
+//     ("vendor/model", a bare id). Both are references modelRoles accepts, so
+//     the value moves verbatim.
+//
+// A binding already present at modelRoles.advisor wins however it is spelled —
+// the retired slots only fill the gap — and both retired slots are cleared
+// either way, so the next save stops writing them.
+func foldAdvisorRole(d *Data) {
+	ref := ""
+	role := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(d.AgentRole(AgentAdvisor))), "@")
+	if role != "" {
+		ref = "@" + core.CanonicalModelRole(role)
 	}
-	d.Agents.Roles = foldAgentRoleMap(d.Agents.Roles)
+	if ref == "" {
+		ref = strings.TrimSpace(d.Advisor.Model)
+	}
+	if ref != "" && d.ModelRole(AgentAdvisor) == "" {
+		if d.ModelRoles == nil {
+			d.ModelRoles = make(map[string]string)
+		}
+		d.ModelRoles[AgentAdvisor] = ref
+	}
+	d.Advisor.Model = ""
+	clearAgentRoleKey(d.Agents.Roles, AgentAdvisor)
 }
 
-// agentRoleRef reads an "@<role>" reference as the role it names. A bare name
-// is not a role reference here: agent definitions spell aliases with the "@"
-// prefix, and a bare id is a model id.
-func agentRoleRef(ref string) (string, bool) {
-	ref = strings.TrimSpace(ref)
-	if !strings.HasPrefix(ref, "@") {
-		return "", false
+// clearAgentRoleKey drops every spelling of one agent name from an agent→role
+// map, so a retired key does not resurrect on the next fold.
+func clearAgentRoleKey(entries map[string]string, name string) {
+	for key := range entries {
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			delete(entries, key)
+		}
 	}
-	name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(ref, "@")))
-	if !ValidModelRoleName(name) {
-		return "", false
-	}
-	return core.CanonicalModelRole(name), true
 }
 
 // foldAgentRoleMap normalizes one agent→role map: keys are lowercased agent

@@ -1,18 +1,20 @@
-// /settings Agent tab: the model role each agent runs on — the advisor plus the
-// four bundled definitions — with the model that role resolves to shown on the
-// row, and the advisor's one extra state: off. The tab hosts this form below the
-// YOLO gate's row (see config_agent_tab.go).
+// /settings Agent tab: the YOLO gate, the advisor's on/off switch, and the model
+// role each bundled subagent runs on.
 //
-// A role is a routing slot, so the tab assigns roles and never a concrete model:
-// moving every review to a stronger model stays a one-word edit, and an agent's
-// own definition file is left alone. The rows read the effective role (the
-// assignment, or the role the definition declares) and resolve it through the
-// same bindings the executor reads, so the row cannot advertise a model the run
-// will not use. Both blocks are saved in one read-modify-write (see
-// setting.UpdateAgentsAt), which is also what migrates a legacy advisor.model.
+// The tab is laid out and driven like the Appearance tab, because it holds the
+// same kind of thing: personal preferences. There is one scope — the user
+// settings file — so there is no scope control and no Save row; a change is
+// written the moment it is made, and the app is told so it can rewire the
+// session.
 //
-// The tab owns agents.roles and the advisor block only: the agents.autoTier
-// switch lives in /config, and every other setting in the file is left as it is.
+// The advisor owns no model setting of its own. Its model is the "advisor" model
+// role, bound in /models beside the rungs; this tab only says whether a review
+// runs. A role is a routing slot, so the agent rows assign roles and never a
+// concrete model: moving work to a stronger model stays a one-word edit, and an
+// agent's own definition file is left alone. Each row reads the effective role
+// (the assignment, or the role the definition declares) and resolves it through
+// the same bindings the executor reads, so the row cannot advertise a model the
+// run will not use.
 package input
 
 import (
@@ -27,57 +29,49 @@ import (
 	"github.com/genai-io/san/internal/setting"
 )
 
-// AgentsScope names where an agents-tab save goes. It mirrors setting.Scope;
-// turning the advisor on for this session alone is what /advisor does instead.
-type AgentsScope string
-
-const (
-	AgentsScopeUser    AgentsScope = "user"
-	AgentsScopeProject AgentsScope = "project"
-)
-
-// AgentsConfigSavedMsg reports the blocks an agents-tab save wrote. The panel
-// has already persisted them; the app owns the live session config and the
-// rewiring that follows from it.
+// AgentsConfigSavedMsg reports a change the agents tab has already written to
+// the user settings file. The app owns the live session config and the rewiring
+// that follows from it.
 type AgentsConfigSavedMsg struct {
-	Scope   AgentsScope
-	Advisor setting.AdvisorSettings
-	Roles   map[string]string
+	// Notice is the one-line confirmation, e.g. "advisor on".
+	Notice string
 }
 
-// advisorDefaultRole is the role the advisor reviews on when the tab has
-// assigned none: the rung the advisor exists for.
-const advisorDefaultRole = llm.RoleDeep
-
-// managedAgents are the agents the tab assigns roles for, in display order. The
-// advisor comes first because it is the only one with an off switch.
+// managedAgents are the agents the tab assigns a role to, in display order. The
+// advisor is not one of them: its model is the "advisor" model role, and its one
+// control here is the switch.
 var managedAgents = []string{
-	setting.AgentAdvisor,
 	setting.AgentQuick,
 	setting.AgentExplore,
 	setting.AgentTask,
 	setting.AgentReviewer,
 }
 
-// agentsConfig is the tab's working copy: the advisor's block plus the role
-// assigned to each agent. A name missing from Roles keeps the role its own
-// definition declares.
-type agentsConfig struct {
-	Advisor setting.AdvisorSettings
-	Roles   map[string]string
+// agentDescriptions names what each bundled agent is for, beside its row.
+var agentDescriptions = map[string]string{
+	setting.AgentQuick:    "small, well-scoped edits",
+	setting.AgentExplore:  "read-only investigation",
+	setting.AgentTask:     "general implementation work",
+	setting.AgentReviewer: "independent review of a diff",
 }
 
-// clone copies the working copy, so the baseline and the saved message each own
-// their map and tri-state pointer.
-func (c agentsConfig) clone() agentsConfig {
-	c.Advisor = c.Advisor.Clone()
-	c.Roles = maps.Clone(c.Roles)
-	return c
-}
+// agentRowKind discriminates the tab's rows.
+type agentRowKind int
 
-// equal compares what the tab can edit, for the unsaved-edits marker.
-func (c agentsConfig) equal(other agentsConfig) bool {
-	return c.Advisor.Equal(other.Advisor) && maps.Equal(c.Roles, other.Roles)
+const (
+	agentRowGate    agentRowKind = iota // drills into the YOLO gate
+	agentRowAdvisor                     // the advisor's on/off switch
+	agentRowRole                        // one agent's role, behind the picker
+)
+
+// agentRow is one line of the tab: the section it belongs to, what activating it
+// does, and what it is called.
+type agentRow struct {
+	kind    agentRowKind
+	section string
+	agent   string
+	label   string
+	desc    string
 }
 
 // AgentRoleSource tells the agents tab which role an agent falls back to and
@@ -94,15 +88,10 @@ type AgentRoleSource struct {
 	Resolve func(role string) (model, effort string)
 }
 
-// agentsPanel is the Agent tab's role form: a configForm over the agentsConfig
-// working copy, plus the role sub-view that assigns one agent's role. The tab
-// that hosts it also injects the YOLO gate's row above these rows.
-type agentsPanel struct {
-	form configForm[agentsConfig]
-
-	// settings is the live settings handle the form seeds from. The panel reads
-	// only the role names it offers from it, at Enter, so a role added while
-	// the popup is open shows up the next time it opens.
+// agentPanel is the /settings Agent tab: one list of rows, the YOLO gate and the
+// role picker behind them, and the writes that follow a change.
+type agentPanel struct {
+	// settings is the live settings handle the panel seeds from.
 	settings *setting.Settings
 
 	// source resolves roles to models and names a definition's declared role.
@@ -112,48 +101,56 @@ type agentsPanel struct {
 	// roles are the role names the picker offers, read at Enter.
 	roles []string
 
-	// picking is the role sub-view: while it is open the panel owns the keys
-	// and the shell routes esc to it instead of closing the popup.
+	cursor int
+
+	// picking and inPerms are the two sub-views. While either is open the panel
+	// owns the keys and the shell routes esc here instead of closing the popup.
 	picking bool
 	pick    agentRolePick
+
+	perms   *permissionsPanel
+	inPerms bool
+
+	// advisor is the working copy the switch writes; agentRoles is the
+	// agents.roles map the picker writes. Both are seeded from the live settings
+	// at Enter and replaced by what was actually written.
+	advisor    setting.AdvisorSettings
+	agentRoles map[string]string
+
+	// saveErr holds the last failed write so Render can surface it inline
+	// instead of silently swallowing it. Cleared on the next successful write
+	// or on re-entry.
+	saveErr error
 }
 
-func newAgentsPanel(settings *setting.Settings) *agentsPanel {
-	p := &agentsPanel{settings: settings}
-	p.form = configForm[agentsConfig]{
-		workspace: func() (string, *setting.Settings) { return "", settings },
-		rowsFn:    func() []configRow[agentsConfig] { return p.rows() },
-		scopes:    []configScope{scopeUser, scopeProject},
-		seed: func(data *setting.Data) agentsConfig {
-			return agentsConfig{Advisor: data.Advisor.Clone(), Roles: maps.Clone(data.Agents.Roles)}
-		},
-		equal:    func(a, b agentsConfig) bool { return a.equal(b) },
-		validate: func(c agentsConfig) error { return setting.ValidateAgentRoles(c.Roles) },
-		persist: func(c agentsConfig, scope configScope) error {
-			return setting.UpdateAgentsAt(c.Roles, c.Advisor, setting.Scope(scope))
-		},
-		saved: func(c agentsConfig, scope configScope) tea.Msg {
-			saved := c.clone()
-			return AgentsConfigSavedMsg{Scope: AgentsScope(scope), Advisor: saved.Advisor, Roles: saved.Roles}
-		},
+func newAgentPanel(settings *setting.Settings) *agentPanel {
+	return &agentPanel{settings: settings, perms: newPermissionsPanel(settings)}
+}
+
+func (p *agentPanel) Title() string { return "agents" }
+
+// Enter seeds both halves from the settings file the panel was built over and
+// re-reads the roles the picker offers.
+func (p *agentPanel) Enter() {
+	p.picking, p.inPerms = false, false
+	p.advisor, p.agentRoles = setting.AdvisorSettings{}, nil
+	if p.settings != nil {
+		if data := p.settings.Snapshot(); data != nil {
+			p.advisor = data.Advisor.Clone()
+			p.agentRoles = maps.Clone(data.Agents.Roles)
+		}
 	}
-	return p
-}
-
-func (p *agentsPanel) Title() string { return "agents" }
-
-// Enter seeds the working copy from the settings file the panel was built over
-// and re-reads the roles the picker offers.
-func (p *agentsPanel) Enter() {
-	p.picking = false
-	p.form.Enter()
 	p.roles = p.knownRoles()
+	p.cursor = 0
+	p.saveErr = nil
+	p.perms.Enter()
 }
 
 // knownRoles is the ladder plus every custom role modelRoles binds, sorted, so
 // the picker offers the roles this user actually configured — a custom role is
-// as assignable as a rung.
-func (p *agentsPanel) knownRoles() []string {
+// as assignable as a rung. The advisor's own slot is left out: it fills the
+// review, not a subagent.
+func (p *agentPanel) knownRoles() []string {
 	roles := []string{
 		string(llm.RoleDefault), string(llm.RoleFast),
 		string(llm.RoleStandard), string(llm.RoleDeep),
@@ -161,109 +158,280 @@ func (p *agentsPanel) knownRoles() []string {
 	var custom []string
 	if p.settings != nil {
 		for name := range p.settings.ModelRoles() {
-			if !slices.Contains(roles, name) {
-				custom = append(custom, name)
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name == setting.AgentAdvisor || slices.Contains(roles, name) || slices.Contains(custom, name) {
+				continue
 			}
+			custom = append(custom, name)
 		}
 	}
 	slices.Sort(custom)
 	return append(roles, custom...)
 }
 
-func (p *agentsPanel) Dirty() bool { return p.form.Dirty() }
+// Dirty reports a change that could not be written. Every row applies
+// immediately, so a clean tab is the normal state.
+func (p *agentPanel) Dirty() bool { return p.saveErr != nil }
 
-func (p *agentsPanel) HintLine() string {
-	if p.picking {
+func (p *agentPanel) HintLine() string {
+	switch {
+	case p.inPerms:
+		return kit.HintLine(radioHintLine(), keycap("esc")+" back")
+	case p.picking:
 		return p.pick.hint()
 	}
-	return kit.HintLine(
-		keycap("↑↓")+" navigate",
-		keycap("enter")+" change role",
-		keycap("←→")+" scope",
-		keycap("esc")+" discard",
-	)
+	if p.rows()[p.cursor].kind == agentRowAdvisor {
+		return kit.HintLine(keycap("↑↓")+" move", keycap("←→")+" off/on", keycap("enter")+" apply")
+	}
+	return kit.HintLine(keycap("↑↓")+" move", keycap("enter")+" open")
 }
 
-// Modal reports the role sub-view: while it is open the panel drives esc
-// itself, so it backs out of the picker instead of closing /settings.
-func (p *agentsPanel) Modal() bool { return p.picking }
+// Modal reports a sub-view: while one is open the panel drives esc itself, so it
+// backs out of the sub-view instead of closing /settings.
+func (p *agentPanel) Modal() bool { return p.inPerms || p.picking }
 
 // Breadcrumb names the sub-view the shell shows in the header lockup.
-func (p *agentsPanel) Breadcrumb() string {
-	if p.picking {
+func (p *agentPanel) Breadcrumb() string {
+	switch {
+	case p.inPerms:
+		return "permissions"
+	case p.picking:
 		return p.pick.crumb()
 	}
 	return ""
 }
 
-func (p *agentsPanel) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+func (p *agentPanel) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	if p.inPerms {
+		// The shell hands esc here instead of dismissing /settings, so esc is
+		// the way back to the tab body.
+		if msg.String() == "esc" {
+			p.inPerms = false
+			return nil, false
+		}
+		cmd, done := p.perms.HandleKey(msg)
+		if done {
+			// The gate saved; the tab stays open so the new state is visible.
+			p.inPerms = false
+		}
+		return cmd, false
+	}
 	if p.picking {
 		closed, picked, choice := p.pick.handleKey(msg)
 		if picked {
-			p.apply(choice)
+			p.picking = false
+			return p.apply(choice), false
 		}
-		if picked || closed {
+		if closed {
 			p.picking = false
 		}
 		return nil, false
 	}
-	cmd, done, activated := p.form.HandleKey(msg)
-	if activated != "" {
-		p.openRolePick(activated)
+
+	rows := p.rows()
+	p.cursor = min(max(p.cursor, 0), len(rows)-1)
+	switch msg.String() {
+	case "up", "k":
+		p.cursor = max(p.cursor-1, 0)
+		p.saveErr = nil
+	case "down", "j":
+		p.cursor = min(p.cursor+1, len(rows)-1)
+		p.saveErr = nil
+	case "left", "h", "right", "l":
+		if rows[p.cursor].kind == agentRowAdvisor {
+			return p.setAdvisor(msg.String() == "right" || msg.String() == "l"), false
+		}
+	case "enter", " ":
+		return p.activate(rows[p.cursor]), false
 	}
-	return cmd, done
+	return nil, false
 }
 
-func (p *agentsPanel) Render(width, height int) string {
-	if p.picking {
+func (p *agentPanel) Render(width, height int) string {
+	switch {
+	case p.inPerms:
+		return p.perms.Render(width, height)
+	case p.picking:
 		return p.pick.render(width)
 	}
-	p.form.visible = max(height-1, 0)
-	return p.form.Render(width)
+	return renderSettingBody(p.renderBody(width), width, height)
 }
 
 // SetRoleSource wires the resolver behind every row's model label and the
 // picker's per-role detail.
-func (p *agentsPanel) SetRoleSource(src AgentRoleSource) { p.source = src }
+func (p *agentPanel) SetRoleSource(src AgentRoleSource) { p.source = src }
+
+// activate runs the hovered row. Only the switch writes anything by itself; the
+// other rows open a sub-view that writes its own change.
+func (p *agentPanel) activate(row agentRow) tea.Cmd {
+	switch row.kind {
+	case agentRowGate:
+		p.perms.Enter()
+		p.inPerms = true
+	case agentRowAdvisor:
+		return p.setAdvisor(!p.advisor.Enabled())
+	case agentRowRole:
+		p.openRolePick(row.agent)
+	}
+	return nil
+}
+
+// ── Writes ──────────────────────────────────────────────────────────────
+
+// setAdvisor turns the review on or off in the user settings file and reports
+// the change. The write replaces the whole block, so an explicit off persists
+// instead of being folded back into "unset".
+func (p *agentPanel) setAdvisor(on bool) tea.Cmd {
+	cfg := p.advisor.Clone()
+	cfg.Enable = &on
+	if err := setting.UpdateAdvisorAt(cfg, setting.ScopeUser); err != nil {
+		p.saveErr = err
+		return nil
+	}
+	p.advisor = cfg
+	p.saveErr = nil
+	notice := "advisor off"
+	if on {
+		notice = "advisor on"
+	}
+	return func() tea.Msg { return AgentsConfigSavedMsg{Notice: notice} }
+}
+
+// apply writes the picker's choice into the user settings file. The role map is
+// replaced wholesale, so clearing an assignment (back to the definition's own
+// role) actually persists.
+func (p *agentPanel) apply(choice agentRoleChoice) tea.Cmd {
+	agent := p.pick.agent
+	roles := maps.Clone(p.agentRoles)
+	if roles == nil {
+		roles = make(map[string]string)
+	}
+	if choice.kind == roleChoiceDefinition {
+		delete(roles, agent)
+	} else {
+		roles[agent] = choice.role
+	}
+	if err := setting.UpdateAgentRolesAt(roles, setting.ScopeUser); err != nil {
+		p.saveErr = err
+		return nil
+	}
+	p.agentRoles = roles
+	p.saveErr = nil
+	return func() tea.Msg { return AgentsConfigSavedMsg{Notice: agent + " role saved"} }
+}
+
+// ── Rows ────────────────────────────────────────────────────────────────
+
+// rows is the whole tab, in display order: the gate, the advisor's switch, then
+// one row per bundled agent.
+func (p *agentPanel) rows() []agentRow {
+	rows := []agentRow{
+		{section: "Permissions", kind: agentRowGate, label: "YOLO mode", desc: "shift+tab reaches YOLO mode"},
+		{section: "Advisor", kind: agentRowAdvisor, label: "Advisor", desc: "reviews each finished turn"},
+	}
+	for _, agent := range managedAgents {
+		rows = append(rows, agentRow{
+			section: "Agents",
+			kind:    agentRowRole,
+			agent:   agent,
+			label:   agentLabel(agent),
+			desc:    agentDescriptions[agent],
+		})
+	}
+	return rows
+}
+
+// agentLabel title-cases an agent name for its row, so the labels read as names
+// while the entry identity stays the lowercase name settings use.
+func agentLabel(agent string) string {
+	if agent == "" {
+		return ""
+	}
+	return strings.ToUpper(agent[:1]) + agent[1:]
+}
+
+// renderBody draws the rows, recording where the hovered section starts so the
+// window can keep its heading in view.
+func (p *agentPanel) renderBody(width int) settingBody {
+	rows := p.rows()
+	body := settingBody{lines: make([]string, 0, len(rows)*2)}
+	previous := ""
+	sectionRow := 0
+	for i, row := range rows {
+		if row.section != previous {
+			if previous != "" {
+				body.lines = append(body.lines, "")
+			}
+			sectionRow = len(body.lines)
+			body.lines = append(body.lines, renderAppearanceSection(row.section, width))
+			previous = row.section
+		}
+		if i == p.cursor {
+			body.sectionRow = sectionRow
+			body.cursorRow = len(body.lines)
+		}
+		if row.kind == agentRowAdvisor {
+			body.lines = append(body.lines, renderToggleRow(row.label, row.desc, p.advisor.Enabled(), i == p.cursor, width))
+			continue
+		}
+		body.lines = append(body.lines, renderAgentValueRow(row, p.summaryFor(row), i == p.cursor, width))
+	}
+	if p.saveErr != nil {
+		body.errors = []string{"", appearanceErrorStyle.Render("⚠ couldn't save: " + p.saveErr.Error())}
+	}
+	return body
+}
+
+// renderAgentValueRow draws one drill-in row: the focus bar, the label in the
+// shared control column, the value in effect, then the muted description.
+func renderAgentValueRow(row agentRow, value string, hovered bool, width int) string {
+	head, _ := appearanceRowHead(row.label, hovered)
+	line := head + appearanceLabelStyle.Render(value)
+	if row.desc != "" {
+		line = withDesc(line, row.desc, width)
+	}
+	return line
+}
+
+// summaryFor renders one row's right-hand value: the gate's state, or the role
+// in effect and the model it resolves to. A definition that names a concrete
+// model is named instead of inventing a role for it.
+func (p *agentPanel) summaryFor(row agentRow) string {
+	switch row.kind {
+	case agentRowGate:
+		if p.perms.baseline {
+			return "allowed"
+		}
+		return "locked"
+	case agentRowAdvisor:
+		// The switch draws its own value.
+		return ""
+	}
+	if role := assignedRole(p.agentRoles, row.agent); role != "" {
+		return roleLabel(role) + roleModelLabel(p.resolve(role))
+	}
+	if p.source.Effective != nil {
+		role, model, effort := p.source.Effective(row.agent)
+		if role != "" {
+			return roleLabel(role) + roleModelLabel(model, effort)
+		}
+	}
+	return "definition default"
+}
+
+// ── Role picker ─────────────────────────────────────────────────────────
 
 // openRolePick opens the role sub-view on the row's agent.
-func (p *agentsPanel) openRolePick(agent string) {
+func (p *agentPanel) openRolePick(agent string) {
 	p.pick.begin(agent, p.choicesFor(agent), p.currentChoice(agent))
 	p.picking = true
 }
 
-// apply writes the picker's choice into the working copy. The advisor's off
-// entry keeps the assigned role, so turning it back on resumes the same model.
-func (p *agentsPanel) apply(choice agentRoleChoice) {
-	switch choice.kind {
-	case roleChoiceOff:
-		off := false
-		p.form.snap.Advisor.Enable = &off
-	case roleChoiceDefinition:
-		delete(p.form.snap.Roles, p.pick.agent)
-	default:
-		if p.form.snap.Roles == nil {
-			p.form.snap.Roles = make(map[string]string)
-		}
-		p.form.snap.Roles[p.pick.agent] = choice.role
-		// Choosing a role for the advisor is what turns it on; there is no
-		// separate switch on this tab.
-		if p.pick.agent == setting.AgentAdvisor {
-			on := true
-			p.form.snap.Advisor.Enable = &on
-		}
-	}
-}
-
-// choicesFor lists what the picker offers one agent: the advisor may be
-// switched off, a bundled agent may fall back to its own definition, and every
-// agent may move to any role the ladder or modelRoles names.
-func (p *agentsPanel) choicesFor(agent string) []agentRoleChoice {
-	var choices []agentRoleChoice
-	if agent == setting.AgentAdvisor {
-		choices = append(choices, agentRoleChoice{kind: roleChoiceOff, label: "off", detail: "no review after a turn"})
-	} else {
-		choices = append(choices, agentRoleChoice{kind: roleChoiceDefinition, label: "definition default", detail: p.effectiveRoleDetail(agent)})
+// choicesFor lists what the picker offers one agent: falling back to its own
+// definition, and every role the ladder or modelRoles names.
+func (p *agentPanel) choicesFor(agent string) []agentRoleChoice {
+	choices := []agentRoleChoice{
+		{kind: roleChoiceDefinition, label: "definition default", detail: p.effectiveRoleDetail(agent)},
 	}
 	for _, role := range p.roles {
 		choices = append(choices, agentRoleChoice{
@@ -278,25 +446,17 @@ func (p *agentsPanel) choicesFor(agent string) []agentRoleChoice {
 
 // currentChoice names the entry in effect for one agent, so the picker opens on
 // it.
-func (p *agentsPanel) currentChoice(agent string) agentRoleChoice {
-	c := &p.form.snap
-	if agent == setting.AgentAdvisor {
-		if !c.Advisor.Enabled() {
-			return agentRoleChoice{kind: roleChoiceOff}
-		}
-	} else if assignedRole(c.Roles, agent) == "" {
-		return agentRoleChoice{kind: roleChoiceDefinition}
-	}
-	role := assignedRole(c.Roles, agent)
+func (p *agentPanel) currentChoice(agent string) agentRoleChoice {
+	role := assignedRole(p.agentRoles, agent)
 	if role == "" {
-		role = string(advisorDefaultRole)
+		return agentRoleChoice{kind: roleChoiceDefinition}
 	}
 	return agentRoleChoice{kind: roleChoiceRole, role: role}
 }
 
 // resolve answers the model and effort a role resolves to, or nothing when the
 // panel was built without a source.
-func (p *agentsPanel) resolve(role string) (string, string) {
+func (p *agentPanel) resolve(role string) (string, string) {
 	if p.source.Resolve == nil {
 		return "", ""
 	}
@@ -305,7 +465,7 @@ func (p *agentsPanel) resolve(role string) (string, string) {
 
 // effectiveRoleDetail describes what the definition's own role resolves to, for
 // the picker's "definition default" entry.
-func (p *agentsPanel) effectiveRoleDetail(agent string) string {
+func (p *agentPanel) effectiveRoleDetail(agent string) string {
 	if p.source.Effective == nil {
 		return ""
 	}
@@ -314,29 +474,6 @@ func (p *agentsPanel) effectiveRoleDetail(agent string) string {
 		return "the definition names its own model"
 	}
 	return roleModelLabel(model, effort)
-}
-
-// summaryFor renders one row's right-hand hint: the role in effect and the
-// model it resolves to. The state the user cannot change from this tab — the
-// advisor switched off, or a definition that names a model instead of a role —
-// is named instead of leaving the row blank.
-func (p *agentsPanel) summaryFor(agent string, c *agentsConfig) string {
-	if agent == setting.AgentAdvisor && !c.Advisor.Enabled() {
-		return "off"
-	}
-	if role := assignedRole(c.Roles, agent); role != "" {
-		return roleLabel(role) + roleModelLabel(p.resolve(role))
-	}
-	if agent == setting.AgentAdvisor {
-		return roleLabel(string(advisorDefaultRole)) + roleModelLabel(p.resolve(string(advisorDefaultRole)))
-	}
-	if p.source.Effective != nil {
-		role, model, effort := p.source.Effective(agent)
-		if role != "" {
-			return roleLabel(role) + roleModelLabel(model, effort)
-		}
-	}
-	return "definition default"
 }
 
 // assignedRole reads the role the working copy assigns to name, folding case and
@@ -374,46 +511,4 @@ func roleModelLabel(model, effort string) string {
 		label += " · " + effort
 	}
 	return label
-}
-
-// ── Rows ────────────────────────────────────────────────────────────────
-
-// rows is the whole panel: the advisor's role, the four bundled agents' roles,
-// and the save control. The advisor row is labelled Role because it is the only
-// agent whose name the section header already gives.
-func (p *agentsPanel) rows() []configRow[agentsConfig] {
-	rows := []configRow[agentsConfig]{
-		{kind: rowSubHeader, label: "Advisor"},
-		p.row(setting.AgentAdvisor, "Role", "reviews each finished turn"),
-		{kind: rowSpacer},
-		{kind: rowSubHeader, label: "Agents"},
-	}
-	descriptions := map[string]string{
-		setting.AgentQuick:    "small, well-scoped edits",
-		setting.AgentExplore:  "read-only investigation",
-		setting.AgentTask:     "general implementation work",
-		setting.AgentReviewer: "independent review of a diff",
-	}
-	for _, agent := range managedAgents {
-		if agent == setting.AgentAdvisor {
-			continue
-		}
-		rows = append(rows, p.row(agent, agent, descriptions[agent]))
-	}
-	return append(rows,
-		configRow[agentsConfig]{kind: rowSpacer},
-		configRow[agentsConfig]{kind: rowSave, label: "Save"},
-	)
-}
-
-// row builds one agent's entry row: enter opens the role picker for it.
-func (p *agentsPanel) row(agent, label, desc string) configRow[agentsConfig] {
-	return configRow[agentsConfig]{
-		kind:    rowEntry,
-		label:   label,
-		entryID: agent,
-		desc:    desc,
-		indent:  1,
-		summary: func(c *agentsConfig) string { return p.summaryFor(agent, c) },
-	}
 }

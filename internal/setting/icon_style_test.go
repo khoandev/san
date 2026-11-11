@@ -80,4 +80,33 @@ func TestSaveIconStyle(t *testing.T) {
 			t.Fatalf("reloaded %q as %q", style, controller.IconStyleKind())
 		}
 	}
+	// The launcher reads the style through LoadIconStyle, not a controller.
+	if got := LoadIconStyle(); got != IconStyleAuto {
+		t.Fatalf("LoadIconStyle = %q, want %q", got, IconStyleAuto)
+	}
+}
+
+// A hand-edited or newer value must not reach the renderer: the raw field stays
+// as written, but every accessor the TUI reads normalizes it to the default.
+func TestLoadIconStyleFallsBackForUnknownValue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.MkdirAll(filepath.Join(home, ".san"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".san", "settings.json")
+	if err := os.WriteFile(path, []byte(`{"iconStyle":"crayon"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadIconStyle(); got != DefaultIconStyle {
+		t.Fatalf("LoadIconStyle = %q, want %q", got, DefaultIconStyle)
+	}
+	// Saving a real choice replaces the unknown value instead of appending to it.
+	if err := SaveIconStyle(IconStyleNerd); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadIconStyle(); got != IconStyleNerd {
+		t.Fatalf("after SaveIconStyle, LoadIconStyle = %q, want %q", got, IconStyleNerd)
+	}
 }

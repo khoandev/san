@@ -173,8 +173,8 @@ type Data struct {
 	// steers, how it drives (model + system prompt), and the mission it steers
 	// toward (JSON key "autoPilot").
 	AutoPilot AutoPilotSettings `json:"autoPilot,omitzero"`
-	// Advisor turns the optional reviewer on and names the model it reviews
-	// with (JSON key "advisor"). Off unless enabled.
+	// Advisor turns the optional reviewer on (JSON key "advisor"). Off unless
+	// enabled; the model it reviews with is the "advisor" model role.
 	Advisor AdvisorSettings `json:"advisor,omitzero"`
 	// Agents tunes how delegations are routed (JSON key "agents").
 	Agents AgentsSettings `json:"agents,omitzero"`
@@ -191,21 +191,23 @@ type AgentsSettings struct {
 	// inference classifying it. Read via Settings.AutoTier.
 	AutoTier *bool `json:"autoTier,omitempty"`
 	// Roles assigns a model role to a built-in agent (JSON key "agents.roles"):
-	// "advisor", "quick", "explore", "task" and "reviewer", the names the
-	// /settings agents tab and the bundled definitions share. Keys are agent
-	// names; a value is a role name (lowercase letters, digits and hyphens,
-	// without the "@" an agent definition's model field carries). An agent with
-	// no entry keeps the role its definition declared; an unassigned role still
-	// falls back to the session model, so the map never makes a run fail.
-	// Read via Settings.AgentRole.
+	// "quick", "explore", "task" and "reviewer", the names the /settings agents
+	// tab and the bundled definitions share. Keys are agent names; a value is a
+	// role name (lowercase letters, digits and hyphens, without the "@" an
+	// agent definition's model field carries). An agent with no entry keeps the
+	// role its definition declared; an unassigned role still falls back to the
+	// session model, so the map never makes a run fail. Read via
+	// Settings.AgentRole.
 	Roles map[string]string `json:"roles,omitempty"`
 }
 
-// Agent names whose model role agents.roles may assign. They are the bundled
-// definitions the /settings agents tab lists plus the advisor, which is not a
-// definition but is routed the same way.
+// Agent names whose model role agents.roles may assign: the bundled definitions
+// the /settings agents tab lists. The advisor is not one of them — it is not a
+// definition and its model is the "advisor" model role.
 const (
-	// AgentAdvisor is the independent reviewer's name in agents.roles.
+	// AgentAdvisor is the advisor's name as a model role and, historically, as
+	// a key of agents.roles. The key is retired: the settings fold moves it
+	// onto modelRoles.advisor on load.
 	AgentAdvisor = "advisor"
 	// AgentQuick is the bundled quick definition's name.
 	AgentQuick = "quick"
@@ -418,14 +420,19 @@ func (a AutoPilotSettings) Equal(b AutoPilotSettings) bool {
 // AdvisorSettings configures the optional advisor: an independent reviewer
 // that reads the conversation after each turn and injects a short note when it
 // has something useful to say. It never blocks an action.
+//
+// The block holds one thing — whether the review runs. Which model answers it
+// is a model role like any other: "advisor" in modelRoles (bound in /models),
+// so the advisor has no model setting of its own and settings.json keeps one
+// place for routing.
 type AdvisorSettings struct {
 	// Enable turns the advisor on. Opt-in: nil/absent means off, because a
 	// review costs model calls. Read via Enabled().
 	Enable *bool `json:"enable,omitempty"`
-	// Model is a concrete "vendor/model" ref that pins the review, a spelling
-	// from before agents.roles existed. Empty reviews on the role agents.roles
-	// assigns to the advisor — deep unless the agents tab moved it. A "@role"
-	// value is folded onto agents.roles when settings load. See Data.AgentRole.
+	// Model is the advisor's retired model slot, kept only so a file written
+	// by an older san still loads: setting folding moves it onto
+	// modelRoles.advisor and clears it (see foldAdvisorRole). Nothing reads it
+	// after that fold, and a save never writes it back.
 	Model string `json:"model,omitempty"`
 }
 
@@ -433,9 +440,9 @@ type AdvisorSettings struct {
 // spends model calls, so it is opt-in.
 func (a AdvisorSettings) Enabled() bool { return a.Enable != nil && *a.Enable }
 
-// Validate rejects a configuration that cannot mean what it says. The two
-// fields are free-form, and an unresolved model is reported when it is wired,
-// so nothing here can fail today.
+// Validate rejects a configuration that cannot mean what it says. The block is
+// a switch plus a retired slot, and an unresolved model is reported when it is
+// wired, so nothing here can fail today.
 func (a AdvisorSettings) Validate() error { return nil }
 
 // IsZero reports whether nothing was configured — used to keep the block out of
@@ -449,9 +456,10 @@ func (a AdvisorSettings) Clone() AdvisorSettings {
 	return a
 }
 
-// Equal compares the two settings the advisor actually uses.
+// Equal compares the settings the advisor actually uses: the switch. The
+// retired model slot is not configuration — the fold clears it on load.
 func (a AdvisorSettings) Equal(b AdvisorSettings) bool {
-	return a.Enabled() == b.Enabled() && a.Model == b.Model
+	return a.Enabled() == b.Enabled()
 }
 
 // defaultOn resolves a tri-state "on unless explicitly turned off" knob.
