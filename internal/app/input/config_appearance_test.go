@@ -173,7 +173,7 @@ func TestAppearancePanelContextBarSavesAndEmits(t *testing.T) {
 
 // TestSettingsSelectorTabSwitchesPanels confirms tab / shift+tab cycle
 // /settings's panels (and wrap). The strip is three tabs: the YOLO gate lives
-// inside Agent beside the roles, so no separate Permissions tab remains.
+// inside Agents beside the roles, so no separate Permissions tab remains.
 func TestSettingsSelectorTabSwitchesPanels(t *testing.T) {
 	c := NewSettingsSelector(nil)
 	c.Enter(120, 40)
@@ -181,8 +181,8 @@ func TestSettingsSelectorTabSwitchesPanels(t *testing.T) {
 		t.Fatalf("default panel = %q, want appearance", got)
 	}
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
-	if got := c.ActivePanel().Title(); got != "agent" {
-		t.Fatalf("after tab = %q, want agent", got)
+	if got := c.ActivePanel().Title(); got != "agents" {
+		t.Fatalf("after tab = %q, want agents", got)
 	}
 	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := c.ActivePanel().Title(); got != "general" {

@@ -4,8 +4,9 @@
 // panel's body + hint. Each sub-panel implements Panel and owns its body.
 //
 // Two popups are built on this shell today:
-//   - /settings → Appearance, Agent and General panels (the Agent tab hosts the
-//     YOLO gate and the per-agent roles).
+//   - /settings → Appearance, Agents and General panels (the Agents tab hosts
+//     the YOLO gate, the advisor's switch and the per-agent roles, laid out
+//     like Appearance).
 //   - /evolve   → the skill self-learning panel.
 //
 // To add a panel to either, implement Panel and append it in the popup's
@@ -84,11 +85,11 @@ func newPanelPopup(glyph, title, tagline string, panels ...Panel) PanelPopup {
 	return PanelPopup{glyph: glyph, title: title, tagline: tagline, panels: panels}
 }
 
-// NewSettingsSelector builds the /settings popup: Appearance, Agent, General.
-// Three tabs keep the strip short: the Agent tab holds both the YOLO gate and
-// the per-agent roles.
+// NewSettingsSelector builds the /settings popup: Appearance, Agents, General.
+// Three tabs keep the strip short: the Agents tab holds the YOLO gate, the
+// advisor's switch and the per-agent roles.
 func NewSettingsSelector(settings *setting.Settings) PanelPopup {
-	return newPanelPopup("⚙", "Settings", "appearance, agent & general",
+	return newPanelPopup("⚙", "Settings", "appearance, agents & general",
 		newAppearancePanel(settings), newAgentPanel(settings), newGeneralPanel(settings))
 }
 
@@ -141,7 +142,7 @@ func (c *PanelPopup) IsActive() bool { return c.active }
 
 // HandleKeypress implements the popup interface. Esc dismisses the popup;
 // Tab / Shift+Tab cycle the tab strip (skills ↔ memory); everything else —
-// including ←/→, which the panels use for the user/project scope control —
+// including ←/→, which a panel uses to step through an option's values —
 // delegates to the active panel.
 func (c *PanelPopup) HandleKeypress(msg tea.KeyMsg) tea.Cmd {
 	if !c.active {

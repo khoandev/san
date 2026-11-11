@@ -1,10 +1,10 @@
-// The /settings agents tab: one role row for the advisor and one per bundled
-// agent, the role picker behind them, the scope control, the dirty indicator and
-// the save that writes both blocks.
+// The /settings agents tab: the YOLO gate, the advisor's on/off switch, and one
+// role row per bundled agent, laid out and driven like the Appearance tab.
 //
-// The panel never touches the session — it writes the user/project file and
-// emits AgentsConfigSavedMsg. These tests pin that boundary down, along with
-// the rule that a row shows the model its role resolves to.
+// Like Appearance, a change is written the moment it is made and the tab emits
+// AgentsConfigSavedMsg for the app to apply; there is no scope control and no
+// Save row. These tests pin that boundary down, along with the rule that a role
+// row shows the model its role resolves to.
 package input
 
 import (
@@ -22,16 +22,16 @@ import (
 	"github.com/genai-io/san/internal/setting"
 )
 
-// newTestAgentsPanel builds the agents panel with settings=nil, so Enter seeds
-// the zero config and touches no disk.
-func newTestAgentsPanel(t *testing.T) *agentsPanel {
+// newTestAgentTab builds the agents tab with settings=nil, so Enter seeds the
+// zero config and the tab touches no disk until a row is activated.
+func newTestAgentTab(t *testing.T) *agentPanel {
 	t.Helper()
-	p := newAgentsPanel(nil)
+	p := newAgentPanel(nil)
 	p.Enter()
 	return p
 }
 
-// testRoleSource answers the two questions the panel asks with fixed models, so
+// testRoleSource answers the two questions the tab asks with fixed models, so
 // the row labels are assertable without a provider store.
 func testRoleSource() AgentRoleSource {
 	models := map[string]string{"fast": "haiku", "standard": "worker", "deep": "opus", "default": "session-model"}
@@ -60,247 +60,225 @@ func testRoleSource() AgentRoleSource {
 	}
 }
 
-// moveToRow walks the cursor to the row carrying entryID, up to the top of the
-// list first, the same way a user does.
-func moveToRow(t *testing.T, p *agentsPanel, entryID string) {
+// moveToAgentRow walks the cursor to the row carrying agent, from the top of the
+// list, the same way a user does.
+func moveToAgentRow(t *testing.T, p *agentPanel, agent string) {
 	t.Helper()
-	for range p.form.rowsFn() {
+	for range p.rows() {
 		p.HandleKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	}
-	rows := p.form.rowsFn()
-	for range rows {
-		row := rows[p.form.cursor]
-		if row.kind == rowEntry && row.entryID == entryID {
+	for range p.rows() {
+		row := p.rows()[p.cursor]
+		if row.kind == agentRowRole && row.agent == agent {
 			return
 		}
 		p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	t.Fatalf("the %q row is unreachable", entryID)
+	t.Fatalf("the %q row is unreachable", agent)
 }
 
-// moveToSave walks the cursor down to the Save row.
-func moveToSave(t *testing.T, p *agentsPanel) {
+// moveToSwitch parks the cursor on the advisor's switch row.
+func moveToSwitch(t *testing.T, p *agentPanel) {
 	t.Helper()
-	for range p.form.rowsFn() {
-		if p.form.rowsFn()[p.form.cursor].kind == rowSave {
+	for range p.rows() {
+		if p.rows()[p.cursor].kind == agentRowAdvisor {
 			return
 		}
 		p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	t.Fatal("the Save row is unreachable")
+	t.Fatal("the advisor row is unreachable")
 }
 
-// The roles live in /settings's Agent tab, between Appearance and General, and
-// no separate Permissions tab remains: the gate is a row inside Agent.
-func TestAgentsTabIsInSettings(t *testing.T) {
+// The tab is its own tab in /settings, styled like Appearance, and no separate
+// Permissions or Advisor tab remains: both live inside it.
+func TestAgentsTabIsItsOwnSettingsTab(t *testing.T) {
 	c := NewSettingsSelector(nil)
 	var titles []string
 	for _, p := range c.panels {
 		titles = append(titles, p.Title())
 	}
-	if got := strings.Join(titles, ","); got != "appearance,agent,general" {
-		t.Fatalf("/settings tabs = %q, want appearance,agent,general", got)
+	if got := strings.Join(titles, ","); got != "appearance,agents,general" {
+		t.Fatalf("/settings tabs = %q, want appearance,agents,general", got)
 	}
-	for _, gone := range []string{"advisor", "permissions", "agents"} {
+	for _, gone := range []string{"advisor", "permissions"} {
 		if slicesContains(titles, gone) {
 			t.Fatalf("%q is still a top-level tab: %v", gone, titles)
 		}
 	}
 	if _, ok := c.panels[1].(*agentPanel); !ok {
-		t.Fatalf("the middle tab is %T, want the merged agent tab", c.panels[1])
+		t.Fatalf("the middle tab is %T, want the agents tab", c.panels[1])
 	}
 }
 
-// The merged tab keeps both halves reachable from one row list: the gate row
-// leads, every agent role row follows, and the roles keep their user/project
-// scope control.
-func TestAgentTabHostsTheGateAndTheRoles(t *testing.T) {
-	tab := newAgentPanel(nil)
-	tab.Enter()
-	if got := tab.Title(); got != "agent" {
-		t.Fatalf("tab title = %q, want agent", got)
+// The tab is one appearance-shaped list: the gate row leads, the advisor's
+// switch follows, then one drill-in row per bundled agent.
+func TestAgentTabRowsCoverTheGateTheAdvisorAndEveryAgent(t *testing.T) {
+	p := newTestAgentTab(t)
+	if got := p.Title(); got != "agents" {
+		t.Fatalf("tab title = %q, want agents", got)
 	}
 
-	rows := tab.agents.form.rowsFn()
-	if rows[1].kind != rowEntry || rows[1].entryID != permissionsEntry {
-		t.Fatalf("rows[1] = %+v, want the gate entry row", rows[1])
+	rows := p.rows()
+	if rows[0].kind != agentRowGate {
+		t.Fatalf("rows[0] = %+v, want the gate row", rows[0])
 	}
-	if got := rows[1].summary(nil); got != "allowed" {
-		t.Fatalf("gate summary = %q, want allowed", got)
+	if rows[1].kind != agentRowAdvisor {
+		t.Fatalf("rows[1] = %+v, want the advisor switch", rows[1])
 	}
-	entryIDs := map[string]bool{}
+	var agents []string
 	for _, row := range rows {
-		if row.kind == rowEntry {
-			entryIDs[row.entryID] = true
+		if row.kind == agentRowRole {
+			agents = append(agents, row.agent)
 		}
 	}
-	for _, agent := range managedAgents {
-		if !entryIDs[agent] {
-			t.Fatalf("agent %q has no role row: %v", agent, entryIDs)
-		}
-	}
-	if scopes := tab.agents.form.scopesOrDefault(); len(scopes) != 2 || scopes[0] != scopeUser || scopes[1] != scopeProject {
-		t.Fatalf("role form scopes = %v, want user then project", scopes)
-	}
-	hasSave := false
-	for _, row := range rows {
-		hasSave = hasSave || row.kind == rowSave
-	}
-	if !hasSave {
-		t.Fatalf("the merged tab lost its Save row")
+	if strings.Join(agents, ",") != strings.Join(managedAgents, ",") {
+		t.Fatalf("agent rows = %v, want %v", agents, managedAgents)
 	}
 
-	// The body shows the gate above the roles, and the whole tab still fits a
-	// 24-row terminal.
-	body := ansi.Strip(tab.Render(70, 20))
-	for _, want := range []string{"PERMISSIONS", "YOLO mode", "ADVISOR", "AGENTS"} {
+	body := ansi.Strip(p.Render(70, 20))
+	for _, want := range []string{"PERMISSIONS", "YOLO mode", "ADVISOR", "Advisor", "AGENTS", "Quick", "Explore", "Task", "Reviewer"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("tab body is missing %q: %q", want, body)
+			t.Fatalf("tab body is missing %q:\n%s", want, body)
 		}
-	}
-	c := NewSettingsSelector(nil)
-	c.Enter(80, 24)
-	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab}) // Agent
-	if got := lipgloss.Height(c.Render()); got > 24 {
-		t.Fatalf("Agent tab height = %d, exceeds a 24-row terminal", got)
-	}
-	if got := ansi.Strip(c.Render()); !strings.Contains(got, "AGENT") || !strings.Contains(got, "GENERAL") {
-		t.Fatalf("the tab strip is missing a tab: %q", got)
-	}
-
-	// Enter on the leading row opens the gate; it stays inside the tab, and
-	// esc backs out instead of closing /settings.
-	if _, done := tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}); done || !tab.inPerms {
-		t.Fatalf("enter on the gate row: done=%v inPerms=%v, want a sub-view inside the tab", done, tab.inPerms)
-	}
-	if !tab.Modal() || tab.Breadcrumb() != "permissions" {
-		t.Fatalf("gate sub-view: modal=%v crumb=%q", tab.Modal(), tab.Breadcrumb())
-	}
-	if tab.agents.form.Dirty() {
-		t.Fatalf("the roles must stay clean while the gate sub-view is open")
-	}
-	tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if tab.inPerms {
-		t.Fatalf("esc should leave the gate sub-view")
 	}
 }
 
-// Locking the gate from inside the merged tab writes allowBypass=false and
-// keeps /settings open, so the new state is visible where it was set.
-func TestAgentTabGateSavesWithoutClosingThePopup(t *testing.T) {
+// Like Appearance, the tab has no scope control and no Save row: it configures
+// the user's file only, and a change lands when it is made.
+func TestAgentTabHasNoScopeOrSaveControl(t *testing.T) {
+	p := newTestAgentTab(t)
+	body := p.Render(100, 40)
+	for _, unwanted := range []string{"project", "Save"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("the tab body offers %q, which belongs to the old form:\n%s", unwanted, body)
+		}
+	}
+	if hint := p.HintLine(); strings.Contains(hint, "save") {
+		t.Errorf("the hint line offers a save step: %q", hint)
+	}
+}
+
+// The gate is a drill-in row inside the tab: enter opens it, esc backs out
+// instead of closing /settings, and a save returns to the body without closing
+// the popup.
+func TestAgentTabGateDrillsInAndSavesWithoutClosingThePopup(t *testing.T) {
 	home := tempHome(t)
 
-	tab := newAgentPanel(nil)
-	tab.Enter()
-	tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}) // open the gate
-	if !tab.inPerms {
+	p := newTestAgentTab(t)
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}) // open the gate
+	if !p.inPerms {
 		t.Fatalf("the gate sub-view did not open")
 	}
-	tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown}) // Allowed → Locked
-	if !tab.Dirty() {
-		t.Fatalf("moving off the baseline should mark the tab dirty")
+	if !p.Modal() || p.Breadcrumb() != "permissions" {
+		t.Fatalf("gate sub-view: modal=%v crumb=%q", p.Modal(), p.Breadcrumb())
 	}
-	cmd, done := tab.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown}) // Allowed → Locked
+	if !p.perms.Dirty() {
+		t.Fatalf("moving off the baseline should mark the gate dirty")
+	}
+	cmd, done := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if done {
 		t.Fatalf("a gate save must not dismiss /settings")
 	}
-	if tab.inPerms {
+	if p.inPerms {
 		t.Fatalf("a gate save should return to the tab body")
 	}
-	msg, ok := cmd().(AllowBypassSavedMsg)
-	if !ok || msg.Allowed {
+	if msg, ok := cmd().(AllowBypassSavedMsg); !ok || msg.Allowed {
 		t.Fatalf("expected AllowBypassSavedMsg{Allowed:false}, got %#v", cmd())
 	}
-	if got := tab.gateSummary(); got != "locked" {
+	if got := p.summaryFor(p.rows()[0]); got != "locked" {
 		t.Fatalf("gate summary = %q, want locked", got)
 	}
 	if data := readPersistedAllowBypass(t, home); data == nil || *data {
 		t.Fatalf("persisted allowBypass = %v, want false", data)
 	}
+
+	// Esc leaves the sub-view, not the popup.
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !p.inPerms {
+		t.Fatal("the gate did not reopen")
+	}
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if p.inPerms {
+		t.Fatalf("esc should leave the gate sub-view")
+	}
 }
 
-// slicesContains is a tiny helper so the test reads as one assertion.
-func slicesContains(values []string, want string) bool {
-	for _, v := range values {
-		if v == want {
-			return true
-		}
-	}
-	return false
-}
+// The advisor's row is a plain switch: ←→ or enter flips it, the write lands at
+// once in the user file, and the tab reports it to the app. The advisor owns no
+// model setting here — that role is bound in /models.
+func TestAgentTabAdvisorSwitchWritesImmediately(t *testing.T) {
+	home := tempHome(t)
 
-// The panel seeds the role map and the advisor block from settings, and starts
-// clean.
-func TestAgentsPanelSeedsFromSettings(t *testing.T) {
-	on := true
-	settings := setting.New(&setting.Data{
-		Advisor: setting.AdvisorSettings{Enable: &on},
-		Agents:  setting.AgentsSettings{Roles: map[string]string{setting.AgentReviewer: "fast"}},
-	})
-	p := newAgentsPanel(settings)
-	p.Enter()
-
-	if !p.form.snap.Advisor.Enabled() {
-		t.Fatal("panel seeded the advisor off, want the file's config")
+	p := newTestAgentTab(t)
+	moveToSwitch(t, p)
+	cmd, done := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	if done {
+		t.Fatal("a switch must not dismiss /settings")
 	}
-	if got := p.form.snap.Roles[setting.AgentReviewer]; got != "fast" {
-		t.Fatalf("seeded reviewer role = %q, want fast", got)
+	if cmd == nil {
+		t.Fatal("switching the advisor on should emit AgentsConfigSavedMsg")
+	}
+	if msg, ok := cmd().(AgentsConfigSavedMsg); !ok || msg.Notice != "advisor on" {
+		t.Fatalf("message = %#v, want advisor on", cmd())
+	}
+	if !p.advisor.Enabled() {
+		t.Fatal("the working copy did not follow the switch")
 	}
 	if p.Dirty() {
-		t.Fatal("a panel seeded from the file starts clean")
+		t.Fatal("a written switch leaves the tab clean")
 	}
-	// The seeded map is a clone: editing the form must not write into the
-	// settings service's copy.
-	p.form.snap.Roles[setting.AgentReviewer] = "deep"
-	if got := settings.AgentRole(setting.AgentReviewer); got != "fast" {
-		t.Fatalf("the panel edits live settings storage: %q", got)
+	if !readPersistedAdvisor(t, home) {
+		t.Fatal("the switch did not reach the user settings file")
+	}
+
+	// ← flips it back, and the explicit off is what persists.
+	cmd, _ = p.HandleKey(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if msg, ok := cmd().(AgentsConfigSavedMsg); !ok || msg.Notice != "advisor off" {
+		t.Fatalf("message = %#v, want advisor off", cmd())
+	}
+	if readPersistedAdvisor(t, home) {
+		t.Fatal("an explicit off did not persist")
+	}
+
+	// Enter is the same switch, for a keyboard without usable arrows.
+	cmd, _ = p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if msg, ok := cmd().(AgentsConfigSavedMsg); !ok || msg.Notice != "advisor on" {
+		t.Fatalf("enter on the switch = %#v, want advisor on", cmd())
 	}
 }
 
-// Every role row is labelled with the role in effect and the model it resolves
-// to, which is the point of the tab.
-func TestAgentsPanelRowsShowTheResolvedModel(t *testing.T) {
-	p := newTestAgentsPanel(t)
+// A failed write is surfaced in place instead of being swallowed: the tab keeps
+// the error, reports itself dirty, and emits nothing.
+func TestAgentTabAdvisorSwitchSurfacesAFailedWrite(t *testing.T) {
+	home := tempHome(t)
+	// A regular file where the .san directory must be makes the write fail.
+	if err := os.WriteFile(filepath.Join(home, ".san"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := newTestAgentTab(t)
+	moveToSwitch(t, p)
+	cmd, done := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	if done || cmd != nil {
+		t.Fatalf("a failed write must not close the popup or emit: done=%v cmd=%#v", done, cmd)
+	}
+	if p.saveErr == nil || !p.Dirty() {
+		t.Fatalf("a failed write should be kept and surfaced: err=%v dirty=%v", p.saveErr, p.Dirty())
+	}
+	if body := ansi.Strip(p.Render(100, 40)); !strings.Contains(body, "couldn't save") {
+		t.Errorf("the error is not rendered:\n%s", body)
+	}
+}
+
+// Enter on an agent row opens the role picker; picking a role writes it at once,
+// persists it to the user file, and the row then shows the model it resolves to.
+func TestAgentTabAssignsARole(t *testing.T) {
+	home := tempHome(t)
+
+	p := newTestAgentTab(t)
 	p.SetRoleSource(testRoleSource())
-
-	body := p.Render(100, 40)
-	for _, want := range []string{
-		"ADVISOR", "ROLE", "AGENTS", "QUICK", "EXPLORE", "TASK", "REVIEWER",
-		"@deep → opus · high", // the advisor's default role, resolved
-		"@fast → haiku",       // quick and explore declare the fast role
-		"@standard → worker",  // task declares the standard role
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("panel body is missing %q:\n%s", want, body)
-		}
-	}
-}
-
-// A definition whose file names a concrete model has no role to show, and an
-// agent with no source at all falls back to the plain state rather than an
-// invented role.
-func TestAgentsPanelRowWithoutARole(t *testing.T) {
-	p := newTestAgentsPanel(t)
-	p.SetRoleSource(AgentRoleSource{
-		Resolve:   func(string) (string, string) { return "", "" },
-		Effective: func(string) (string, string, string) { return "", "", "" },
-	})
-	if body := p.Render(100, 40); !strings.Contains(body, "definition default") {
-		t.Errorf("a model-pinned definition should say so:\n%s", body)
-	}
-
-	bare := newTestAgentsPanel(t)
-	if body := bare.Render(100, 40); !strings.Contains(body, "definition default") {
-		t.Errorf("a panel without a source should still name the state:\n%s", body)
-	}
-}
-
-// Enter on a role row opens the picker; picking an assignment writes it into the
-// working copy and marks the panel dirty.
-func TestAgentsPanelAssignsARole(t *testing.T) {
-	p := newTestAgentsPanel(t)
-	p.SetRoleSource(testRoleSource())
-	moveToRow(t, p, setting.AgentQuick)
+	moveToAgentRow(t, p, setting.AgentQuick)
 
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !p.picking {
@@ -315,262 +293,156 @@ func TestAgentsPanelAssignsARole(t *testing.T) {
 
 	// The picker opens on "definition default"; step down to the ladder's first
 	// role and pick it.
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown}) // default
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	cmd, done := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if done {
+		t.Fatal("picking a role must not dismiss /settings")
+	}
 	if p.picking {
 		t.Fatal("a completed pick closes the picker")
 	}
-	if got := p.form.snap.Roles[setting.AgentQuick]; got != string(llm.RoleDefault) {
+	if msg, ok := cmd().(AgentsConfigSavedMsg); !ok || msg.Notice != "quick role saved" {
+		t.Fatalf("message = %#v, want quick role saved", cmd())
+	}
+	if got := p.agentRoles[setting.AgentQuick]; got != string(llm.RoleDefault) {
 		t.Fatalf("quick role = %q, want the picked default", got)
 	}
-	if !p.Dirty() {
-		t.Fatal("a changed role should mark the panel dirty")
+	if got := readPersistedRoles(t, home)[setting.AgentQuick]; got != string(llm.RoleDefault) {
+		t.Fatalf("persisted quick role = %q, want the picked default", got)
 	}
-	if body := p.Render(100, 40); !strings.Contains(body, "@default → session-model") {
+	if body := ansi.Strip(p.Render(100, 40)); !strings.Contains(body, "@default → session-model") {
 		t.Errorf("the row does not show the picked role's model:\n%s", body)
 	}
 }
 
-// The advisor's off entry switches it off and keeps the role, so turning it back
-// on resumes the same model.
-func TestAgentsPanelAdvisorOffKeepsTheRole(t *testing.T) {
-	on := true
+// Choosing "definition default" clears the assignment, so the agent falls back
+// to the role its own file declares.
+func TestAgentTabDefinitionDefaultClearsTheAssignment(t *testing.T) {
+	home := tempHome(t)
 	settings := setting.New(&setting.Data{
-		Advisor: setting.AdvisorSettings{Enable: &on},
-		Agents:  setting.AgentsSettings{Roles: map[string]string{setting.AgentAdvisor: "fast"}},
+		Agents: setting.AgentsSettings{Roles: map[string]string{setting.AgentQuick: "fast"}},
 	})
-	p := newAgentsPanel(settings)
+	p := newAgentPanel(settings)
 	p.SetRoleSource(testRoleSource())
 	p.Enter()
 
-	moveToRow(t, p, setting.AgentAdvisor)
+	moveToAgentRow(t, p, setting.AgentQuick)
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !p.picking {
-		t.Fatal("enter on the advisor row should open the role picker")
-	}
-	// The picker opens on the assigned role; Off is the first entry.
 	for p.pick.cursor > 0 {
 		p.HandleKey(tea.KeyPressMsg{Code: tea.KeyUp})
 	}
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-
-	if p.form.snap.Advisor.Enabled() {
-		t.Fatal("picking off should switch the advisor off")
+	cmd, _ := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("clearing an assignment should emit a saved message")
 	}
-	if got := p.form.snap.Roles[setting.AgentAdvisor]; got != "fast" {
-		t.Fatalf("advisor role = %q, want it kept", got)
+	if _, kept := p.agentRoles[setting.AgentQuick]; kept {
+		t.Fatalf("the assignment survived: %v", p.agentRoles)
 	}
-	if !p.Dirty() {
-		t.Fatal("switching the advisor off should mark the panel dirty")
+	if _, kept := readPersistedRoles(t, home)[setting.AgentQuick]; kept {
+		t.Fatal("the cleared assignment is still in the user file")
 	}
-
-	// Choosing a role turns it back on.
-	moveToRow(t, p, setting.AgentAdvisor)
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown}) // off → default
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !p.form.snap.Advisor.Enabled() {
-		t.Fatal("choosing a role for the advisor should turn it on")
-	}
-	if got := p.form.snap.Roles[setting.AgentAdvisor]; got != string(llm.RoleDefault) {
-		t.Fatalf("advisor role = %q, want the picked default", got)
+	if body := ansi.Strip(p.Render(100, 40)); !strings.Contains(body, "@fast → haiku") {
+		t.Errorf("the row did not fall back to the definition's role:\n%s", body)
 	}
 }
 
-// Esc backs out of the picker without touching the working copy.
-func TestAgentsPanelPickerEscChangesNothing(t *testing.T) {
-	p := newTestAgentsPanel(t)
+// Esc backs out of the picker without touching the working copy or the file.
+func TestAgentTabPickerEscChangesNothing(t *testing.T) {
+	home := tempHome(t)
+
+	p := newTestAgentTab(t)
 	p.SetRoleSource(testRoleSource())
-	moveToRow(t, p, setting.AgentTask)
+	moveToAgentRow(t, p, setting.AgentTask)
 
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	before := len(p.form.snap.Roles)
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 
 	if p.picking {
 		t.Fatal("esc should close the picker")
 	}
-	if len(p.form.snap.Roles) != before {
-		t.Fatalf("esc wrote a role: %v", p.form.snap.Roles)
+	if len(p.agentRoles) != 0 {
+		t.Fatalf("esc wrote a role: %v", p.agentRoles)
 	}
 	if p.Dirty() {
-		t.Fatal("esc should leave the panel clean")
+		t.Fatal("esc should leave the tab clean")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".san", "settings.json")); err == nil {
+		t.Fatal("esc wrote the settings file")
 	}
 }
 
-// A save writes the roles and the advisor block together and leaves the rest of
-// the file alone.
-func TestAgentsPanelSaveWritesBothBlocks(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	if err := os.MkdirAll(filepath.Join(home, ".san"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(home, ".san", "settings.json")
-	if err := os.WriteFile(path, []byte(`{"theme":"dark","agents":{"autoTier":false}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	p := newTestAgentsPanel(t)
-	moveToRow(t, p, setting.AgentReviewer)
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown}) // definition default → default
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	// Turn the advisor off through its only switch.
-	moveToRow(t, p, setting.AgentAdvisor)
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter}) // off
-
-	moveToSave(t, p)
-	cmd, done := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !done {
-		t.Fatal("saving should ask the popup to close")
-	}
-	if cmd == nil {
-		t.Fatal("saving should emit AgentsConfigSavedMsg")
-	}
-	msg, ok := cmd().(AgentsConfigSavedMsg)
-	if !ok || msg.Scope != AgentsScopeUser {
-		t.Fatalf("message = %#v, want a user-scope save", cmd())
-	}
-	if got := msg.Roles[setting.AgentReviewer]; got != string(llm.RoleDefault) {
-		t.Fatalf("message roles = %v, want the picked default", msg.Roles)
-	}
-	if msg.Advisor.Enabled() {
-		t.Fatal("message advisor = on, want the off state the panel saved")
-	}
-
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("the user settings file was not written: %v", err)
-	}
-	var data struct {
-		Theme  string `json:"theme"`
-		Agents struct {
-			AutoTier *bool             `json:"autoTier"`
-			Roles    map[string]string `json:"roles"`
-		} `json:"agents"`
-		Advisor struct {
-			Enable *bool `json:"enable"`
-		} `json:"advisor"`
-	}
-	if err := json.Unmarshal(raw, &data); err != nil {
-		t.Fatalf("settings file is not valid JSON: %v\n%s", err, raw)
-	}
-	if got := data.Agents.Roles[setting.AgentReviewer]; got != string(llm.RoleDefault) {
-		t.Errorf("agents.roles.reviewer = %q, want the picked default\n%s", got, raw)
-	}
-	if data.Advisor.Enable == nil || *data.Advisor.Enable {
-		t.Errorf("advisor enable = %v, want an explicit false\n%s", data.Advisor.Enable, raw)
-	}
-	// The tab does not own these: they must survive the save.
-	if data.Theme != "dark" {
-		t.Errorf("theme = %q, want it untouched", data.Theme)
-	}
-	if data.Agents.AutoTier == nil || *data.Agents.AutoTier {
-		t.Errorf("agents.autoTier = %v, want it untouched", data.Agents.AutoTier)
-	}
-}
-
-// A project-scope save targets the workspace's .san directory.
-func TestAgentsPanelSaveWritesTheProjectFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Chdir(t.TempDir())
-
-	p := newTestAgentsPanel(t)
-	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight}) // user → project
-	if p.form.scope != scopeProject {
-		t.Fatalf("scope = %q, want project", p.form.scope)
-	}
-	moveToSave(t, p)
-	cmd, done := p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !done || cmd == nil {
-		t.Fatal("saving at project scope should close and emit a message")
-	}
-	if msg, ok := cmd().(AgentsConfigSavedMsg); !ok || msg.Scope != AgentsScopeProject {
-		t.Fatalf("message = %#v, want a project-scope save", cmd())
-	}
-	if _, err := os.Stat(filepath.Join(".san", "settings.json")); err != nil {
-		t.Fatalf("the project settings file was not written: %v", err)
-	}
-}
-
-// ←→ cycles the save scope through user and project, wrapping at either end.
-func TestAgentsPanelCyclesScopes(t *testing.T) {
-	p := newTestAgentsPanel(t)
-	if p.form.scope != scopeUser {
-		t.Fatalf("scope = %q, want the default user", p.form.scope)
-	}
-	steps := []struct {
-		key  tea.KeyMsg
-		want configScope
-	}{
-		{tea.KeyPressMsg{Code: tea.KeyRight}, scopeProject},
-		{tea.KeyPressMsg{Code: tea.KeyRight}, scopeUser},   // wrap
-		{tea.KeyPressMsg{Code: tea.KeyLeft}, scopeProject}, // wrap back
-		{tea.KeyPressMsg{Code: tea.KeyLeft}, scopeUser},
-	}
-	for i, step := range steps {
-		p.HandleKey(step.key)
-		if p.form.scope != step.want {
-			t.Fatalf("step %d: scope = %q, want %q", i, p.form.scope, step.want)
-		}
-	}
-}
-
-// The panel renders at every width the popup can give it, and shows the scope
-// control the save needs.
-func TestAgentsPanelRendersAtEveryWidth(t *testing.T) {
-	p := newTestAgentsPanel(t)
+// Every role row is labelled with the role in effect and the model it resolves
+// to, which is the point of the tab.
+func TestAgentTabRowsShowTheResolvedModel(t *testing.T) {
+	p := newTestAgentTab(t)
 	p.SetRoleSource(testRoleSource())
-	for _, width := range []int{40, 60, 80, 120} {
-		body := p.Render(width, 30)
-		if body == "" {
-			t.Fatalf("width %d rendered nothing", width)
-		}
-		if strings.Contains(body, "\x00") {
-			t.Fatalf("width %d rendered a NUL", width)
-		}
-	}
-	body := p.Render(100, 60)
-	for _, scope := range []string{"user", "project"} {
-		if !strings.Contains(body, scope) {
-			t.Errorf("panel body is missing scope %q", scope)
+
+	body := ansi.Strip(p.Render(100, 40))
+	for _, want := range []string{
+		"Quick", "@fast → haiku", // quick and explore declare the fast role
+		"Task", "@standard → worker", // task declares the standard role
+		"Reviewer", "@deep → opus · high", // reviewer declares the deep role
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("tab body is missing %q:\n%s", want, body)
 		}
 	}
 }
 
-// Every row stays inside the narrowest card the popup hands a panel: the
-// description goes before the summary, and a long summary is clipped rather than
-// wrapped.
-func TestAgentsPanelFitsTheNarrowestCard(t *testing.T) {
-	p := newTestAgentsPanel(t)
+// A definition whose file names a concrete model has no role to show, and an
+// agent with no source at all falls back to the plain state rather than an
+// invented role.
+func TestAgentTabRowWithoutARole(t *testing.T) {
+	p := newTestAgentTab(t)
 	p.SetRoleSource(AgentRoleSource{
-		Resolve: func(string) (string, string) {
-			return "claude-sonnet-4-5-20250929-thinking", "xhigh"
-		},
+		Resolve:   func(string) (string, string) { return "", "" },
+		Effective: func(string) (string, string, string) { return "", "", "" },
 	})
-	for _, width := range []int{40, 60, 120} {
-		for _, line := range strings.Split(p.Render(width, 30), "\n") {
-			line = strings.TrimRight(line, " ")
-			if got := lipgloss.Width(line); got > width {
-				t.Errorf("width %d: row is %d cols wide: %q", width, got, line)
-			}
-		}
+	if body := ansi.Strip(p.Render(100, 40)); !strings.Contains(body, "definition default") {
+		t.Errorf("a model-pinned definition should say so:\n%s", body)
+	}
+
+	bare := newTestAgentTab(t)
+	if body := ansi.Strip(bare.Render(100, 40)); !strings.Contains(body, "definition default") {
+		t.Errorf("a tab without a source should still name the state:\n%s", body)
+	}
+}
+
+// The tab seeds both halves from settings and starts clean, editing a clone
+// rather than the live settings storage.
+func TestAgentTabSeedsFromSettings(t *testing.T) {
+	on := true
+	settings := setting.New(&setting.Data{
+		Advisor: setting.AdvisorSettings{Enable: &on},
+		Agents:  setting.AgentsSettings{Roles: map[string]string{setting.AgentReviewer: "fast"}},
+	})
+	p := newAgentPanel(settings)
+	p.Enter()
+
+	if !p.advisor.Enabled() {
+		t.Fatal("tab seeded the advisor off, want the file's config")
+	}
+	if got := p.agentRoles[setting.AgentReviewer]; got != "fast" {
+		t.Fatalf("seeded reviewer role = %q, want fast", got)
+	}
+	if p.Dirty() {
+		t.Fatal("a tab seeded from the file starts clean")
+	}
+	p.agentRoles[setting.AgentReviewer] = "deep"
+	if got := settings.AgentRole(setting.AgentReviewer); got != "fast" {
+		t.Fatalf("the tab edits live settings storage: %q", got)
 	}
 }
 
 // The picker offers the ladder, the entry that clears an assignment, and the
-// custom roles modelRoles binds — sorted after the ladder.
-func TestAgentsRolePickerChoices(t *testing.T) {
+// custom roles modelRoles binds — sorted after the ladder. The advisor's own
+// slot is not a subagent role, so it is not offered.
+func TestAgentRolePickerChoices(t *testing.T) {
 	settings := setting.New(&setting.Data{
-		ModelRoles: map[string]string{"judge": "haiku", "fast": "haiku"},
+		ModelRoles: map[string]string{"judge": "haiku", "fast": "haiku", setting.AgentAdvisor: "opus"},
 	})
-	p := newAgentsPanel(settings)
+	p := newAgentPanel(settings)
 	p.SetRoleSource(testRoleSource())
 	p.Enter()
 
@@ -582,35 +454,100 @@ func TestAgentsRolePickerChoices(t *testing.T) {
 	if strings.Join(labels, ",") != strings.Join(want, ",") {
 		t.Fatalf("choices = %v, want %v", labels, want)
 	}
-
-	// The advisor has no definition to fall back to: it is the one agent that
-	// can be switched off instead.
-	labels = nil
-	for _, choice := range p.choicesFor(setting.AgentAdvisor) {
-		labels = append(labels, choice.label)
-	}
-	if labels[0] != "off" {
-		t.Fatalf("advisor choices = %v, want off first", labels)
-	}
-	for _, label := range labels {
-		if label == "definition default" {
-			t.Fatalf("the advisor should not offer a definition default: %v", labels)
-		}
-	}
 }
 
 // The picker opens on the entry in effect, so enter-then-enter is a no-op.
-func TestAgentsRolePickerOpensOnTheCurrentChoice(t *testing.T) {
+func TestAgentRolePickerOpensOnTheCurrentChoice(t *testing.T) {
 	settings := setting.New(&setting.Data{
 		Agents: setting.AgentsSettings{Roles: map[string]string{setting.AgentTask: "deep"}},
 	})
-	p := newAgentsPanel(settings)
+	p := newAgentPanel(settings)
 	p.SetRoleSource(testRoleSource())
 	p.Enter()
 
-	moveToRow(t, p, setting.AgentTask)
+	moveToAgentRow(t, p, setting.AgentTask)
 	p.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if got := p.pick.choices[p.pick.cursor].label; got != "@deep" {
 		t.Fatalf("picker opened on %q, want the assigned @deep", got)
+	}
+}
+
+// The tab renders at every width the popup can give it, and fits a 24-row
+// terminal with the shell's chrome.
+func TestAgentTabRendersAtEveryWidth(t *testing.T) {
+	p := newTestAgentTab(t)
+	p.SetRoleSource(testRoleSource())
+	for _, width := range []int{40, 60, 80, 120} {
+		body := ansi.Strip(p.Render(width, 30))
+		if body == "" {
+			t.Fatalf("width %d rendered nothing", width)
+		}
+		if strings.Contains(body, "\x00") {
+			t.Fatalf("width %d rendered a NUL", width)
+		}
+		for _, line := range strings.Split(body, "\n") {
+			line = strings.TrimRight(line, " ")
+			if got := lipgloss.Width(line); got > width {
+				t.Errorf("width %d: row is %d cols wide: %q", width, got, line)
+			}
+		}
+	}
+
+	c := NewSettingsSelector(nil)
+	c.Enter(80, 24)
+	c.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyTab}) // agents
+	if got := lipgloss.Height(c.Render()); got > 24 {
+		t.Fatalf("agents tab height = %d, exceeds a 24-row terminal", got)
+	}
+	if got := ansi.Strip(c.Render()); !strings.Contains(got, "AGENTS") || !strings.Contains(got, "GENERAL") {
+		t.Fatalf("the tab strip is missing a tab: %q", got)
+	}
+}
+
+// slicesContains is a tiny helper so the test reads as one assertion.
+func slicesContains(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// readPersistedAdvisor reads back the advisor switch from the user settings file
+// the tab writes to.
+func readPersistedAdvisor(t *testing.T, home string) bool {
+	t.Helper()
+	var data struct {
+		Advisor struct {
+			Enable *bool `json:"enable"`
+		} `json:"advisor"`
+	}
+	readUserSettings(t, home, &data)
+	return data.Advisor.Enable != nil && *data.Advisor.Enable
+}
+
+// readPersistedRoles reads back the agents.roles map from the user settings
+// file.
+func readPersistedRoles(t *testing.T, home string) map[string]string {
+	t.Helper()
+	var data struct {
+		Agents struct {
+			Roles map[string]string `json:"roles"`
+		} `json:"agents"`
+	}
+	readUserSettings(t, home, &data)
+	return data.Agents.Roles
+}
+
+// readUserSettings decodes the user settings file into shape.
+func readUserSettings(t *testing.T, home string, shape any) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(home, ".san", "settings.json"))
+	if err != nil {
+		t.Fatalf("settings file not written: %v", err)
+	}
+	if err := json.Unmarshal(raw, shape); err != nil {
+		t.Fatalf("settings file not valid JSON: %v\n%s", err, raw)
 	}
 }
