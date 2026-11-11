@@ -100,10 +100,12 @@ func TestAgentsConfigSavedWiresTheAdvisor(t *testing.T) {
 }
 
 // Turning it off unwires the running review, and a second report of the same
-// state does not rebuild it.
+// state does not rebuild it. Only a running session has an advisor to rebuild,
+// so the fixture starts with one, as an active conversation would.
 func TestAgentsConfigSavedUnwiresAndSettles(t *testing.T) {
 	work := testAgentTabHome(t)
 	m := agentTabModel(t, work)
+	m.services.Advisor = runningAdvisorSession()
 	on := true
 	if err := setting.UpdateAdvisorAt(setting.AdvisorSettings{Enable: &on}, setting.ScopeUser); err != nil {
 		t.Fatalf("UpdateAdvisorAt: %v", err)
@@ -144,6 +146,7 @@ func TestAgentsConfigSavedUnwiresAndSettles(t *testing.T) {
 func TestAgentsConfigSavedReadsTheFileNotTheNotice(t *testing.T) {
 	work := testAgentTabHome(t)
 	m := agentTabModel(t, work)
+	m.services.Advisor = runningAdvisorSession()
 	// The file says on; a stale notice says nothing at all.
 	on := true
 	if err := setting.UpdateAdvisorAt(setting.AdvisorSettings{Enable: &on}, setting.ScopeUser); err != nil {
@@ -158,4 +161,13 @@ func TestAgentsConfigSavedReadsTheFileNotTheNotice(t *testing.T) {
 	if m.services.Advisor == nil {
 		t.Fatal("a notice-less change did not wire the advisor")
 	}
+}
+
+// runningAdvisorSession is a live review, the state an active conversation is
+// in when the tab changes something.
+func runningAdvisorSession() *advisorSession {
+	ctx, cancel := context.WithCancel(context.Background())
+	live := &atomic.Bool{}
+	live.Store(true)
+	return &advisorSession{ctx: ctx, cancel: cancel, live: live}
 }
