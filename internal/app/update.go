@@ -209,10 +209,6 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m, m.handleWindowResize(msg)
 	case spinner.TickMsg:
-		// The Execution Panel draws the current step's live dot on the same
-		// clock as the strip above the composer, so a plan on screen never
-		// shows two different ideas of "now".
-		m.userInput.Plan.SetFrame(m.conv.Spinner.Frame())
 		// The /autopilot Mission dialog runs its own spinner while awaiting a
 		// reply. Ticks carry a per-spinner id, so a foreign tick returns a nil
 		// cmd here and falls through to the conversation spinner below.

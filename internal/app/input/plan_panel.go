@@ -93,10 +93,6 @@ type PlanPanel struct {
 	// context is where execution starts from. It survives a close, so the
 	// choice a person made once is what the next plan uses too.
 	context PlanContext
-	// frame advances the current step's live dot. The panel renders only on a
-	// change, so the app hands it the shared spinner frame on every tick; a
-	// step nothing is executing keeps a still dot.
-	frame int
 
 	editing bool
 	editor  textarea.Model
@@ -160,19 +156,6 @@ func (p *PlanPanel) Close() {
 
 // IsActive implements overlayPanel.
 func (p *PlanPanel) IsActive() bool { return p.active }
-
-// SetFrame advances the current step's live dot from the shared spinner clock.
-// The panel redraws only when something it reads changes, so an unchanged
-// frame is a no-op and a stopped clock leaves the dot still.
-func (p *PlanPanel) SetFrame(frame int) {
-	if p.frame == frame {
-		return
-	}
-	p.frame = frame
-	if p.active {
-		p.invalidate()
-	}
-}
 
 // Resize implements resizableOverlay.
 func (p *PlanPanel) Resize(width, height int) {
@@ -703,7 +686,6 @@ func (p *PlanPanel) steps(pl plan.Plan) string {
 		}
 		b.WriteString(conv.RenderChecklistRow(conv.ChecklistRow{
 			State:    stepChecklistState(pl, i),
-			Frame:    p.frame,
 			Tag:      strconv.Itoa(i+1) + ".",
 			TagWidth: tagWidth,
 			Text:     step.Title,

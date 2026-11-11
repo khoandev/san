@@ -3,7 +3,6 @@ package conv
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/genai-io/san/internal/task"
 	"github.com/genai-io/san/internal/todo"
@@ -41,8 +40,6 @@ func TestTrackerExplicitApprovalAndMixedPlan(t *testing.T) {
 	todo.Default().Create("Plan intent", "", "", nil)
 	p := TrackerListParams{Items: todo.Default().List(), Width: 120, StreamActive: true, AwaitingApproval: map[string]bool{"bg": true}, WorkerStatus: func(string) task.TaskInfo { return task.TaskInfo{Status: task.StatusRunning} }}
 	a := RenderTrackerList(p)
-	p.Frame = 20
-	time.Sleep(time.Millisecond)
 	b := RenderTrackerList(p)
 	if a != b || !strings.Contains(stripANSI(a), "awaiting approval") {
 		t.Fatal("approval should stay still")

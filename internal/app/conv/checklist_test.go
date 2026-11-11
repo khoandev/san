@@ -54,21 +54,23 @@ func TestChecklistSkippedStrikesLabel(t *testing.T) {
 	}
 }
 
-// Only the active row breathes; a done row must render identically on every
-// frame so a finished list is a stable record.
-func TestChecklistActiveBreathesAcrossFrames(t *testing.T) {
-	active := func(frame int) string {
-		return RenderChecklistRow(ChecklistRow{State: ChecklistActive, Frame: frame, Text: "move files", Width: 40})
+// A checklist row holds still: the active row is marked by color and weight,
+// never by a breathing glyph, so a list a person is reading does not blink.
+func TestChecklistRowsHoldStill(t *testing.T) {
+	for _, state := range []ChecklistState{ChecklistActive, ChecklistDone, ChecklistPending, ChecklistBlocked} {
+		first := RenderChecklistRow(ChecklistRow{State: state, Text: "move files", Width: 40})
+		for range 8 {
+			if again := RenderChecklistRow(ChecklistRow{State: state, Text: "move files", Width: 40}); again != first {
+				t.Fatalf("state %d changed between renders:\n%q\n%q", state, first, again)
+			}
+		}
 	}
-	first, peak := active(0), active(3)
-	if first == peak {
-		t.Fatalf("active row did not change across frames:\n%q", first)
+	active := RenderChecklistRow(ChecklistRow{State: ChecklistActive, Text: "move files", Width: 40})
+	if !strings.Contains(stripANSI(active), kit.CurrentSymbols.LiveDot) {
+		t.Fatalf("active row does not lead with the live dot:\n%s", stripANSI(active))
 	}
-	if !strings.Contains(stripANSI(first), kit.CurrentSymbols.LiveDot) {
-		t.Fatalf("active row does not lead with the live dot:\n%s", stripANSI(first))
-	}
-	if done := RenderChecklistRow(ChecklistRow{State: ChecklistDone, Text: "move files", Width: 40}); done != RenderChecklistRow(ChecklistRow{State: ChecklistDone, Text: "move files", Width: 40}) {
-		t.Fatal("done row changed between renders")
+	if want := sgrPrefix(lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent).Bold(true), "x"); !strings.Contains(active, want) {
+		t.Fatalf("active row lost its accent styling:\n%q", active)
 	}
 }
 
@@ -89,7 +91,7 @@ func TestChecklistBlockedAndFailedUseStatusColors(t *testing.T) {
 			if !strings.Contains(row, want) {
 				t.Fatalf("%s row does not use the theme color %q:\n%q", tc.name, want, row)
 			}
-			if plain := stripANSI(row); !strings.Contains(plain, tc.glyph+"  wire the API") {
+			if plain := stripANSI(row); !strings.Contains(plain, tc.glyph+" wire the API") {
 				t.Fatalf("%s row does not lead with %q:\n%s", tc.name, tc.glyph, plain)
 			}
 			if strings.Contains(row, sgrStrikeOn) {
@@ -110,7 +112,7 @@ func TestChecklistGlyphsFollowSymbolTable(t *testing.T) {
 		ChecklistStalled: kit.CurrentSymbols.LiveDot,
 	}
 	for state, want := range cases {
-		if got := stripANSI(state.Glyph(0)); got != want {
+		if got := stripANSI(state.Glyph()); got != want {
 			t.Errorf("state %d glyph = %q, want %q", state, got, want)
 		}
 	}
@@ -125,7 +127,7 @@ func TestRenderChecklistRowFitsWidth(t *testing.T) {
 	longText := "refactor the authentication middleware và giữ tương thích 旧客户端"
 	rows := []ChecklistRow{
 		{State: ChecklistDone, Text: longText, Detail: "a very long trailing note that should yield", Width: 80},
-		{State: ChecklistBlocked, Tag: "#12", TagWidth: 4, Text: longText, Detail: "the API moved", Width: 40},
+		{State: ChecklistBlocked, Tag: "12.", TagWidth: 4, Text: longText, Detail: "the API moved", Width: 40},
 		{State: ChecklistPending, Tag: "1.", Text: longText, Width: 12},
 		{State: ChecklistActive, Text: longText, Width: 3},
 	}
@@ -171,8 +173,8 @@ func TestRenderChecklistRowTruncatesBeforeStyling(t *testing.T) {
 }
 
 func TestRenderChecklistRowAlignsTags(t *testing.T) {
-	short := stripANSI(RenderChecklistRow(ChecklistRow{Tag: "#1", TagWidth: 4, Text: "first", Width: 40}))
-	long := stripANSI(RenderChecklistRow(ChecklistRow{Tag: "#10", TagWidth: 4, Text: "second", Width: 40}))
+	short := stripANSI(RenderChecklistRow(ChecklistRow{Tag: "1.", TagWidth: 4, Text: "first", Width: 40}))
+	long := stripANSI(RenderChecklistRow(ChecklistRow{Tag: "10.", TagWidth: 4, Text: "second", Width: 40}))
 
 	column := func(line, label string) int {
 		i := strings.Index(line, label)
@@ -183,6 +185,13 @@ func TestRenderChecklistRowAlignsTags(t *testing.T) {
 	}
 	if a, b := column(short, "first"), column(long, "second"); a != b {
 		t.Fatalf("labels start at columns %d and %d:\n%q\n%q", a, b, short, long)
+	}
+
+	// A row that carries no ordinal still reserves the column, so a worker's
+	// label lines up with the numbered rows around it.
+	untagged := stripANSI(RenderChecklistRow(ChecklistRow{TagWidth: 4, Text: "third", Width: 40}))
+	if got, want := column(untagged, "third"), column(short, "first"); got != want {
+		t.Fatalf("untagged label starts at column %d, want %d:\n%q", got, want, untagged)
 	}
 }
 

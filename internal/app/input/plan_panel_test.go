@@ -626,7 +626,7 @@ func TestPlanPanelStepsUseTheSharedChecklist(t *testing.T) {
 	if !strings.Contains(skipped, testStrikeOn) {
 		t.Fatalf("a skipped step is not struck through:\n%q", skipped)
 	}
-	if !strings.Contains(ansi.Strip(skipped), "-  3.  rewrite tests") {
+	if !strings.Contains(ansi.Strip(skipped), "- 3. rewrite tests") {
 		t.Fatalf("a skipped step lost its dash:\n%s", ansi.Strip(skipped))
 	}
 
@@ -647,7 +647,7 @@ func TestPlanPanelStepsUseTheSharedChecklist(t *testing.T) {
 	}
 
 	// The ordinal is the step's place in the plan, not its id.
-	for _, want := range []string{"1.  read code", "2.  move files", "5.  ship it"} {
+	for _, want := range []string{"1. read code", "2. move files", "5. ship it"} {
 		if !strings.Contains(ansi.Strip(view), want) {
 			t.Fatalf("the step list lost its ordinal (%q):\n%s", want, ansi.Strip(view))
 		}
@@ -685,22 +685,21 @@ func TestPlanPanelStepsHeadingMirrorsTheStrip(t *testing.T) {
 	}
 }
 
-// The current step's dot breathes on the shared spinner clock, so a plan on
-// screen never shows two different ideas of "now".
-func TestPlanPanelCurrentStepBreathesOnTheSharedClock(t *testing.T) {
+// The current step's dot is solid: the panel says which step is running with
+// color and weight, and nothing on the card blinks while a person reads it.
+func TestPlanPanelCurrentStepHoldsStill(t *testing.T) {
 	p := NewPlanPanel()
 	running := runningStep()
 	p.Enter(plan.State{Mode: plan.ModeExecute, Plans: []plan.Plan{running}, ActiveID: running.ID}, 100, 40)
-	first := p.Render()
 
-	p.SetFrame(3)
-	if second := p.Render(); second == first {
-		t.Fatal("the live dot did not advance with the shared clock")
+	first := p.Render()
+	if !strings.Contains(ansi.Strip(first), kit.CurrentSymbols.LiveDot) {
+		t.Fatalf("the current step lost its live dot:\n%s", ansi.Strip(first))
 	}
-	p.SetFrame(3)
-	steady := p.Render()
-	if p.Render() != steady {
-		t.Fatal("an unchanged frame produced a different render")
+	for range 4 {
+		if again := p.Render(); again != first {
+			t.Fatal("the panel changed between renders without a state change")
+		}
 	}
 }
 

@@ -1,6 +1,10 @@
 // Command layercheck verifies that the repository's internal package imports
 // obey the layer ordering documented in docs/reference/dependency-rules.md.
 //
+// The package → layer assignment comes from docs/reference/package-map.md when
+// the checkout has one, and from embeddedLayerMap otherwise: this fork keeps no
+// docs tree, so the tool must still run there.
+//
 // Layers (top of stack → bottom):
 //
 //	cmd  →  app  →  feature  →  core  →  infrastructure
@@ -17,7 +21,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -37,8 +44,12 @@ var rank = map[string]int{
 	"infrastructure": 4,
 }
 
+// docsLayerMapPath is where upstream records the assignment. A checkout without
+// that file falls back to embeddedLayerMap.
+const docsLayerMapPath = "docs/reference/package-map.md"
+
 func main() {
-	layerOf, err := loadLayerMap("docs/reference/package-map.md")
+	layerOf, err := loadLayerMap(docsLayerMapPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "layercheck:", err)
 		os.Exit(2)
@@ -91,7 +102,7 @@ func main() {
 			ks = append(ks, k)
 		}
 		sort.Strings(ks)
-		fmt.Fprintln(os.Stderr, "layercheck: unmapped internal packages (add to docs/reference/package-map.md):")
+		fmt.Fprintln(os.Stderr, "layercheck: unmapped internal packages (add to docs/reference/package-map.md on upstream/main, or to embeddedLayerMap in package_map.go):")
 		for _, k := range ks {
 			fmt.Fprintln(os.Stderr, "  "+k)
 		}
@@ -121,10 +132,15 @@ func main() {
 }
 
 // loadLayerMap reads docs/reference/package-map.md and returns the package
-// layer assignment. Subpackages inherit from the nearest mapped ancestor.
+// layer assignment. Subpackages inherit from the nearest mapped ancestor. A
+// checkout without the file — this fork, which keeps no docs tree — gets the
+// embedded assignment instead, so the lint gate still checks import layers.
 func loadLayerMap(path string) (map[string]string, error) {
 	b, err := os.ReadFile(path)
-	if err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return maps.Clone(embeddedLayerMap), nil
+	case err != nil:
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	layerOf, err := parseLayerMap(string(b))

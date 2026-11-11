@@ -469,14 +469,14 @@ func skipSedTranslate(program string, i int) (int, bool) {
 // method when --method is absent) are read-only. Any call with --method POST,
 // PATCH, PUT, or DELETE is a write.
 var readOnlyGhSubcommands = map[string]bool{
-	"api":      true, // further gated by --method below
-	"auth":     true, // "auth status" and "auth token" are read-only
-	"browse":   true, // opens a URL in the browser; no write effect
-	"help":     true,
-	"issue":    true, // sub-actions: list, view, status
-	"pr":       true, // sub-actions: list, view, checks, diff, status
-	"release":  true, // sub-actions: list, view, download (read-only)
-	"repo":     true, // sub-actions: view, list, clone (clone writes disk but
+	"api":     true, // further gated by --method below
+	"auth":    true, // "auth status" and "auth token" are read-only
+	"browse":  true, // opens a URL in the browser; no write effect
+	"help":    true,
+	"issue":   true, // sub-actions: list, view, status
+	"pr":      true, // sub-actions: list, view, checks, diff, status
+	"release": true, // sub-actions: list, view, download (read-only)
+	"repo":    true, // sub-actions: view, list, clone (clone writes disk but
 	//                // only the repo copy, same as git clone; kept here because
 	//                // it is the standard investigation flow)
 	"run":      true, // sub-actions: list, view, download
@@ -737,26 +737,26 @@ var readOnlyBrewSubcommands = map[string]bool{
 	"list": true, "ls": true,
 	"info": true, "abv": true,
 	"search": true,
-	"deps": true, "uses": true,
-	"outdated": true,
-	"leaves": true,
-	"missing": true,
-	"cat": true,     // prints the formula file
-	"log": true,     // git log of the formula
-	"audit": true,   // lints a formula (read-only)
-	"home": true,    // opens the project page in a browser
-	"help": true,
+	"deps":   true, "uses": true,
+	"outdated":  true,
+	"leaves":    true,
+	"missing":   true,
+	"cat":       true, // prints the formula file
+	"log":       true, // git log of the formula
+	"audit":     true, // lints a formula (read-only)
+	"home":      true, // opens the project page in a browser
+	"help":      true,
 	"--version": true, "-v": true,
-	"shellenv": true,
-	"config": true,
+	"shellenv":    true,
+	"config":      true,
 	"environment": true,
-	"doctor": true, // checks the system; no writes
-	"bundle": true, // used for Brewfile export (read), gated below
-	"formulae": true,
-	"casks": true,
-	"commands": true,
+	"doctor":      true, // checks the system; no writes
+	"bundle":      true, // used for Brewfile export (read), gated below
+	"formulae":    true,
+	"casks":       true,
+	"commands":    true,
 	"completions": true,
-	"tap-info": true,
+	"tap-info":    true,
 }
 
 // isReadOnlyBrewCommand reports whether a brew invocation is read-only.
@@ -787,8 +787,8 @@ var readOnlyNodeSubcommands = map[string]bool{
 	"search": true, "find": true,
 	// Dependency analysis.
 	"outdated": true,
-	"audit": true,
-	"why": true, "explain": true,
+	"audit":    true,
+	"why":      true, "explain": true,
 	// Documentation helpers (open in browser; no write).
 	"docs": true, "repo": true, "home": true, "bugs": true,
 	// Meta.
@@ -799,7 +799,7 @@ var readOnlyNodeSubcommands = map[string]bool{
 	//               // The common read usage (npm config list, npm config get X)
 	//               // is covered; a user who does "npm config set" gets blocked
 	//               // by the sub-action guard in the caller.
-	"pack": true,  // creates a tarball in cwd; treat as read (no install)
+	"pack": true, // creates a tarball in cwd; treat as read (no install)
 }
 
 // readOnlyNodeWriteSubActions blocks write sub-actions under otherwise
@@ -847,8 +847,8 @@ func isReadOnlyNodePackageCommand(args []string) bool {
 var readOnlyPipSubcommands = map[string]bool{
 	"list": true, "show": true, "freeze": true,
 	"search": true, "check": true, "help": true,
-	"index": true, // "pip index versions pkg"
-	"inspect": true,
+	"index":     true, // "pip index versions pkg"
+	"inspect":   true,
 	"--version": true, "-V": true,
 }
 
@@ -973,7 +973,7 @@ var readOnlyKubectlSubcommands = map[string]bool{
 	"top": true, "diff": true,
 	"version": true, "api-versions": true, "api-resources": true,
 	"cluster-info": true, "help": true,
-	"auth": true,   // "auth can-i" is read-only
+	"auth":   true, // "auth can-i" is read-only
 	"config": true, // "config view", "config current-context", "config get-*"
 }
 
@@ -984,7 +984,7 @@ var readOnlyKubectlWriteSubActions = map[string]bool{
 	"set-cluster": true, "set-credentials": true,
 	"delete-cluster": true, "delete-context": true, "delete-user": true,
 	"rename-context": true,
-	"reconcile": true,
+	"reconcile":      true,
 }
 
 // isReadOnlyKubectlCommand reports whether a kubectl invocation is read-only.

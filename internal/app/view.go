@@ -486,7 +486,6 @@ func (m *model) renderTrackerList() string {
 		CompletionShown:  m.taskCompletionShown,
 		Blockers:         m.services.Tracker.OpenBlockers,
 		Executing:        m.executingTrackerItem,
-		Frame:            m.conv.Spinner.Frame(),
 		AgentColors:      m.agentColors(),
 		AwaitingApproval: m.pendingTaskApprovals(),
 		WorkerStatus: func(id string) task.TaskInfo {

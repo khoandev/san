@@ -47,14 +47,15 @@ func (s ChecklistState) retired() bool {
 	return s == ChecklistDone || s == ChecklistSkipped
 }
 
-// Glyph returns the status mark the state draws. Only the active state moves:
-// it breathes on the shared frame tick, while every other state holds still, so
-// a row never claims motion it does not have. Stalled reuses the live dot as a
-// solid mark because its work did start — nothing is advancing it.
-func (s ChecklistState) Glyph(frame int) string {
+// Glyph returns the status mark the state draws. Every mark holds still: a
+// checklist row never animates, so a running list reads as a stable record
+// instead of a blinking one. The active row is set apart by its color and
+// weight, not by motion. Stalled reuses the live dot as a solid mark because
+// its work did start — nothing is advancing it.
+func (s ChecklistState) Glyph() string {
 	switch s {
 	case ChecklistActive:
-		return kit.LiveDot(frame)
+		return kit.CurrentSymbols.LiveDot
 	case ChecklistDone:
 		return kit.CurrentSymbols.Success
 	case ChecklistSkipped:
@@ -123,15 +124,14 @@ func (s ChecklistState) render(text string, tint kit.AdaptiveColor) string {
 type ChecklistRow struct {
 	// State drives the row's glyph, color and strike.
 	State ChecklistState
-	// Frame advances the active glyph's breath; other states ignore it.
-	Frame int
 	// Indent leads the row. Empty means two spaces.
 	Indent string
-	// Tag is the ordinal or id shown before the label ("1.", "#4"). Empty
-	// draws no tag.
+	// Tag is the ordinal shown before the label ("1."). Empty draws no tag,
+	// though a sibling list can still reserve the column through TagWidth.
 	Tag string
-	// TagWidth pads Tag to this display width so sibling rows align their
-	// labels. Zero leaves the tag as written.
+	// TagWidth reserves this many display columns for the tag column, so
+	// sibling rows align their labels. Zero pads the tag to its own width,
+	// and an empty tag with no reserved width draws no column at all.
 	TagWidth int
 	// Text is the label. It is truncated before it is styled.
 	Text string
@@ -162,25 +162,26 @@ func RenderChecklistRow(row ChecklistRow) string {
 	if indent == "" {
 		indent = "  "
 	}
-	tag := row.Tag
-	if tag != "" {
-		if pad := row.TagWidth - lipgloss.Width(tag); pad > 0 {
+	glyphStyle := row.State.style()
+	if row.Tint != (kit.AdaptiveColor{}) {
+		glyphStyle = glyphStyle.Foreground(row.Tint)
+	}
+	// One space of air between the mark, the ordinal and the label: the row
+	// reads as a numbered list, and the columns saved go to the label.
+	prefix := indent + glyphStyle.Render(row.State.Glyph()) + " "
+	// A list reserves the tag column for every row, so a row that carries no
+	// ordinal (a background worker, say) keeps its label in line with the
+	// numbered rows around it.
+	tagWidth := row.TagWidth
+	if tagWidth <= 0 {
+		tagWidth = lipgloss.Width(row.Tag)
+	}
+	if tagWidth > 0 {
+		tag := row.Tag
+		if pad := tagWidth - lipgloss.Width(tag); pad > 0 {
 			tag += strings.Repeat(" ", pad)
 		}
-	}
-	glyph := row.State.Glyph(row.Frame)
-	if row.State != ChecklistActive {
-		// The active glyph already carries its breath color; tinting it again
-		// would freeze the animation.
-		glyphStyle := row.State.style()
-		if row.Tint != (kit.AdaptiveColor{}) {
-			glyphStyle = glyphStyle.Foreground(row.Tint)
-		}
-		glyph = glyphStyle.Render(glyph)
-	}
-	prefix := indent + glyph + "  "
-	if tag != "" {
-		prefix += tag + "  "
+		prefix += tag + " "
 	}
 	prefixWidth := lipgloss.Width(prefix)
 
@@ -190,12 +191,12 @@ func RenderChecklistRow(row ChecklistRow) string {
 	note := strings.Join(strings.Fields(row.Detail), " ")
 
 	// The note yields to the label: a row with a long reason still names the
-	// work it is about, keeping minLabelColumns plus the two-space gap.
+	// work it is about, keeping minLabelColumns plus the one-space gap.
 	detail := ""
 	if note != "" {
-		budget := min(width-prefixWidth-minLabelColumns-2, max(1, width/2))
+		budget := min(width-prefixWidth-minLabelColumns-1, max(1, width/2))
 		if budget > 0 {
-			detail = "  " + checklistDetailStyle.Render(kit.TruncateText(note, budget))
+			detail = " " + checklistDetailStyle.Render(kit.TruncateText(note, budget))
 		}
 	}
 

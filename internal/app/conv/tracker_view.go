@@ -2,6 +2,7 @@ package conv
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,13 +31,10 @@ type TrackerListParams struct {
 	// Nil treats completions as already announced.
 	CompletionShown func(taskID string) bool
 	// Executing reports whether the executor behind an item is running right
-	// now. An in_progress item only animates when Executing says so: the
-	// status field records intent and outlives the process that wrote it, so
-	// it cannot by itself justify a moving pixel.
+	// now. An in_progress item only reads as running when Executing says so:
+	// the status field records intent and outlives the process that wrote it,
+	// so it cannot by itself claim work is happening.
 	Executing func(t *todo.Item) bool
-	// Frame is the shared frame-tick counter (see FrameClock.Frame) that
-	// breathes the in-progress item's live dot.
-	Frame int
 	// AgentColors maps an agent's name to its display color. An item owned by a
 	// background agent (Owner set) is tinted with that color, matching the
 	// agent's launch line in the flow. Plain user todos have no owner and keep
@@ -85,6 +83,13 @@ func RenderTrackerList(params TrackerListParams) string {
 	todosDone, todos := TodoProgress(params.Items)
 	planDone, planTotal := planTodoCounts(items)
 
+	items = orderTrackerItems(items)
+	ordinals, numbered := trackerOrdinals(items)
+	tagWidth := 0
+	if numbered > 0 {
+		tagWidth = len(strconv.Itoa(numbered)) + 1
+	}
+
 	// Completed work may rest when idle — but a plan's rows are the record of
 	// what just ran, so they stay struck through until the plan is replaced or
 	// the session leaves Execute Mode (see syncPlanTodos). That is also why the
@@ -109,7 +114,6 @@ func RenderTrackerList(params TrackerListParams) string {
 	}
 
 	visible, hidden := visibleTrackerItems(items)
-	idWidth := itemIDWidth(visible)
 	planHeading := planTotal > 0
 	lastPlan := true
 	// Query executor liveness only for visible rows; counts use recorded status.
@@ -165,7 +169,11 @@ func RenderTrackerList(params TrackerListParams) string {
 		if progress != "" {
 			suffix = mutedStyle.Render(kit.TruncateText(" · "+progress, max(1, params.Width/2)))
 		}
-		line := renderItem(t, phase, max(1, params.Width-lipgloss.Width(suffix)), idWidth, params.Blockers, params.Frame, params.AgentColors)
+		num := itemNumber{width: tagWidth}
+		if ordinal, ok := ordinals[t.ID]; ok {
+			num.tag = strconv.Itoa(ordinal) + "."
+		}
+		line := renderItem(t, phase, max(1, params.Width-lipgloss.Width(suffix)), num, params.Blockers, params.AgentColors, ordinals)
 		sb.WriteString(kit.TruncateText(strings.TrimSuffix(line, "\n")+suffix, max(1, params.Width)) + "\n")
 	}
 
@@ -417,18 +425,10 @@ func activeText(t *todo.Item) string {
 // (finished, skipped, active, blocked, pending) share the checklist primitive;
 // approval, abort and stall keep the marks their phase has always drawn, since
 // their meaning is narrower than any one state.
-func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func(string) []string, frame int, agentColors map[string]string) string {
+func renderItem(t *todo.Item, phase itemPhase, width int, num itemNumber, blockers func(string) []string, agentColors map[string]string, ordinals map[string]int) string {
 	indent := "  "
 	mutedStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
-
-	tag, tagWidth := "", 0
-	if todo.BackgroundTaskID(t) == "" {
-		tag, tagWidth = "#"+t.ID, idWidth
-	}
-	idTag := ""
-	if tag != "" {
-		idTag = fmt.Sprintf("%-*s", idWidth, tag)
-	}
+	idTag := num.padded()
 
 	// A row owned by a background agent wears that agent's color (icon + text),
 	// mirroring its launch line in the flow; a plain todo keeps the status
@@ -443,10 +443,9 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 	checklist := func(state ChecklistState, text, detail string) string {
 		return RenderChecklistRow(ChecklistRow{
 			State:    state,
-			Frame:    frame,
 			Indent:   indent,
-			Tag:      tag,
-			TagWidth: tagWidth,
+			Tag:      num.tag,
+			TagWidth: num.width,
 			Text:     text,
 			Detail:   detail,
 			Width:    width,
@@ -492,9 +491,9 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 		return renderItemLine(indent, mutedStyle.Render("◌"), idTag, activeText(t), mutedStyle.Render("[stalled]"), width)
 
 	case itemRunning:
-		// Breathe on the shared frame tick (a true ~360ms clock; see FrameClock)
-		// rather than the wall clock, which only sampled on redraws and so
-		// flickered irregularly.
+		// The active row is marked by the shared checklist: the accent color
+		// and a solid live dot. Nothing on this list animates, so a reader can
+		// scan it without a blinking pixel dragging attention away.
 		detail := ""
 		if elapsed := formatElapsedTime(t.StatusChangedAt); elapsed != "" {
 			detail = "· " + elapsed
@@ -507,6 +506,13 @@ func renderItem(t *todo.Item, phase itemPhase, width, idWidth int, blockers func
 			if bl := blockers(t.ID); len(bl) > 0 {
 				blockerRefs := make([]string, len(bl))
 				for i, b := range bl {
+					// A blocker is usually a row in this same list, so name it
+					// by the number a reader can look for. Work that is not on
+					// the list keeps its id.
+					if ordinal, ok := ordinals[b]; ok {
+						blockerRefs[i] = strconv.Itoa(ordinal)
+						continue
+					}
 					blockerRefs[i] = "#" + b
 				}
 				detail = "← " + strings.Join(blockerRefs, ", ")
@@ -531,13 +537,13 @@ func agentForeground(t *todo.Item, agentColors map[string]string) (kit.AdaptiveC
 }
 
 func renderItemLine(indent, icon, id, subject, detail string, width int) string {
-	prefix := indent + icon + "  "
+	prefix := indent + icon + " "
 	if id != "" {
-		prefix += id + "  "
+		prefix += id + " "
 	}
 	suffix := ""
 	if detail != "" {
-		suffix = "  " + detail
+		suffix = " " + detail
 	}
 	textWidth := width - lipgloss.Width(prefix+suffix)
 	if textWidth <= 0 {
@@ -548,14 +554,58 @@ func renderItemLine(indent, icon, id, subject, detail string, width int) string 
 	return kit.TruncateText(prefix+subject+suffix, max(1, width)) + "\n"
 }
 
-func itemIDWidth(items []*todo.Item) int {
-	width := 0
+// orderTrackerItems puts the plan's rows first, in the order the plan gave
+// them, then everything else in its recorded order. The ordinal column runs
+// through the whole list, so plan steps keep the numbers 1..N the Execution
+// Panel shows for the same steps.
+func orderTrackerItems(items []*todo.Item) []*todo.Item {
+	ordered := make([]*todo.Item, 0, len(items))
 	for _, t := range items {
-		if todo.BackgroundTaskID(t) == "" {
-			width = max(width, len(t.ID)+1)
+		if todo.PlanID(t) != "" {
+			ordered = append(ordered, t)
 		}
 	}
-	return width
+	for _, t := range items {
+		if todo.PlanID(t) == "" {
+			ordered = append(ordered, t)
+		}
+	}
+	return ordered
+}
+
+// trackerOrdinals numbers the rows that read as steps — the plan's steps and
+// the session's own todos — in display order, and reports how many there were.
+// Background work is nobody's step, so it keeps the column blank rather than
+// taking a number. Numbers are assigned before windowing, so folding a row away
+// never renumbers the rows that remain.
+func trackerOrdinals(items []*todo.Item) (map[string]int, int) {
+	ordinals := make(map[string]int, len(items))
+	next := 0
+	for _, t := range items {
+		if todo.BackgroundTaskID(t) != "" {
+			continue
+		}
+		next++
+		ordinals[t.ID] = next
+	}
+	return ordinals, next
+}
+
+// itemNumber is one row's place in the shared ordinal column: the tag it draws
+// and the column it must occupy. A background worker keeps the width and draws
+// no tag, so every label in the list stays on one column.
+type itemNumber struct {
+	tag   string
+	width int
+}
+
+// padded is the tag as it sits in the column. Tags are ASCII ordinals ("12."),
+// so rune padding and display width agree.
+func (n itemNumber) padded() string {
+	if n.width <= 0 {
+		return n.tag
+	}
+	return fmt.Sprintf("%-*s", n.width, n.tag)
 }
 
 func formatElapsedTime(since time.Time) string {
