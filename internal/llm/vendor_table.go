@@ -42,6 +42,11 @@ type vendorEntry struct {
 	meta     Meta
 	vendorID string
 
+	// build states the vendor row outright, for the endpoints the catalog has
+	// no row for and whose address lives in San's store rather than in a
+	// constant. When set it takes the place of vendorID.
+	build func() (catalog.Vendor, error)
+
 	// configure fills in what the catalog cannot: a credential from San's
 	// secret store, an endpoint the user set, a deployment. Nil means the
 	// common case — the vendor's first key variable and its default host.
@@ -66,6 +71,7 @@ var vendorDisplays = map[ProviderID]ProviderDisplay{
 	AgnesAI:        {Name: "Agnes-AI", Order: 130},
 	CustomProvider: {Name: "Custom", Order: 140},
 	OpenCodeZen:    {Name: "OpenCode Zen (Free)", Order: 15},
+	Sleev:          {Name: "Sleev (local gateway)", Order: 145},
 }
 
 var vendorEntries = []vendorEntry{
@@ -170,6 +176,21 @@ var vendorEntries = []vendorEntry{
 		meta:      Meta{Provider: CustomProvider, AuthMethod: AuthAPIKey, EnvVars: []string{CustomAPIKeyEnvVar}, DisplayName: "Direct API"},
 		configure: configureCustom,
 	},
+	{
+		// The gateway is a destination, not a source of models: every provider
+		// reached through it is connected in its own right, and this row is
+		// where the user says whether it is on and where it listens. It is
+		// therefore never connected, which keeps it out of the model lists and
+		// out of ResolveProvider's fallback.
+		meta: Meta{
+			Provider: Sleev, AuthMethod: AuthAPIKey,
+			EnvVars:     []string{SleevAPIKeyEnvVar},
+			DisplayName: "Local gateway",
+			Hint:        sleevHint,
+		},
+		build:     sleevVendor,
+		configure: configureSleev,
+	},
 }
 
 // init makes every vendor in the table reachable through the registry above.
@@ -219,6 +240,15 @@ func (e vendorEntry) factory() Factory {
 				return nil, err
 			}
 		}
+		// An enabled gateway takes the endpoint over: every model this vendor
+		// serves is reached through it. Its own row is the forwarding address
+		// rather than a source of models, so it is never routed through
+		// itself.
+		if e.meta.Provider != Sleev {
+			if err := loadSleevGate().route(&cfg, vendor); err != nil {
+				return nil, err
+			}
+		}
 		return newVendorProvider(providerName(e.meta), vendor, cfg), nil
 	}
 }
@@ -227,6 +257,9 @@ func (e vendorEntry) factory() Factory {
 // vendor ID builds its own, which is how the user-defined endpoint — a host
 // that exists in no catalog — reaches the same code path as every other.
 func (e vendorEntry) resolveVendor() (catalog.Vendor, error) {
+	if e.build != nil {
+		return e.build()
+	}
 	if e.vendorID == "" {
 		return customVendor()
 	}
@@ -315,6 +348,39 @@ func customVendor() (catalog.Vendor, error) {
 // configureCustom is a no-op beyond what the vendor row already carries: the
 // host came from the store and the key from the secret store.
 func configureCustom(catalog.Vendor, *endpoint.Config) error { return nil }
+
+// sleevHint is what the credential form says above the gateway: its address and
+// harness come from the row itself, and only a gateway that gates on its own
+// credential needs anything typed here.
+const sleevHint = "Optional: only a gateway that checks its own key needs one. Provider credentials still travel through it."
+
+// sleevVendor builds the row for the gateway's settings entry.
+//
+// The protocol is the one every OpenAI-compatible forwarder speaks, so the row
+// has a shape the listing code understands; the address is where the gateway
+// listens, and the key — when the user states one — is the gateway's own, not a
+// provider's.
+func sleevVendor() (catalog.Vendor, error) {
+	baseURL := DefaultSleevBaseURL
+	store, err := NewStore()
+	if err != nil {
+		return catalog.Vendor{}, fmt.Errorf("llm: loading the provider store: %w", err)
+	}
+	if cfg := store.Sleev(); cfg != nil {
+		baseURL = cfg.Normalized().BaseURL
+	}
+	return catalog.Vendor{
+		ID:          string(Sleev),
+		DisplayName: "Sleev",
+		API:         ai.APIOpenAIChat,
+		BaseURL:     baseURL,
+		KeyEnv:      []string{SleevAPIKeyEnvVar},
+	}, nil
+}
+
+// configureSleev is a no-op beyond what the row already carries: the address
+// came from the store just as the custom provider's did.
+func configureSleev(catalog.Vendor, *endpoint.Config) error { return nil }
 
 // openCodeZenVendor builds the row for OpenCode's Zen gateway, which the SDK's
 // catalog does not carry.

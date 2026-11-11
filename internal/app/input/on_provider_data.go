@@ -25,6 +25,7 @@ func (s *ProviderSelector) Enter(ctx context.Context, width, height int) (tea.Cm
 	s.closeCredentialForm()
 	s.closeCustomForm()
 	s.closeOllamaForm()
+	s.closeSleevForm()
 	s.assignRole = ""
 	s.clearEffortStep()
 	s.roleNotice = ""
@@ -72,16 +73,23 @@ func (s *ProviderSelector) loadProviderData() (tea.Cmd, error) {
 
 		connected := false
 		for _, info := range infos {
+			status := info.Status
+			if p == llm.Sleev {
+				// The gateway's row reports the setting, not a credential: it
+				// is on when the user turned it on, and ready when its key is
+				// stored. Nothing behind it is connected on its behalf.
+				status = s.sleevRowStatus()
+			}
 			item.AuthMethods = append(item.AuthMethods, providerAuthMethodItem{
 				Provider:        info.Meta.Provider,
 				AuthMethod:      info.Meta.AuthMethod,
 				DisplayName:     info.Meta.DisplayName,
-				Status:          info.Status,
+				Status:          status,
 				EnvVars:         info.Meta.EnvVars,
 				OptionalEnvVars: info.Meta.OptionalEnvVars,
 				Hint:            info.Meta.Hint,
 			})
-			if info.Status == llm.StatusConnected {
+			if status == llm.StatusConnected {
 				connected = true
 			}
 		}
@@ -516,6 +524,7 @@ func (s *ProviderSelector) Cancel() {
 	s.closeCustomForm()
 	s.closeOllamaForm()
 	s.store = nil
+	s.closeSleevForm()
 	s.resetNavigation()
 	s.resetModelSearch()
 	s.resetConnectionResult()

@@ -1,6 +1,10 @@
 package llm
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
 
 func TestStore_PersistsConnectionsCurrentModelSearchProviderAndContextLimits(t *testing.T) {
 	tmpHome := t.TempDir()
@@ -344,5 +348,115 @@ func TestStore_CachedModelLimitsForProvider(t *testing.T) {
 	// An unknown provider/auth pair reports no window.
 	if in, out := store.CachedModelLimitsForProvider(OpenAI, AuthMethod("none"), "gpt-5.5"); in != 0 || out != 0 {
 		t.Fatalf("CachedModelLimitsForProvider(none) = (%d, %d), want (0, 0)", in, out)
+	}
+}
+
+// The gateway config is a decision the user made, so it has to survive a
+// restart — and it must never carry the credential, which belongs in the
+// secret store.
+func TestStore_PersistsSleevConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if cfg := store.Sleev(); cfg != nil {
+		t.Fatalf("Sleev() on a fresh store = %#v, want nil", cfg)
+	}
+
+	want := SleevConfig{Enabled: true, BaseURL: "http://127.0.0.1:17321", Harness: "pi"}
+	if err := store.SetSleev(want); err != nil {
+		t.Fatalf("SetSleev() error = %v", err)
+	}
+
+	reloaded, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore(reload) error = %v", err)
+	}
+	got := reloaded.Sleev()
+	if got == nil {
+		t.Fatal("Sleev() after reload = nil, want the saved config")
+	}
+	if *got != want {
+		t.Fatalf("Sleev() after reload = %#v, want %#v", *got, want)
+	}
+	if !got.IsEnabled() {
+		t.Fatal("IsEnabled() = false, want true for an enabled config")
+	}
+
+	// The block states exactly the three settings: no credential, no spare
+	// fields a later release would have to migrate.
+	raw, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatalf("read %s: %v", store.path, err)
+	}
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatalf("parse %s: %v", store.path, err)
+	}
+	var block map[string]any
+	if err := json.Unmarshal(file["sleev"], &block); err != nil {
+		t.Fatalf("parse sleev block: %v", err)
+	}
+	if len(block) != 3 {
+		t.Fatalf("sleev block = %v, want exactly enabled/baseURL/harness", block)
+	}
+	for name := range block {
+		switch name {
+		case "enabled", "baseURL", "harness":
+		default:
+			t.Fatalf("unexpected key %q in sleev block %v", name, block)
+		}
+	}
+}
+
+// An unset address, an unset harness, or a hand-edited trailing slash all read
+// back as the working default rather than an empty string no request can use.
+func TestStore_SleevDefaultsAndNormalization(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	// Trailing slashes are trimmed so a gateway path is never doubled.
+	if err := store.SetSleev(SleevConfig{Enabled: true, BaseURL: "  http://127.0.0.1:9999//  ", Harness: "  "}); err != nil {
+		t.Fatalf("SetSleev() error = %v", err)
+	}
+	got := store.Sleev()
+	if got.BaseURL != "http://127.0.0.1:9999" {
+		t.Fatalf("BaseURL = %q, want the trimmed address", got.BaseURL)
+	}
+	if got.Harness != DefaultSleevHarness {
+		t.Fatalf("Harness = %q, want %q", got.Harness, DefaultSleevHarness)
+	}
+
+	// A config that states nothing falls back to the local default.
+	if err := store.SetSleev(SleevConfig{Enabled: true}); err != nil {
+		t.Fatalf("SetSleev() error = %v", err)
+	}
+	if got := store.Sleev(); got.BaseURL != DefaultSleevBaseURL {
+		t.Fatalf("BaseURL = %q, want %q", got.BaseURL, DefaultSleevBaseURL)
+	}
+
+	// A hand-edited file that omits both reads the same way.
+	if err := os.WriteFile(store.path, []byte(`{"sleev":{"enabled":true}}`), 0o644); err != nil {
+		t.Fatalf("write %s: %v", store.path, err)
+	}
+	if err := store.Reload(); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	got = store.Sleev()
+	if got.BaseURL != DefaultSleevBaseURL || got.Harness != DefaultSleevHarness {
+		t.Fatalf("Sleev() after hand-edit = %#v, want the defaults", *got)
+	}
+
+	// A user who never configured a gateway holds no config at all, and that
+	// reads as disabled rather than as a crash.
+	var absent *SleevConfig
+	if absent.IsEnabled() {
+		t.Fatal("IsEnabled() on a nil config = true, want false")
 	}
 }

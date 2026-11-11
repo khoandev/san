@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,60 @@ const (
 	CustomAPIKeyEnvVar = "SAN_CUSTOM_API_KEY"
 )
 
+// The Sleev gateway.
+//
+// Sleev is not a vendor of its own: it is a local forwarder every configured
+// provider's traffic can be routed through, so the address below is a
+// destination rather than a source of models. Its configuration lives here
+// beside the custom provider's for the same reason — it is a decision the user
+// made, not something an endpoint told San about itself.
+const (
+	// Sleev is the provider name the gateway's settings row is registered
+	// under. It is never a model source.
+	Sleev ProviderID = "sleev"
+	// SleevAPIKeyEnvVar is where the gateway's credential is kept.
+	SleevAPIKeyEnvVar = "SAN_SLEEV_API_KEY"
+	// DefaultSleevBaseURL is the address the gateway listens on when the user
+	// states none.
+	DefaultSleevBaseURL = "http://127.0.0.1:17321"
+	// DefaultSleevHarness is the harness name the gateway is told it is
+	// serving, when the user names no other.
+	DefaultSleevHarness = "pi"
+)
+
+// SleevConfig stores the local gateway requests are forwarded through while it
+// is enabled. The API key is not kept here — it lives in the secret store
+// under SleevAPIKeyEnvVar.
+type SleevConfig struct {
+	// Enabled routes every provider's requests through the gateway. Opt-in:
+	// false is the zero value.
+	Enabled bool `json:"enabled"`
+	// BaseURL is the gateway's own address, e.g. http://127.0.0.1:17321.
+	BaseURL string `json:"baseURL,omitempty"`
+	// Harness names the client the gateway forwards for, sent as the
+	// sleev-harness header.
+	Harness string `json:"harness,omitempty"`
+}
+
+// IsEnabled reports whether traffic is routed through the gateway. Nil-receiver
+// safe, for callers that hold a config the user never saved.
+func (c *SleevConfig) IsEnabled() bool { return c != nil && c.Enabled }
+
+// Normalized returns the config with its defaults filled in: an unset address
+// is the local default, and trailing slashes are trimmed so the gateway path is
+// never doubled. Harness likewise falls back to its default.
+func (c SleevConfig) Normalized() SleevConfig {
+	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
+	if c.BaseURL == "" {
+		c.BaseURL = DefaultSleevBaseURL
+	}
+	c.Harness = strings.TrimSpace(c.Harness)
+	if c.Harness == "" {
+		c.Harness = DefaultSleevHarness
+	}
+	return c
+}
+
 // CustomProviderConfig stores the user-defined OpenAI-compatible provider added
 // via the /models Providers tab. The API key is not kept here — it lives in the
 // secret store under CustomAPIKeyEnvVar.
@@ -73,6 +128,7 @@ type storeData struct {
 	ContextLimits   map[string]contextLimit   `json:"tokenLimits,omitempty"`     // key: modelID
 	ThinkingEfforts map[string]string         `json:"thinkingEfforts,omitempty"` // key: modelID; value: provider-native effort label
 	CustomProvider  *CustomProviderConfig     `json:"customProvider,omitempty"`  // user-defined OpenAI-compatible provider
+	Sleev           *SleevConfig              `json:"sleev,omitempty"`           // local gateway every provider may be routed through
 }
 
 // Store is providers.json, open. Every accessor locks; the data is unexported
@@ -340,5 +396,30 @@ func (s *Store) SetCustomProvider(cfg CustomProviderConfig) error {
 	defer s.mu.Unlock()
 
 	s.data.CustomProvider = &cfg
+	return s.save()
+}
+
+// Sleev returns the gateway config, or nil when the user never configured one.
+// The copy is normalized, so a hand-edited file with an empty address still
+// says where the gateway is. Returns a copy so callers can't mutate the store.
+func (s *Store) Sleev() *SleevConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.data.Sleev == nil {
+		return nil
+	}
+	cfg := s.data.Sleev.Normalized()
+	return &cfg
+}
+
+// SetSleev saves the gateway config, normalizing it first so what is written
+// back states its defaults rather than relying on the reader to supply them.
+func (s *Store) SetSleev(cfg SleevConfig) error {
+	cfg = cfg.Normalized()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.data.Sleev = &cfg
 	return s.save()
 }
