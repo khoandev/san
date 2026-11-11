@@ -1,6 +1,6 @@
-// /settings Agent tab's Permissions sub-view: one radio group gating YOLO mode.
-// The tab lists it as a drill-in row above the agent roles, so the gate keeps a
-// user-only save of its own instead of joining the roles' user/project form.
+// /settings Agents tab's Permissions sub-view: one radio group gating YOLO mode.
+// The tab lists it as a drill-in row above the agent roles, so the gate keeps its
+// own radio group without sharing the roles' one-line row layout.
 //
 //   - YOLO MODE — allowed / locked. Allowed (the default) puts the mode in
 //     the shift+tab cycle, one step past autopilot; locked removes it and

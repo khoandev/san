@@ -1,4 +1,4 @@
-// /settings Agent tab: the YOLO gate, the advisor's on/off switch, and the model
+// /settings Agents tab: the YOLO gate, the advisor's on/off switch, and the model
 // role each bundled subagent runs on.
 //
 // The tab is laid out and driven like the Appearance tab, because it holds the
@@ -88,7 +88,7 @@ type AgentRoleSource struct {
 	Resolve func(role string) (model, effort string)
 }
 
-// agentPanel is the /settings Agent tab: one list of rows, the YOLO gate and the
+// agentPanel is the /settings Agents tab: one list of rows, the YOLO gate and the
 // role picker behind them, and the writes that follow a change.
 type agentPanel struct {
 	// settings is the live settings handle the panel seeds from.
@@ -181,7 +181,7 @@ func (p *agentPanel) HintLine() string {
 		return p.pick.hint()
 	}
 	if p.rows()[p.cursor].kind == agentRowAdvisor {
-		return kit.HintLine(keycap("↑↓")+" move", keycap("←→")+" off/on", keycap("enter")+" apply")
+		return kit.HintLine(keycap("↑↓")+" move", keycap("←→")+" off/on", keycap("enter")+" toggle")
 	}
 	return kit.HintLine(keycap("↑↓")+" move", keycap("enter")+" open")
 }

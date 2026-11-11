@@ -51,7 +51,7 @@ func renderBarToggle(opt appearanceOption, hovered bool, width int) string {
 
 // renderToggleRow draws one Off/On switch in the shared control layout. It is
 // what every settings tab's switch looks like, so an on/off choice reads the
-// same on the Appearance tab and the Agent tab.
+// same on the Appearance tab and the Agents tab.
 func renderToggleRow(label, desc string, on, hovered bool, width int) string {
 	head, selected := appearanceRowHead(label, hovered)
 	offStyle, onStyle := appearanceToggleStyle, appearanceToggleStyle
