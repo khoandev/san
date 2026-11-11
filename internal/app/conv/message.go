@@ -454,9 +454,10 @@ func renderMarkdownContent(mdRenderer *MDRenderer, content string) string {
 	return trimStyledBlankLines(rendered)
 }
 
-// waitingRow is the live "✦ On it · 12s" row, held at the foot of the
-// message until the reply's first text, even while reasoning streams above
-// it. The breathing star marks UI liveness, not model progress.
+// waitingRow is the live row held at the foot of the message until the reply's
+// first text, even while reasoning streams above it. It only draws when it has
+// something the checklist cannot say — a retry, or a model that went quiet; an
+// unlabelled "On it" row repeated the running step and was removed.
 func (p AssistantParams) waitingRow() string {
 	if p.SuppressWaitingRow || !p.StreamActive || !p.IsLast || p.Content != "" || p.BulletEmitted || len(p.ToolCalls) > 0 {
 		return ""
@@ -471,6 +472,10 @@ const quietModelWaitAfter = 30 * time.Second
 
 // The breathing mark is UI liveness, not proof of model progress. Explain a
 // quiet connection only after real model data has stopped arriving.
+//
+// An empty label draws nothing. The plan/todo strip already shows which step is
+// running and breathes on its own, so a generic wait row below it only repeated
+// that fact and cost the composer a row.
 func renderModelWait(frame, width int, startedAt, lastDataAt time.Time, label string) string {
 	if lastDataAt.IsZero() {
 		lastDataAt = startedAt
@@ -479,18 +484,12 @@ func renderModelWait(frame, width int, startedAt, lastDataAt time.Time, label st
 		label = "Waiting for model"
 	}
 	if label == "" {
-		label = "On it"
+		return ""
 	}
 	if elapsed := formatElapsedTime(startedAt); elapsed != "" {
-		if label != "" {
-			label += " · "
-		}
-		label += elapsed
+		label += " · " + elapsed
 	}
-	row := kit.LiveStar(frame)
-	if label != "" {
-		row += ThinkingStyle.Render(" " + label)
-	}
+	row := kit.LiveStar(frame) + ThinkingStyle.Render(" "+label)
 	if width > 0 {
 		row = kit.TruncateText(row, width)
 	}

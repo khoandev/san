@@ -698,18 +698,15 @@ func (p *PlanPanel) steps(pl plan.Plan) string {
 }
 
 // stepsHeading is the checklist's heading: the label the panel has always
-// drawn, then the counts, the bar and the flags the strip above the composer
-// draws too. Each segment joins only while it fits, so a narrow card keeps the
-// list itself before it keeps its decoration.
+// drawn, then the counts and the flags the strip above the composer draws too.
+// Each segment joins only while it fits, so a narrow card keeps the list
+// itself before it keeps its decoration.
 func (p *PlanPanel) stepsHeading(completed, handled, blocked, total int) string {
 	width := p.innerWidth()
 	line := planSectionStyle.Render("STEPS")
 	fits := func(next string) bool { return lipgloss.Width(next) <= width }
 	if counts := apSummaryStyle.Render(fmt.Sprintf("%d/%d done", completed, total)); fits(line + "  " + counts) {
 		line += "  " + counts
-		if bar := conv.ProgressBar(completed, total); fits(line + "  " + bar) {
-			line += "  " + bar
-		}
 	}
 	if handled > completed {
 		if note := apSummaryStyle.Render(fmt.Sprintf("· %d handled", handled)); fits(line + " " + note) {

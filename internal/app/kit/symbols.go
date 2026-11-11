@@ -65,6 +65,17 @@ type Symbols struct {
 	// AutoPilot leads the one-line autopilot notices ("⏵ autopilot · …"). It is
 	// a single mark, distinct from the mode indicator's AutoAccept pair.
 	AutoPilot string
+	// The Task* marks draw one todo or plan-step row. They are a set of their
+	// own rather than aliases of Success/Warning/RadioOff: a checklist reads at
+	// a glance only when its states share one family of shapes, and reusing a
+	// radio marker for unfinished work made the list read like a settings form.
+	TaskPending string
+	TaskActive  string
+	TaskDone    string
+	TaskSkipped string
+	TaskBlocked string
+	TaskFailed  string
+	TaskStalled string
 	// GroupMark leads the session's group identity ("◆ host/self").
 	GroupMark string
 	// ToolResult leads a tool's result trailer line ("⎿ …").
@@ -93,6 +104,13 @@ var unicodeSymbols = Symbols{
 	ExecuteBadge:  "▶",
 	AutoAccept:    "⏵⏵",
 	AutoPilot:     "⏵",
+	TaskPending:   "○",
+	TaskActive:    "▸",
+	TaskDone:      "✓",
+	TaskSkipped:   "-",
+	TaskBlocked:   "▲",
+	TaskFailed:    "✗",
+	TaskStalled:   "◌",
 	GroupMark:     "◆",
 	ToolResult:    "⎿",
 	BrandStar:     "✦",
@@ -116,6 +134,13 @@ var emojiSymbols = Symbols{
 	ExecuteBadge:  "▶️",
 	AutoAccept:    "⏩",
 	AutoPilot:     "🤖",
+	TaskPending:   "⬜",
+	TaskActive:    "🔄",
+	TaskDone:      "✅",
+	TaskSkipped:   "⏭️",
+	TaskBlocked:   "⚠️",
+	TaskFailed:    "❌",
+	TaskStalled:   "🟡",
 	GroupMark:     "👥",
 	ToolResult:    "📎",
 	BrandStar:     "✨",
@@ -138,6 +163,13 @@ var nerdSymbols = Symbols{
 	ExecuteBadge:  "\uf04b", // nf-fa-play
 	AutoAccept:    "\uf04e", // nf-fa-forward
 	AutoPilot:     "\uf085", // nf-fa-cogs
+	TaskPending:   "\uf096", // nf-fa-square-o
+	TaskActive:    "\uf110", // nf-fa-spinner
+	TaskDone:      "\uf046", // nf-fa-check-square-o
+	TaskSkipped:   "\uf068", // nf-fa-minus
+	TaskBlocked:   "\uf071", // nf-fa-exclamation-triangle
+	TaskFailed:    "\uf00d", // nf-fa-times
+	TaskStalled:   "\uf04c", // nf-fa-pause
 	GroupMark:     "\uf0c0", // nf-fa-users
 	ToolResult:    "\uf149", // nf-fa-level-down
 	BrandStar:     "\uf005", // nf-fa-star
@@ -162,6 +194,13 @@ var plainSymbols = Symbols{
 	ExecuteBadge:  ">",
 	AutoAccept:    "$",
 	AutoPilot:     "$",
+	TaskPending:   "o",
+	TaskActive:    ">",
+	TaskDone:      "v",
+	TaskSkipped:   "-",
+	TaskBlocked:   "!",
+	TaskFailed:    "x",
+	TaskStalled:   "~",
 	GroupMark:     "#",
 	ToolResult:    "\\",
 	BrandStar:     "*",

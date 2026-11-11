@@ -64,7 +64,6 @@ func (s *ProviderSelector) switchTab(t providerTab) {
 	s.closeCredentialForm()
 	s.closeCustomForm()
 	s.closeOllamaForm()
-	s.closeSleevForm()
 	s.rebuildVisibleItems()
 }
 
@@ -74,10 +73,6 @@ func (s *ProviderSelector) PrevTab() {
 }
 
 func (s *ProviderSelector) GoBack() bool {
-	if s.sleevFormActive {
-		s.closeSleevForm()
-		return true
-	}
 	if s.customFormActive {
 		s.closeCustomForm()
 		return true
@@ -129,11 +124,6 @@ func (s *ProviderSelector) appendModelSearch(text string) {
 }
 
 func (s *ProviderSelector) HandleKeypress(key tea.KeyMsg) tea.Cmd {
-	// Route to the gateway form if active
-	if s.sleevFormActive {
-		return s.handleSleevFormKey(key)
-	}
-
 	// Route to the custom provider form if active
 	if s.customFormActive {
 		return s.handleCustomFormKey(key)
@@ -366,13 +356,6 @@ func (s *ProviderSelector) selectProvider(item providerListItem) tea.Cmd {
 		return nil
 	}
 	p := item.Provider
-
-	// The gateway row is settings, not a connection: Enter opens its form
-	// whatever the row says, and the form is where it is turned on or off.
-	if s.isSleevProvider(p.Provider) {
-		s.openSleevForm()
-		return nil
-	}
 
 	// The custom provider needs ID + baseURL + apiKey, so it gets its own form
 	// instead of the credential form. Once connected, Enter refreshes as usual.

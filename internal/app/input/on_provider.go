@@ -8,7 +8,6 @@ package input
 
 import (
 	"context"
-	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -188,15 +187,6 @@ type ProviderSelector struct {
 	ollamaURLInput   textinput.Model
 	ollamaFormErr    string
 
-	// Inline Sleev gateway form (enabled / gateway URL / harness / API key);
-	// see on_provider_sleev.go. The switch is drawn, not typed into, so it has
-	// no input of its own.
-	sleevFormActive  bool
-	sleevFormEnabled bool
-	sleevFormInputs  [sleevFormInputCount]textinput.Model
-	sleevFormFocus   int
-	sleevFormErr     string
-
 	// Inline confirm-remove prompt
 	confirmRemoveActive  bool
 	confirmRemoveEnvVar  string
@@ -293,14 +283,6 @@ type providerConnectResultMsg struct {
 type providerLoginPromptMsg struct {
 	AuthIdx int
 	Prompt  llm.LoginPrompt
-}
-
-// sleevSavedStatus is what the status bar says after the gateway form is saved.
-func sleevSavedStatus(msg sleevSavedMsg) string {
-	if msg.Enabled {
-		return "Sleev: every provider now routes through the local gateway"
-	}
-	return "Sleev: providers call their own endpoints again"
 }
 
 // providerModelsLoadedMsg is sent when async model loading completes.
@@ -401,14 +383,6 @@ func UpdateProvider(deps OverlayDeps, state *ProviderState, msg tea.Msg) (tea.Cm
 			deps.ReloadModelStore()
 		}
 		return nil, true
-	case sleevSavedMsg:
-		// The gateway is a setting, not a connection: nothing is fetched. The
-		// running session still holds a provider built against the previous
-		// address, so it is rebuilt here — otherwise the switch would only
-		// take effect after a restart.
-		applySleevRouting(deps, &state.Selector)
-		token := state.SetStatusMessage(sleevSavedStatus(msg))
-		return kit.StatusTimer(3*time.Second, token), true
 	case providerRoleAssignedMsg:
 		state.Selector.handleRoleWrite(msg.Role, msg.Ref, msg.Effort, true)
 		return nil, true
@@ -443,40 +417,4 @@ func handleProviderModelSelected(deps OverlayDeps, state *ProviderState, msg pro
 		deps.Conv.Append(core.ChatMessage{Role: core.ChatNotice, Content: "Error: " + err.Error()})
 	}
 	return tea.Batch(deps.CommitMessages()...)
-}
-
-// applySleevRouting rebuilds the session's provider after the gateway was
-// switched on or off, so the next turn already routes through (or around) it.
-//
-// The provider the session holds was configured when it was selected, which
-// means it still carries the old address and credential: GetProvider builds a
-// fresh one from the setting just written. With no current model there is
-// nothing to rebuild, so the default connection is cleared and the next turn
-// resolves a provider again.
-func applySleevRouting(deps OverlayDeps, sel *ProviderSelector) {
-	var current *llm.CurrentModelInfo
-	if sel != nil && sel.store != nil {
-		current = sel.store.CurrentModel()
-	}
-
-	if current == nil {
-		if conn := llm.Default(); conn != nil {
-			conn.SetProvider(nil)
-		}
-		return
-	}
-
-	p, err := llm.GetProvider(context.Background(), current.Provider, current.AuthMethod)
-	if err == nil && deps.SwitchProvider != nil {
-		err = deps.SwitchProvider(p, func() error { return nil })
-	}
-	if err != nil {
-		if deps.Conv != nil {
-			deps.Conv.Append(core.ChatMessage{Role: core.ChatNotice, Content: "Error: " + err.Error()})
-		}
-		return
-	}
-	if conn := llm.Default(); conn != nil {
-		conn.SetProvider(p)
-	}
 }

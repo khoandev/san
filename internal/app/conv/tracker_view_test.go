@@ -66,14 +66,14 @@ func TestRenderTrackerListShowsTaskStatus(t *testing.T) {
 	for _, want := range []string{
 		"Todos",
 		"1/2 done",
-		"●",
+		kit.CurrentSymbols.TaskActive,
 		"Fix auth module",
-		"●",
+		kit.CurrentSymbols.TaskFailed,
 		"Fix payment module",
 		"[failed]",
-		"✓",
+		kit.CurrentSymbols.TaskDone,
 		"Ship feature",
-		"○",
+		kit.CurrentSymbols.TaskPending,
 		"Write tests",
 	} {
 		if !strings.Contains(plain, want) {
@@ -82,20 +82,22 @@ func TestRenderTrackerListShowsTaskStatus(t *testing.T) {
 	}
 }
 
-// The running row is told apart by the accent color and a solid dot, never by
-// motion: a list a person is reading must not blink at them.
+// The running row holds a breathing mark; a settled render keeps the same text
+// and only the color moves, so the label stays readable on every frame.
 func TestRenderTaskHoldsStillWhileRunning(t *testing.T) {
 	task := &todo.Item{ID: "1", Subject: "Fix auth module", Status: todo.StatusInProgress}
 	num := itemNumber{tag: "1.", width: 2}
 
-	first := renderItem(task, itemRunning, 80, num, nil, nil, nil)
-	if !strings.Contains(stripANSI(first), kit.CurrentSymbols.LiveDot) {
-		t.Fatalf("in-progress task lost the live dot: %q", stripANSI(first))
+	first := renderItem(task, itemRunning, 80, num, nil, nil, nil, 0)
+	if !strings.Contains(stripANSI(first), kit.CurrentSymbols.TaskActive) {
+		t.Fatalf("in-progress task lost its active mark: %q", stripANSI(first))
 	}
-	for range 8 {
-		if again := renderItem(task, itemRunning, 80, num, nil, nil, nil); again != first {
-			t.Fatalf("in-progress task changed between renders:\n%q\n%q", first, again)
-		}
+	peak := renderItem(task, itemRunning, 80, num, nil, nil, nil, 3)
+	if stripANSI(peak) != stripANSI(first) {
+		t.Fatalf("the breath changed the row text:\n%q\n%q", stripANSI(first), stripANSI(peak))
+	}
+	if peak == first {
+		t.Fatalf("in-progress task did not breathe between frames:\n%q", first)
 	}
 }
 
@@ -140,9 +142,9 @@ func TestRenderTaskHoldsStillWhenStalled(t *testing.T) {
 	task := &todo.Item{ID: "1", Subject: "Fix auth module", Status: todo.StatusInProgress}
 
 	num := itemNumber{tag: "1.", width: 2}
-	first := stripANSI(renderItem(task, itemStalled, 80, num, nil, nil, nil))
+	first := stripANSI(renderItem(task, itemStalled, 80, num, nil, nil, nil, 0))
 	for range 8 {
-		if frame := stripANSI(renderItem(task, itemStalled, 80, num, nil, nil, nil)); frame != first {
+		if frame := stripANSI(renderItem(task, itemStalled, 80, num, nil, nil, nil, 0)); frame != first {
 			t.Fatalf("stalled task animated across frames:\n%q\n%q", first, frame)
 		}
 	}
@@ -195,17 +197,16 @@ func TestRenderTrackerListVisibility(t *testing.T) {
 	}
 }
 
-// Windowing must keep the rows that are moving: in-progress work is classified
-// from its recorded status (itemStalled), and it takes the slots before history
-// does.
-func TestRenderTrackerListKeepsRunningRowsOnOverflow(t *testing.T) {
+// Windowing keeps the rows that are moving: the window is centred on the first
+// in-progress row, so running work never falls outside it.
+func TestRenderTrackerListKeepsRunningRowsInWindow(t *testing.T) {
 	items := make([]*todo.Item, 0, maxVisibleItems+3)
 	for i := 1; i <= maxVisibleItems+3; i++ {
 		id := strconv.Itoa(i)
 		items = append(items, &todo.Item{ID: id, Subject: "Task " + id, Status: todo.StatusCompleted})
 	}
-	items[len(items)-2].Status = todo.StatusInProgress // #10
-	items[len(items)-1].Status = todo.StatusInProgress // #11
+	items[len(items)-2].Status = todo.StatusInProgress
+	items[len(items)-1].Status = todo.StatusInProgress
 
 	plain := stripANSI(RenderTrackerList(TrackerListParams{
 		Items:        items,
@@ -214,19 +215,21 @@ func TestRenderTrackerListKeepsRunningRowsOnOverflow(t *testing.T) {
 		Executing:    func(*todo.Item) bool { return true },
 	}))
 
-	for _, want := range []string{"Task 10", "Task 11"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("running task %q folded away behind finished work:\n%s", want, plain)
-		}
+	ids := numbersOf(taskRowRe.FindAllStringSubmatch(plain, -1))
+	want := []string{"4", "5", "6", "7", "8"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("visible tasks:\n  got:  %v\n  want: %v\n\nfull output:\n%s", ids, want, plain)
 	}
-	if !strings.Contains(plain, "3 completed") {
-		t.Fatalf("folded finished items were not summarized:\n%s", plain)
+	for _, keep := range []string{"Task 7", "Task 8"} {
+		if !strings.Contains(plain, keep) {
+			t.Fatalf("running task %q fell outside the window:\n%s", keep, plain)
+		}
 	}
 }
 
-// A blocked plan step is work waiting on the person, so it keeps its row before
-// pending and finished work; the overflow line names how many are hidden.
-func TestRenderTrackerListSummarizesHiddenBlockedSteps(t *testing.T) {
+// The window sits on the running step and shows only its neighbours; the
+// heading's count is what accounts for the rest.
+func TestRenderTrackerListWindowsAroundRunningStep(t *testing.T) {
 	items := make([]*todo.Item, 0, 11)
 	for i := 1; i <= 10; i++ {
 		id := strconv.Itoa(i)
@@ -243,20 +246,25 @@ func TestRenderTrackerListSummarizesHiddenBlockedSteps(t *testing.T) {
 		Items:        items,
 		StreamActive: true,
 		Width:        120,
+		PlanTitle:    "Big plan",
 		Executing:    func(*todo.Item) bool { return true },
 	}))
 
-	if !strings.Contains(plain, "Running") {
-		t.Fatalf("the running row was folded away:\n%s", plain)
+	for _, want := range []string{"Running", "Blocked 7", "Blocked 8", "Blocked 9", "Blocked 10"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("window lost %q:\n%s", want, plain)
+		}
 	}
-	if !strings.Contains(plain, "Blocked 10") {
-		t.Fatalf("the newest blocked row was folded away:\n%s", plain)
+	for _, gone := range []string{"Blocked 1\n", "Blocked 2\n", "Blocked 3\n"} {
+		if strings.Contains(plain, gone) {
+			t.Fatalf("window kept %q outside the running step:\n%s", gone, plain)
+		}
 	}
-	if strings.Contains(plain, "Blocked 1\n") {
-		t.Fatalf("the oldest blocked row should be the one hidden:\n%s", plain)
+	if !strings.Contains(plain, "0/10 done") {
+		t.Fatalf("heading lost the total that accounts for the hidden rows:\n%s", plain)
 	}
-	if !strings.Contains(plain, "3 blocked steps") {
-		t.Fatalf("hidden blocked rows were not summarized:\n%s", plain)
+	if strings.Contains(plain, "more") || strings.Contains(plain, "▰") {
+		t.Fatalf("window added an overflow line or a bar:\n%s", plain)
 	}
 }
 
@@ -283,8 +291,8 @@ func TestPhaseOfReadsBlockedPlanStep(t *testing.T) {
 	}
 }
 
-// Completed rows yield space to unfinished work when the list overflows.
-func TestRenderTrackerListFoldsLeadingFinished(t *testing.T) {
+// The window follows the running row even when history leads the list.
+func TestRenderTrackerListWindowsAroundLiveWork(t *testing.T) {
 	tasks := make([]*todo.Item, 0, maxVisibleItems+3)
 	for i := 1; i <= maxVisibleItems+3; i++ {
 		id := strconv.Itoa(i)
@@ -294,10 +302,10 @@ func TestRenderTrackerListFoldsLeadingFinished(t *testing.T) {
 			Status:  todo.StatusCompleted,
 		})
 	}
-	// The tail is the work still in flight — it must never fold away.
-	tasks[len(tasks)-3].Status = todo.StatusInProgress // #9
-	tasks[len(tasks)-2].Status = todo.StatusPending    // #10
-	tasks[len(tasks)-1].Status = todo.StatusPending    // #11
+	// The work still in flight sits in the tail; the window must reach it.
+	tasks[len(tasks)-3].Status = todo.StatusInProgress
+	tasks[len(tasks)-2].Status = todo.StatusPending
+	tasks[len(tasks)-1].Status = todo.StatusPending
 
 	plain := stripANSI(RenderTrackerList(TrackerListParams{
 		Items:        tasks,
@@ -307,32 +315,31 @@ func TestRenderTrackerListFoldsLeadingFinished(t *testing.T) {
 	}))
 
 	ids := numbersOf(taskRowRe.FindAllStringSubmatch(plain, -1))
-	want := []string{"4", "5", "6", "7", "8", "9", "10", "11"}
+	want := []string{"4", "5", "6", "7", "8"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("visible tasks:\n  got:  %v\n  want: %v\n\nfull output:\n%s", ids, want, plain)
 	}
-	if !strings.Contains(plain, "3 completed") {
-		t.Fatalf("folded finished items should be summarized, not dropped silently:\n%s", plain)
+	if !strings.Contains(plain, "Task 6") || !strings.Contains(plain, "Task 8") {
+		t.Fatalf("the window missed the live row:\n%s", plain)
 	}
 }
 
 func TestRenderTrackerListLimitsBackgroundTasks(t *testing.T) {
 	cases := []struct {
-		name          string
-		count         int
-		status        string
-		overrides     map[int]string
-		wantIDs       []string
-		wantSummaries []string
+		name      string
+		count     int
+		status    string
+		overrides map[int]string
+		wantIDs   []string
 	}{
 		{
 			name:    "at the limit",
 			count:   8,
 			status:  todo.StatusInProgress,
-			wantIDs: []string{"1", "2", "3", "4", "5", "6", "7", "8"},
+			wantIDs: []string{"1", "2", "3", "4", "5"},
 		},
 		{
-			name:   "interleaved completions",
+			name:   "interleaved completions leave before windowing",
 			count:  11,
 			status: todo.StatusCompleted,
 			overrides: map[int]string{
@@ -342,40 +349,37 @@ func TestRenderTrackerListLimitsBackgroundTasks(t *testing.T) {
 			wantIDs: []string{"1", "3", "5", "9"},
 		},
 		{
-			name:          "many running agents",
-			count:         25,
-			status:        todo.StatusInProgress,
-			wantIDs:       []string{"18", "19", "20", "21", "22", "23", "24", "25"},
-			wantSummaries: []string{"17 more in progress"},
+			name:    "many running agents",
+			count:   25,
+			status:  todo.StatusInProgress,
+			wantIDs: []string{"1", "2", "3", "4", "5"},
 		},
 		{
-			name:          "in progress before pending",
-			count:         11,
-			status:        todo.StatusPending,
-			overrides:     map[int]string{1: todo.StatusInProgress},
-			wantIDs:       []string{"1", "5", "6", "7", "8", "9", "10", "11"},
-			wantSummaries: []string{"3 more pending"},
+			name:      "in progress before pending",
+			count:     11,
+			status:    todo.StatusPending,
+			overrides: map[int]string{1: todo.StatusInProgress},
+			wantIDs:   []string{"1", "2", "3", "4", "5"},
 		},
 		{
-			name:          "abnormal endings stay after completions leave",
-			count:         11,
-			status:        todo.StatusCompleted,
-			overrides:     map[int]string{1: "failed", 2: "killed", 3: "stopped", 4: todo.StatusDetailInterrupted},
-			wantSummaries: []string{"4 past tasks"},
+			name:      "abnormal endings stay after completions leave",
+			count:     11,
+			status:    todo.StatusCompleted,
+			overrides: map[int]string{1: "failed", 2: "killed", 3: "stopped", 4: todo.StatusDetailInterrupted},
+			wantIDs:   []string{"1", "2", "3", "4"},
 		},
 		{
-			name:          "many failed agents",
-			count:         11,
-			status:        "failed",
-			wantSummaries: []string{"11 past tasks"},
+			name:    "many failed agents",
+			count:   11,
+			status:  "failed",
+			wantIDs: []string{"1", "2", "3", "4", "5"},
 		},
 		{
-			name:          "hidden failures stay in the summary",
-			count:         11,
-			status:        todo.StatusInProgress,
-			overrides:     map[int]string{11: "failed"},
-			wantIDs:       []string{"3", "4", "5", "6", "7", "8", "9", "10"},
-			wantSummaries: []string{"2 more in progress", "1 past task"},
+			name:      "a late failure waits outside the window",
+			count:     11,
+			status:    todo.StatusInProgress,
+			overrides: map[int]string{11: "failed"},
+			wantIDs:   []string{"1", "2", "3", "4", "5"},
 		},
 	}
 	rowRE := regexp.MustCompile(`\bTask (\d+)\b`)
@@ -411,18 +415,7 @@ func TestRenderTrackerListLimitsBackgroundTasks(t *testing.T) {
 			if !slices.Equal(ids, tc.wantIDs) {
 				t.Fatalf("visible tasks = %v, want %v:\n%s", ids, tc.wantIDs, plain)
 			}
-			for _, want := range tc.wantSummaries {
-				if !strings.Contains(plain, want) {
-					t.Fatalf("missing overflow summary %q:\n%s", want, plain)
-				}
-			}
-			wantLines := len(tc.wantIDs)
-			if len(tc.wantIDs) > 0 {
-				wantLines++ // Only current rows need a Tasks heading.
-			}
-			if len(tc.wantSummaries) > 0 {
-				wantLines++
-			}
+			wantLines := len(tc.wantIDs) + 1 // heading plus one row each
 			if lines := strings.Count(plain, "\n"); lines != wantLines {
 				t.Fatalf("panel has %d lines, want %d:\n%s", lines, wantLines, plain)
 			}
@@ -440,8 +433,8 @@ func TestRenderItemTintsAgentOwnedRows(t *testing.T) {
 	colors := map[string]string{"explorer": "yellow"}
 
 	num := itemNumber{tag: "1.", width: 2}
-	plain := renderItem(item, itemRunning, 80, num, nil, nil, nil)
-	tinted := renderItem(item, itemRunning, 80, num, nil, colors, nil)
+	plain := renderItem(item, itemRunning, 80, num, nil, nil, nil, 0)
+	tinted := renderItem(item, itemRunning, 80, num, nil, colors, nil, 0)
 
 	if stripANSI(plain) != stripANSI(tinted) {
 		t.Fatalf("agent tint changed the row text, not just its color:\n  %q\n  %q", stripANSI(plain), stripANSI(tinted))
@@ -529,10 +522,10 @@ func TestRenderTrackerListBackgroundRowsDescribeWork(t *testing.T) {
 	if !strings.HasPrefix(plain, "  Todos\n") || strings.Contains(plain, "%") || strings.Count(plain, "\n") != 2 {
 		t.Errorf("a worker should render under the Todos heading without progress counts:\n%s", plain)
 	}
-	if !strings.Contains(plain, "● Save Jenkins script") || strings.Contains(plain, "bash") || taskIDRe.MatchString(plain) {
+	if !strings.Contains(plain, kit.CurrentSymbols.TaskActive+"  Save Jenkins script") || strings.Contains(plain, "bash") || taskIDRe.MatchString(plain) {
 		t.Errorf("worker row should lead with the work description:\n%s", plain)
 	}
-	if strings.Contains(plain, "● 1.") {
+	if strings.Contains(plain, kit.CurrentSymbols.TaskActive+"  1.") {
 		t.Errorf("a background worker must not take an ordinal:\n%s", plain)
 	}
 
@@ -575,8 +568,7 @@ func TestTrackerStripHeaderNamesPlanAndCounts(t *testing.T) {
 	for _, want := range []string{
 		"Plan · Split auth",
 		"1/4 done",
-		"▰▱▱▱▱",
-		"1 blocked step",
+		kit.CurrentSymbols.TaskBlocked + " 1 blocked step",
 		"paused",
 		"waiting for you",
 	} {
@@ -585,7 +577,11 @@ func TestTrackerStripHeaderNamesPlanAndCounts(t *testing.T) {
 		}
 	}
 	// The rows follow the plan's own states, one row each.
-	for _, want := range []string{"✓ 1. read code", "● 2. move files", "○ 3. add tests"} {
+	for _, want := range []string{
+		kit.CurrentSymbols.TaskDone + "  1. read code",
+		kit.CurrentSymbols.TaskActive + "  2. move files",
+		kit.CurrentSymbols.TaskPending + "  3. add tests",
+	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("row missing %q:\n%s", want, plain)
 		}
@@ -612,7 +608,8 @@ func TestTrackerStripStrikesFinishedRows(t *testing.T) {
 	if !strings.Contains(plain, "Plan · Split auth") || !strings.Contains(plain, "2/2 done") {
 		t.Fatalf("completed plan heading is wrong:\n%s", plain)
 	}
-	if !strings.Contains(plain, "✓ 1. read code") || !strings.Contains(plain, "- 2. old idea") {
+	if !strings.Contains(plain, kit.CurrentSymbols.TaskDone+"  1. read code") ||
+		!strings.Contains(plain, kit.CurrentSymbols.TaskSkipped+"  2. old idea") {
 		t.Fatalf("finished rows lost their marks:\n%s", plain)
 	}
 }
@@ -631,7 +628,7 @@ func TestTrackerStripShowsBlockedReason(t *testing.T) {
 		Width:     80,
 		PlanTitle: "Split auth",
 	}))
-	if !strings.Contains(plain, kit.CurrentSymbols.Warning+" 1. wire the API") {
+	if !strings.Contains(plain, kit.CurrentSymbols.TaskBlocked+"  1. wire the API") {
 		t.Fatalf("blocked row lost its warning mark:\n%s", plain)
 	}
 	if !strings.Contains(plain, "the upstream API moved") {
@@ -741,7 +738,7 @@ func TestRenderTrackerRowReservesSpaceForStatus(t *testing.T) {
 			{itemAborted, "[failed]"},
 		} {
 			for _, width := range []int{1, 12, 40, 80} {
-				plain := stripANSI(renderItem(item, tc.phase, width, itemNumber{width: 3}, nil, nil, nil))
+				plain := stripANSI(renderItem(item, tc.phase, width, itemNumber{width: 3}, nil, nil, nil, 0))
 				if lipgloss.Width(plain) > width || strings.Count(plain, "\n") != 1 {
 					t.Fatalf("row exceeded %d columns:\n%s", width, plain)
 				}
@@ -800,7 +797,8 @@ func TestTrackerStripKeepsNumbersOnFinishedRows(t *testing.T) {
 	}
 	view := RenderTrackerList(TrackerListParams{Items: items, StreamActive: true, Width: 80})
 	plain := stripANSI(view)
-	if !strings.Contains(plain, "✓ 1. read code") || !strings.Contains(plain, "○ 2. move files") {
+	if !strings.Contains(plain, kit.CurrentSymbols.TaskDone+"  1. read code") ||
+		!strings.Contains(plain, kit.CurrentSymbols.TaskPending+"  2. move files") {
 		t.Fatalf("ordinals were renumbered around finished work:\n%s", plain)
 	}
 	struck := func(label string) bool {
@@ -820,8 +818,9 @@ func TestTrackerStripKeepsNumbersOnFinishedRows(t *testing.T) {
 	}
 }
 
-// Numbers are assigned to the whole list before it is windowed, so a folded
-// row leaves a gap rather than renumbering the rows still on screen.
+// Numbers are assigned to the whole list before it is windowed, so a row that
+// falls outside the window leaves a gap rather than renumbering the rows still
+// on screen.
 func TestTrackerStripKeepsNumbersWhenRowsFold(t *testing.T) {
 	items := make([]*todo.Item, 0, maxVisibleItems+3)
 	for i := 1; i <= maxVisibleItems+3; i++ {
@@ -841,11 +840,8 @@ func TestTrackerStripKeepsNumbersWhenRowsFold(t *testing.T) {
 		Executing:    func(*todo.Item) bool { return true },
 	}))
 
-	if !strings.Contains(plain, "3 completed") {
-		t.Fatalf("the leading finished rows did not fold away:\n%s", plain)
-	}
 	got := numbersOf(ordinalTagRe.FindAllStringSubmatch(plain, -1))
-	want := []string{"4", "5", "6", "7", "8", "9", "10", "11"}
+	want := []string{"4", "5", "6", "7", "8"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("visible ordinals:\n  got:  %v\n  want: %v\n\nfull output:\n%s", got, want, plain)
 	}
@@ -883,27 +879,38 @@ func TestTrackerStripAlignsUnnumberedWorkerRows(t *testing.T) {
 	}
 }
 
-// Nothing on the strip animates: identical state renders the same bytes, so the
-// list a person is reading does not blink.
-func TestTrackerStripDoesNotBlink(t *testing.T) {
-	items := []*todo.Item{{ID: "1", Subject: "move files", Status: todo.StatusInProgress}}
-	render := func() string {
+// Only the running row breathes. Settled rows draw the same bytes on every
+// frame, and the running row's text never changes with the breath.
+func TestTrackerStripBreathesOnlyTheRunningRow(t *testing.T) {
+	items := []*todo.Item{
+		{ID: "1", Subject: "move files", Status: todo.StatusInProgress},
+		{ID: "2", Subject: "ship it", Status: todo.StatusPending},
+	}
+	render := func(frame int) string {
 		return RenderTrackerList(TrackerListParams{
 			Items:        items,
 			StreamActive: true,
 			Width:        80,
+			Frame:        frame,
 			Executing:    func(*todo.Item) bool { return true },
 		})
 	}
 
-	first := render()
-	if !strings.Contains(stripANSI(first), kit.CurrentSymbols.LiveDot) {
+	first, peak := render(0), render(3)
+	if stripANSI(first) != stripANSI(peak) {
+		t.Fatalf("the breath changed the strip text:\n%q\n%q", stripANSI(first), stripANSI(peak))
+	}
+	if first == peak {
+		t.Fatalf("the running row did not breathe between frames:\n%q", first)
+	}
+	if !strings.Contains(stripANSI(first), kit.CurrentSymbols.TaskActive) {
 		t.Fatalf("the running row lost its mark:\n%s", stripANSI(first))
 	}
-	for range 8 {
-		if again := render(); again != first {
-			t.Fatalf("the strip changed between identical renders:\n%q\n%q", first, again)
-		}
+	pending := func(frame int) string {
+		return RenderChecklistRow(ChecklistRow{State: ChecklistPending, Text: "ship it", Width: 40, Frame: frame, Animate: true})
+	}
+	if pending(0) != pending(3) {
+		t.Fatalf("a settled row animated:\n%q\n%q", pending(0), pending(3))
 	}
 }
 

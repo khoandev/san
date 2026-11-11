@@ -483,6 +483,7 @@ func (m *model) renderTrackerList() string {
 		Items:            items,
 		StreamActive:     m.conv.Stream.Active,
 		Width:            m.env.Width,
+		Frame:            m.conv.Spinner.Frame(),
 		CompletionShown:  m.taskCompletionShown,
 		Blockers:         m.services.Tracker.OpenBlockers,
 		Executing:        m.executingTrackerItem,

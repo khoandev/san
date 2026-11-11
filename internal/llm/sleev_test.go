@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +22,7 @@ import (
 
 // testSleevGate is one enabled gateway, as loadSleevGate would resolve it.
 func testSleevGate() *sleevGate {
-	return &sleevGate{baseURL: "http://127.0.0.1:17321", key: "sk-sleev", harness: "pi"}
+	return &sleevGate{baseURL: "http://127.0.0.1:17321", harness: "pi"}
 }
 
 func mustFindVendor(t *testing.T, id string) catalog.Vendor {
@@ -35,8 +34,9 @@ func mustFindVendor(t *testing.T, id string) catalog.Vendor {
 	return vendor
 }
 
-// Routing must move the address and the credential, and say both things the
-// gateway needs to know — while leaving the protocol alone.
+// Routing moves the address and says the three things the gateway needs to
+// know — while leaving the protocol and the credential alone. The gateway
+// forwards the key it is handed, so the key has to stay the provider's own.
 func TestSleevGateRoutesThroughTheGateway(t *testing.T) {
 	vendor := mustFindVendor(t, "moonshot")
 	cfg := endpoint.Config{APIKey: "sk-upstream", BaseURL: vendor.BaseURL, API: vendor.API}
@@ -48,19 +48,20 @@ func TestSleevGateRoutesThroughTheGateway(t *testing.T) {
 	if cfg.BaseURL != "http://127.0.0.1:17321" {
 		t.Fatalf("BaseURL = %q, want the gateway address", cfg.BaseURL)
 	}
-	if cfg.APIKey != "sk-sleev" {
-		t.Fatalf("APIKey = %q, want the gateway credential", cfg.APIKey)
+	if cfg.APIKey != "sk-upstream" {
+		t.Fatalf("APIKey = %q, want the provider's own credential", cfg.APIKey)
 	}
 	if cfg.API != vendor.API {
 		t.Fatalf("API = %q, want the vendor's own protocol %q", cfg.API, vendor.API)
 	}
-	// Moonshot speaks OpenAI's protocol, which is the family the gateway
-	// routes the request as.
+	if got, ok := cfg.Headers["Authorization"]; ok {
+		t.Fatalf("Authorization = %q, want none: routing adds no credential of its own", got)
+	}
+	// Moonshot is one of the upstreams the gateway meters by name.
 	for name, want := range map[string]string{
-		sleevProviderHeader: "openai",
+		sleevProviderHeader: "moonshotai",
 		sleevHarnessHeader:  "pi",
 		sleevBaseURLHeader:  "https://api.moonshot.cn/v1",
-		"Authorization":     "Bearer sk-sleev",
 	} {
 		if got := cfg.Headers[name]; got != want {
 			t.Fatalf("header %s = %q, want %q", name, got, want)
@@ -251,14 +252,12 @@ func TestNilSleevGateLeavesTheEndpointAlone(t *testing.T) {
 	}
 }
 
-// The gate is read from the store and the secret store at the moment a
-// provider is opened, which is what makes a settings change take effect
-// without a restart.
+// The gate is read from the store at the moment a provider is opened, which is
+// what makes a settings change take effect without a restart.
 func TestLoadSleevGateReadsTheStore(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	secret.ResetDefault()
 	t.Cleanup(secret.ResetDefault)
-	t.Setenv(SleevAPIKeyEnvVar, "sk-env")
 
 	if gate := loadSleevGate(); gate != nil {
 		t.Fatalf("loadSleevGate() = %#v, want nil before the user configures one", gate)
@@ -282,9 +281,6 @@ func TestLoadSleevGateReadsTheStore(t *testing.T) {
 	if gate.harness != DefaultSleevHarness {
 		t.Fatalf("harness = %q, want %q", gate.harness, DefaultSleevHarness)
 	}
-	if gate.key != "sk-env" {
-		t.Fatalf("key = %q, want the stored credential", gate.key)
-	}
 
 	if err := store.SetSleev(SleevConfig{Enabled: false}); err != nil {
 		t.Fatalf("SetSleev(disabled) error = %v", err)
@@ -294,84 +290,10 @@ func TestLoadSleevGateReadsTheStore(t *testing.T) {
 	}
 }
 
-// The gateway has a row of its own in /models > Providers, so the user can set
-// it up without connecting it as a vendor.
-func TestSleevRowIsRegisteredInTheProvidersTab(t *testing.T) {
-	if !slices.Contains(ProvidersByOrder(), Sleev) {
-		t.Fatalf("ProvidersByOrder() = %v, want it to include %q", ProvidersByOrder(), Sleev)
-	}
-	if got := ProviderDisplayName(Sleev); got != "Sleev (local gateway)" {
-		t.Fatalf("ProviderDisplayName(%q) = %q, want the gateway's own label", Sleev, got)
-	}
-
-	meta, ok := GetMeta(Sleev, AuthAPIKey)
-	if !ok {
-		t.Fatalf("GetMeta(%q, %q) = not registered", Sleev, AuthAPIKey)
-	}
-	if meta.Provider != Sleev || meta.AuthMethod != AuthAPIKey {
-		t.Fatalf("meta = %#v, want the gateway's own pair", meta)
-	}
-	if !slices.Equal(meta.EnvVars, []string{SleevAPIKeyEnvVar}) {
-		t.Fatalf("EnvVars = %v, want [%s]", meta.EnvVars, SleevAPIKeyEnvVar)
-	}
-	if meta.DisplayName != "Local gateway" {
-		t.Fatalf("DisplayName = %q, want %q", meta.DisplayName, "Local gateway")
-	}
-	if meta.Hint == "" {
-		t.Fatal("Hint is empty; the row has to say the credential is optional")
-	}
-}
-
-// Opening the row builds an endpoint from the address stored in San's settings,
-// because no catalog row describes a gateway the user runs themselves.
-func TestSleevRowBuildsTheStoredGateway(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	secret.ResetDefault()
-	t.Cleanup(secret.ResetDefault)
-
-	store, err := NewStore()
-	if err != nil {
-		t.Fatalf("NewStore() error = %v", err)
-	}
-
-	// Before the user states anything, the row still names the local default.
-	vendor, err := sleevVendor()
-	if err != nil {
-		t.Fatalf("sleevVendor() error = %v", err)
-	}
-	if vendor.BaseURL != DefaultSleevBaseURL {
-		t.Fatalf("BaseURL = %q, want %q", vendor.BaseURL, DefaultSleevBaseURL)
-	}
-	if vendor.ID != string(Sleev) || vendor.API != ai.APIOpenAIChat {
-		t.Fatalf("vendor = %#v, want the gateway's own row on the OpenAI protocol", vendor)
-	}
-	if !slices.Equal(vendor.KeyEnv, []string{SleevAPIKeyEnvVar}) {
-		t.Fatalf("KeyEnv = %v, want [%s]", vendor.KeyEnv, SleevAPIKeyEnvVar)
-	}
-
-	if err := store.SetSleev(SleevConfig{Enabled: true, BaseURL: "http://127.0.0.1:9999"}); err != nil {
-		t.Fatalf("SetSleev() error = %v", err)
-	}
-	if vendor, err = sleevVendor(); err != nil {
-		t.Fatalf("sleevVendor() error = %v", err)
-	}
-	if vendor.BaseURL != "http://127.0.0.1:9999" {
-		t.Fatalf("BaseURL = %q, want the stored address", vendor.BaseURL)
-	}
-
-	p, err := GetProvider(context.Background(), Sleev, AuthAPIKey)
-	if err != nil {
-		t.Fatalf("GetProvider(%q) error = %v", Sleev, err)
-	}
-	if got := p.Name(); got != "sleev:api_key" {
-		t.Fatalf("Name() = %q, want %q", got, "sleev:api_key")
-	}
-}
-
-// Enabling the gateway is a setting, not a connection: nothing is connected, so
-// provider resolution still finds nothing to infer through and the Models tab
-// gains no group of its own.
-func TestEnabledSleevIsNotAConnection(t *testing.T) {
+// Enabling the gateway adds no provider: it is a route every provider may take,
+// not a vendor the user connects. So nothing resolves through it, and
+// /models > Providers gains no row — it is a setting, not an endpoint.
+func TestEnabledSleevIsNotAProvider(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	secret.ResetDefault()
 	t.Cleanup(secret.ResetDefault)
@@ -384,15 +306,15 @@ func TestEnabledSleevIsNotAConnection(t *testing.T) {
 		t.Fatalf("SetSleev() error = %v", err)
 	}
 
-	if conn, ok := store.Connection(Sleev); ok {
-		t.Fatalf("Connection(%q) = %#v, want none: enabling is not connecting", Sleev, conn)
-	}
 	if _, ok := ResolveProvider(context.Background(), store); ok {
 		t.Fatal("ResolveProvider() = ok with only the gateway enabled, want nothing to infer through")
 	}
-	for _, status := range GetProvidersWithStatus(store)[Sleev] {
-		if status.Status == StatusConnected {
-			t.Fatalf("status = %q, want the gateway not to count as a connected provider", status.Status)
+	for _, id := range ProvidersByOrder() {
+		if strings.Contains(strings.ToLower(ProviderDisplayName(id)), "sleev") {
+			t.Fatalf("ProvidersByOrder() lists %q, want the gateway to stay a setting", id)
+		}
+		if _, ok := GetMeta(id, AuthAPIKey); ok && strings.EqualFold(string(id), "sleev") {
+			t.Fatalf("GetMeta(%q) = registered, want the gateway not to be a provider", id)
 		}
 	}
 }
@@ -495,9 +417,6 @@ func TestSleevLiveGatewayRoutesConfiguredProviders(t *testing.T) {
 	}
 
 	for name, conn := range connections {
-		if ProviderID(name) == Sleev {
-			continue
-		}
 		t.Run(name, func(t *testing.T) {
 			provider := ProviderID(name)
 			p, err := GetProvider(context.Background(), provider, conn.AuthMethod)
@@ -538,6 +457,31 @@ func TestSleevLiveGatewayRoutesConfiguredProviders(t *testing.T) {
 			default:
 				t.Logf("routed %s through %s: %q", model, gateway.BaseURL, text)
 			}
+		})
+	}
+
+	// The other half of the switch. The gateway is turned off and its address
+	// pointed at a closed port, so a provider that still answers can only have
+	// bypassed it: its own host is the one address left to reach.
+	if err := store.SetSleev(SleevConfig{Enabled: false, BaseURL: "http://127.0.0.1:1"}); err != nil {
+		t.Fatalf("SetSleev(disabled) error = %v", err)
+	}
+	for name, conn := range connections {
+		t.Run("direct/"+name, func(t *testing.T) {
+			p, err := GetProvider(context.Background(), ProviderID(name), conn.AuthMethod)
+			if err != nil {
+				t.Skipf("%s is not a provider this build serves: %v", name, err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			models, err := p.ListModels(ctx)
+			if err != nil {
+				t.Fatalf("listing with the gateway off failed, so the provider did not go direct: %v", err)
+			}
+			if len(models) == 0 {
+				t.Fatal("listing with the gateway off returned no models")
+			}
+			t.Logf("gateway off: %s listed %d models from its own endpoint", name, len(models))
 		})
 	}
 }

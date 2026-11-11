@@ -787,16 +787,16 @@ func TestLiveThinkingDropsBoldMarkers(t *testing.T) {
 	}
 }
 
-// Between steps, with one committed and the next not yet streaming, the live
-// area still shows the turn's waiting row.
-func TestRenderActiveContentKeepsSpinnerBetweenSteps(t *testing.T) {
+// Between steps the live area keeps the assistant's reply mark; there is no
+// separate generic wait row, because the checklist shows what is running.
+func TestRenderActiveContentHoldsTheReplyMarkerBetweenSteps(t *testing.T) {
 	msgs := []core.ChatMessage{
 		{Role: core.ChatAssistant, ToolCalls: []core.ToolCall{{ID: "a", Name: "Bash"}}},
 		{Role: core.ChatUser, ToolResult: &core.ToolResult{ToolCallID: "a", ToolName: "Bash"}},
 	}
 	p := RenderContext{Messages: msgs, CommittedCount: len(msgs), StreamActive: true, SpinnerView: "*", Width: 80}
-	if got := strings.TrimSpace(stripANSI(RenderActiveContent(p))); got != "✦ On it" {
-		t.Errorf("between steps = %q, want the spinner", got)
+	if got := strings.TrimSpace(stripANSI(RenderActiveContent(p))); got != "●" {
+		t.Errorf("between steps = %q, want the reply mark", got)
 	}
 	p.StreamActive = false
 	if got := RenderActiveContent(p); strings.TrimSpace(got) != "" {
@@ -1721,39 +1721,32 @@ func TestRenderToolCallsFreezesEveryRowUnderModalNamingNoCall(t *testing.T) {
 	}
 }
 
-// Waiting on the reply is reasoning's live mark, not the reply's ●: it never
-// turns into the reply, and once the reply streams the bullet rests.
-func TestRenderAssistantMessageWaitsOnTheReasoningMark(t *testing.T) {
+// Before the first token the message rests on the reply's bullet. There is no
+// generic wait row: the running checklist row is the live indicator.
+func TestRenderAssistantMessageRestsOnTheReplyMarkBeforeFirstToken(t *testing.T) {
 	p := AssistantParams{StreamActive: true, IsLast: true, Width: 80}
-	if out := stripANSI(RenderAssistantMessage(p)); strings.TrimSpace(out) != "✦ On it" {
-		t.Fatalf("waiting on the first token should show the reasoning mark:\n%s", out)
-	}
 	for p.Frame = range 6 {
-		if out := stripANSI(RenderAssistantMessage(p)); strings.TrimSpace(out) != "✦ On it" {
-			t.Fatalf("frame %d: the waiting mark should breathe, not blink out:\n%s", p.Frame, out)
+		if out := stripANSI(RenderAssistantMessage(p)); strings.TrimSpace(out) != "●" {
+			t.Fatalf("frame %d: the reply mark should hold still:\n%s", p.Frame, out)
 		}
 	}
 	p.Thinking, p.ThinkingDisplay = "Inspecting repository docs", setting.ThinkingDisplayFull
 	p.Frame = 0
-	if out := stripANSI(RenderAssistantMessage(p)); !strings.Contains(out, "Inspecting repository docs") || !strings.HasSuffix(strings.TrimSpace(out), "\n✦ On it") {
-		t.Fatalf("the wait should hold below streaming reasoning:\n%s", out)
+	if out := stripANSI(RenderAssistantMessage(p)); !strings.Contains(out, "Inspecting repository docs") || strings.Contains(out, "On it") {
+		t.Fatalf("streaming reasoning should not be followed by a duplicate wait row:\n%s", out)
 	}
 	p.Content = "streaming reply"
 	if out := stripANSI(RenderAssistantMessage(p)); strings.Contains(out, "Thinking") || strings.Count(out, "✦") != 1 || !strings.Contains(out, "● streaming reply") {
-		t.Fatalf("a streaming reply should end the wait and rest on a plain bullet:\n%s", out)
+		t.Fatalf("a streaming reply should rest on a plain bullet:\n%s", out)
 	}
 }
 
-// A wait for the model is timed the way a running tool row is, so a long one
-// reads as long rather than as stuck.
-func TestRenderAssistantMessageTimesTheWait(t *testing.T) {
-	p := AssistantParams{StreamActive: true, IsLast: true, Width: 80}
-	if out := stripANSI(RenderAssistantMessage(p)); strings.TrimSpace(out) != "✦ On it" {
-		t.Fatalf("an unstamped wait should show no timer:\n%s", out)
-	}
-	p.WaitStartedAt = time.Now().Add(-12 * time.Second)
-	if out := stripANSI(RenderAssistantMessage(p)); strings.TrimSpace(out) != "✦ On it · 12s" {
-		t.Fatalf("a 12s wait should be timed:\n%s", out)
+// The generic wait is not timed anywhere: a removed row cannot leave a stale
+// clock behind.
+func TestRenderAssistantMessageHasNoGenericWaitTimer(t *testing.T) {
+	p := AssistantParams{StreamActive: true, IsLast: true, Width: 80, WaitStartedAt: time.Now().Add(-12 * time.Second)}
+	if out := stripANSI(RenderAssistantMessage(p)); strings.Contains(out, "12s") || strings.Contains(out, "On it") {
+		t.Fatalf("a wait with no label drew a timer:\n%s", out)
 	}
 }
 

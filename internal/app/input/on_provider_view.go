@@ -131,12 +131,6 @@ func (s *ProviderSelector) renderItemList(sb *strings.Builder) {
 			sb.WriteString(s.renderOllamaForm())
 			sb.WriteString("\n")
 		}
-		// Inline gateway settings form (render below the relevant item)
-		if s.sleevFormActive && isSelected {
-			sb.WriteString(s.renderSleevForm())
-			sb.WriteString("\n")
-		}
-
 		// Inline confirm-remove prompt (render below the relevant item)
 		if s.confirmRemoveActive && i == s.confirmRemoveItemIdx {
 			sb.WriteString(s.renderConfirmRemove())
@@ -492,42 +486,6 @@ func (s *ProviderSelector) renderOllamaForm() string {
 	return line
 }
 
-// renderSleevForm renders the gateway's settings below its provider row: the
-// on/off switch, then the address, harness and credential, with the validation
-// error underneath when present.
-func (s *ProviderSelector) renderSleevForm() string {
-	inputBg := kit.AdaptiveColor{Dark: "#1E293B", Light: "#F1F5F9"}
-	boxStyle := lipgloss.NewStyle().
-		Background(inputBg).
-		Padding(0, 1)
-
-	labels := [sleevFormInputCount]string{"Gateway URL", "Harness", "API Key"}
-	lines := make([]string, 0, sleevFormFieldCount+1)
-
-	// The switch row names its two states and the keys that flip it; Space is
-	// documented in the footer, so the row stays short.
-	switchLabel := kit.DimStyle().Render(fmt.Sprintf("%-13s", "Enabled:"))
-	switchValue := kit.DimStyle().Render("off")
-	if s.sleevFormEnabled {
-		switchValue = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Primary).Bold(true).Render("on")
-	}
-	switchLine := "      " + boxStyle.Render(switchLabel+switchValue+kit.DimStyle().Render("  ←/→"))
-	if s.sleevFormFocus == sleevFormFocusEnabled {
-		switchLine = kit.RenderSelectableRow(switchLine, true)
-	}
-	lines = append(lines, switchLine)
-
-	for i, input := range s.sleevFormInputs {
-		label := kit.DimStyle().Render(fmt.Sprintf("%-13s", labels[i]+":"))
-		lines = append(lines, "      "+boxStyle.Render(label+input.View()))
-	}
-	if s.sleevFormErr != "" {
-		errStyle := lipgloss.NewStyle().Foreground(kit.CurrentTheme.Error)
-		lines = append(lines, "      "+errStyle.Render(s.sleevFormErr))
-	}
-	return strings.Join(lines, "\n")
-}
-
 func (s *ProviderSelector) renderConfirmRemove() string {
 	warnStyle := lipgloss.NewStyle().
 		Foreground(kit.AdaptiveColor{Dark: "#F87171", Light: "#DC2626"})
@@ -545,9 +503,6 @@ func (s *ProviderSelector) renderConfirmRemove() string {
 // ── Footer hints ────────────────────────────────────────────────────────────
 
 func (s *ProviderSelector) renderHints() string {
-	if s.sleevFormActive {
-		return kit.DimStyle().Render("←/→ or Space toggle · Tab/↑/↓ next field · Enter save · Esc cancel")
-	}
 	if s.customFormActive {
 		return kit.DimStyle().Render("Tab/↑/↓ switch field · Enter save & connect · Esc cancel")
 	}

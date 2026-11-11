@@ -54,8 +54,8 @@ func TestChecklistSkippedStrikesLabel(t *testing.T) {
 	}
 }
 
-// A checklist row holds still: the active row is marked by color and weight,
-// never by a breathing glyph, so a list a person is reading does not blink.
+// Without Animate a checklist row holds still: the active row is marked by
+// color and weight, so a list a person is reading does not blink.
 func TestChecklistRowsHoldStill(t *testing.T) {
 	for _, state := range []ChecklistState{ChecklistActive, ChecklistDone, ChecklistPending, ChecklistBlocked} {
 		first := RenderChecklistRow(ChecklistRow{State: state, Text: "move files", Width: 40})
@@ -66,11 +66,28 @@ func TestChecklistRowsHoldStill(t *testing.T) {
 		}
 	}
 	active := RenderChecklistRow(ChecklistRow{State: ChecklistActive, Text: "move files", Width: 40})
-	if !strings.Contains(stripANSI(active), kit.CurrentSymbols.LiveDot) {
-		t.Fatalf("active row does not lead with the live dot:\n%s", stripANSI(active))
+	if !strings.Contains(stripANSI(active), kit.CurrentSymbols.TaskActive) {
+		t.Fatalf("active row does not lead with the task mark:\n%s", stripANSI(active))
 	}
 	if want := sgrPrefix(lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent).Bold(true), "x"); !strings.Contains(active, want) {
 		t.Fatalf("active row lost its accent styling:\n%q", active)
+	}
+}
+
+// An animated active row breathes between frames while every other state stays
+// fixed: the strip opts in, the plan panel does not.
+func TestChecklistAnimateOnlyBreathesTheActiveRow(t *testing.T) {
+	first := RenderChecklistRow(ChecklistRow{State: ChecklistActive, Text: "move files", Width: 40, Animate: true, Frame: 0})
+	peak := RenderChecklistRow(ChecklistRow{State: ChecklistActive, Text: "move files", Width: 40, Animate: true, Frame: 3})
+	if stripANSI(first) != stripANSI(peak) {
+		t.Fatalf("breathing changed the row text:\n%q\n%q", stripANSI(first), stripANSI(peak))
+	}
+	if first == peak {
+		t.Fatalf("the active row did not breathe between frames:\n%q", first)
+	}
+	pending := RenderChecklistRow(ChecklistRow{State: ChecklistPending, Text: "move files", Width: 40, Animate: true, Frame: 3})
+	if strings.Contains(pending, sgrPrefix(lipgloss.NewStyle().Foreground(kit.CurrentTheme.Accent), "x")) {
+		t.Fatalf("a pending row took the active breath:\n%q", pending)
 	}
 }
 
@@ -81,8 +98,8 @@ func TestChecklistBlockedAndFailedUseStatusColors(t *testing.T) {
 		color kit.AdaptiveColor
 		glyph string
 	}{
-		{"blocked", ChecklistBlocked, kit.CurrentTheme.Warning, kit.CurrentSymbols.Warning},
-		{"failed", ChecklistFailed, kit.CurrentTheme.Error, kit.CurrentSymbols.Error},
+		{"blocked", ChecklistBlocked, kit.CurrentTheme.Warning, kit.CurrentSymbols.TaskBlocked},
+		{"failed", ChecklistFailed, kit.CurrentTheme.Error, kit.CurrentSymbols.TaskFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,8 +108,8 @@ func TestChecklistBlockedAndFailedUseStatusColors(t *testing.T) {
 			if !strings.Contains(row, want) {
 				t.Fatalf("%s row does not use the theme color %q:\n%q", tc.name, want, row)
 			}
-			if plain := stripANSI(row); !strings.Contains(plain, tc.glyph+" wire the API") {
-				t.Fatalf("%s row does not lead with %q:\n%s", tc.name, tc.glyph, plain)
+			if plain := stripANSI(row); !strings.Contains(plain, tc.glyph+"  wire the API") {
+				t.Fatalf("%s row does not lead with %q and a clear gap:\n%s", tc.name, tc.glyph, plain)
 			}
 			if strings.Contains(row, sgrStrikeOn) {
 				t.Fatalf("%s row was struck through:\n%q", tc.name, row)
@@ -103,13 +120,13 @@ func TestChecklistBlockedAndFailedUseStatusColors(t *testing.T) {
 
 func TestChecklistGlyphsFollowSymbolTable(t *testing.T) {
 	cases := map[ChecklistState]string{
-		ChecklistPending: kit.CurrentSymbols.RadioOff,
-		ChecklistActive:  kit.CurrentSymbols.LiveDot,
-		ChecklistDone:    kit.CurrentSymbols.Success,
-		ChecklistSkipped: "-",
-		ChecklistBlocked: kit.CurrentSymbols.Warning,
-		ChecklistFailed:  kit.CurrentSymbols.Error,
-		ChecklistStalled: kit.CurrentSymbols.LiveDot,
+		ChecklistPending: kit.CurrentSymbols.TaskPending,
+		ChecklistActive:  kit.CurrentSymbols.TaskActive,
+		ChecklistDone:    kit.CurrentSymbols.TaskDone,
+		ChecklistSkipped: kit.CurrentSymbols.TaskSkipped,
+		ChecklistBlocked: kit.CurrentSymbols.TaskBlocked,
+		ChecklistFailed:  kit.CurrentSymbols.TaskFailed,
+		ChecklistStalled: kit.CurrentSymbols.TaskStalled,
 	}
 	for state, want := range cases {
 		if got := stripANSI(state.Glyph()); got != want {

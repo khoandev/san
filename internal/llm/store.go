@@ -59,17 +59,12 @@ const (
 
 // The Sleev gateway.
 //
-// Sleev is not a vendor of its own: it is a local forwarder every configured
+// Sleev is not a provider of its own: it is a local proxy every configured
 // provider's traffic can be routed through, so the address below is a
 // destination rather than a source of models. Its configuration lives here
 // beside the custom provider's for the same reason — it is a decision the user
 // made, not something an endpoint told San about itself.
 const (
-	// Sleev is the provider name the gateway's settings row is registered
-	// under. It is never a model source.
-	Sleev ProviderID = "sleev"
-	// SleevAPIKeyEnvVar is where the gateway's credential is kept.
-	SleevAPIKeyEnvVar = "SAN_SLEEV_API_KEY"
 	// DefaultSleevBaseURL is the address the gateway listens on when the user
 	// states none.
 	DefaultSleevBaseURL = "http://127.0.0.1:17321"
@@ -78,9 +73,9 @@ const (
 	DefaultSleevHarness = "pi"
 )
 
-// SleevConfig stores the local gateway requests are forwarded through while it
-// is enabled. The API key is not kept here — it lives in the secret store
-// under SleevAPIKeyEnvVar.
+// SleevConfig stores the local proxy requests are forwarded through while it is
+// enabled. There is no credential of its own: a routed request carries the
+// provider's key, which is what the gateway hands to the upstream.
 type SleevConfig struct {
 	// Enabled routes every provider's requests through the gateway. Opt-in:
 	// false is the zero value.

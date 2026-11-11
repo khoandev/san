@@ -49,9 +49,11 @@ var (
 )
 
 // RenderQueuePreview renders queued messages as dim shadow prompts above the
-// input separator, mirroring the "❭" of the live prompt below. selectedIdx is
-// the item under edit (-1 = none); the selected row carries the focus bar and
-// swaps the "↑ edit" affordance for the editing keys.
+// input separator, mirroring the "❭" of the live prompt below. The rows start
+// at the same column as the composer's prompt: a one-cell gutter used to shift
+// the whole queue right of the input it belongs to. selectedIdx is the item
+// under edit (-1 = none); the selected row carries the focus bar and swaps the
+// "↑ edit" affordance for the editing keys.
 func RenderQueuePreview(items []QueuePreviewItem, selectedIdx, width int) string {
 	return RenderQueuePreviewLimit(items, selectedIdx, width, maxVisibleQueueItems, true)
 }
@@ -84,7 +86,7 @@ func RenderQueuePreviewLimit(items []QueuePreviewItem, selectedIdx, width, limit
 		item := items[i]
 		text := strings.Join(strings.Fields(item.Content), " ")
 
-		gutter := " "
+		gutter := ""
 		contentStyle := queueContentStyle
 		if i == selectedIdx {
 			gutter = kit.FocusBarStyle().Render(kit.FocusBar)

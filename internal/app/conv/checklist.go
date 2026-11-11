@@ -47,30 +47,26 @@ func (s ChecklistState) retired() bool {
 	return s == ChecklistDone || s == ChecklistSkipped
 }
 
-// Glyph returns the status mark the state draws. Every mark holds still: a
-// checklist row never animates, so a running list reads as a stable record
-// instead of a blinking one. The active row is set apart by its color and
-// weight, not by motion. Stalled reuses the live dot as a solid mark because
-// its work did start — nothing is advancing it.
+// Glyph returns the status mark the state draws. A row holds still unless its
+// caller asks for the active mark to breathe (see ChecklistRow.Animate), so a
+// settled list reads as a stable record instead of a blinking one. Stalled
+// keeps a pause mark because its work did start — nothing is advancing it.
 func (s ChecklistState) Glyph() string {
 	switch s {
 	case ChecklistActive:
-		return kit.CurrentSymbols.LiveDot
+		return kit.CurrentSymbols.TaskActive
 	case ChecklistDone:
-		return kit.CurrentSymbols.Success
+		return kit.CurrentSymbols.TaskDone
 	case ChecklistSkipped:
-		// A dash is punctuation, not an icon (see kit.Symbols), so it stays
-		// literal: skipped work reads as closed rather than as a second done
-		// check a skimming eye might trust.
-		return "-"
+		return kit.CurrentSymbols.TaskSkipped
 	case ChecklistBlocked:
-		return kit.CurrentSymbols.Warning
+		return kit.CurrentSymbols.TaskBlocked
 	case ChecklistFailed:
-		return kit.CurrentSymbols.Error
+		return kit.CurrentSymbols.TaskFailed
 	case ChecklistStalled:
-		return kit.CurrentSymbols.LiveDot
+		return kit.CurrentSymbols.TaskStalled
 	default:
-		return kit.CurrentSymbols.RadioOff
+		return kit.CurrentSymbols.TaskPending
 	}
 }
 
@@ -143,6 +139,12 @@ type ChecklistRow struct {
 	// Tint overrides the label (and glyph) color for a row owned by a colored
 	// background agent. The zero value keeps the state's palette.
 	Tint kit.AdaptiveColor
+	// Frame advances the breath of an active row. It is ignored unless Animate
+	// is set, so a panel a person is reading can keep its rows still.
+	Frame int
+	// Animate asks the active row's mark to breathe. Only the live tracker sets
+	// it; every other caller draws the same bytes on every frame.
+	Animate bool
 }
 
 // minLabelColumns is the room a row keeps for its label before it spends
@@ -166,9 +168,16 @@ func RenderChecklistRow(row ChecklistRow) string {
 	if row.Tint != (kit.AdaptiveColor{}) {
 		glyphStyle = glyphStyle.Foreground(row.Tint)
 	}
-	// One space of air between the mark, the ordinal and the label: the row
-	// reads as a numbered list, and the columns saved go to the label.
-	prefix := indent + glyphStyle.Render(row.State.Glyph()) + " "
+	glyph := glyphStyle.Render(row.State.Glyph())
+	if row.Animate && row.State == ChecklistActive {
+		// The running row's mark breathes in place. Its color says which row is
+		// live; the breath says work is still arriving, without a spinner that
+		// would pull the eye away from the label beside it.
+		glyph = kit.LiveTask(row.Frame)
+	}
+	// Two columns of air between the mark and the ordinal: an icon and a digit
+	// that sit one space apart read as a single glyph in a terminal.
+	prefix := indent + glyph + "  "
 	// A list reserves the tag column for every row, so a row that carries no
 	// ordinal (a background worker, say) keeps its label in line with the
 	// numbered rows around it.

@@ -18,8 +18,6 @@ import (
 	"github.com/genai-io/sdk-go/pkg/ai"
 	"github.com/genai-io/sdk-go/pkg/ai/catalog"
 	"github.com/genai-io/sdk-go/pkg/ai/endpoint"
-
-	"github.com/genai-io/san/internal/secret"
 )
 
 // The headers the gateway reads: which provider the request belongs to, where
@@ -50,22 +48,25 @@ var sleevUpstreams = map[ai.API]struct {
 // sleevNamedProviders names the vendors the gateway knows by their own ID
 // rather than by the protocol family they speak. OpenCode Zen is the case that
 // matters: the gateway serves several OpenAI-speaking upstreams, and only the
-// name tells it which one is asking. A vendor that is absent here — a custom
-// endpoint above all — routes as its family and states its own base URL in
-// sleev-base-url, which is all the gateway needs to reach it.
+// name tells it which one is asking. Moonshot and MiMo are named for the same
+// reason — the gateway meters them, not OpenAI.
+//
+// A vendor absent here — a custom endpoint above all, or one whose Sleev name
+// depends on the plan the connection is on (Alibaba, Z.ai) — routes as its
+// family and states its own base URL in sleev-base-url, which is what
+// actually decides where the gateway forwards: it honours that header even for
+// a named provider, and the name only labels the request.
 var sleevNamedProviders = map[string]string{
 	opencodeVendorID: "opencode",
+	"moonshot":       "moonshotai",
+	"mimo":           "mimo",
 }
 
-// sleevGate is one enabled gateway, resolved: where to send a request, with
-// which credential, and on behalf of which harness.
+// sleevGate is one enabled gateway, resolved: where to send a request and on
+// behalf of which harness. It holds no credential of its own — the provider's
+// key rides along untouched, because the gateway forwards it upstream.
 type sleevGate struct {
 	baseURL string
-	// key is the gateway's own credential, when the user stored one. Empty —
-	// the usual setup — leaves the provider's key in place, which is what a
-	// local forwarder needs: it hands the request, credential included, to the
-	// upstream instead of holding a key of its own.
-	key     string
 	harness string
 }
 
@@ -84,7 +85,6 @@ func loadSleevGate() *sleevGate {
 	}
 	return &sleevGate{
 		baseURL: cfg.BaseURL,
-		key:     secret.Resolve(SleevAPIKeyEnvVar),
 		harness: cfg.Harness,
 	}
 }
@@ -92,9 +92,10 @@ func loadSleevGate() *sleevGate {
 // route rewrites one vendor's endpoint config so its requests reach the
 // gateway. A nil gate — the common case — changes nothing.
 //
-// The protocol is deliberately untouched: the gateway forwards what the
-// provider's driver sends, so an Anthropic endpoint stays an Anthropic
-// endpoint. Only the address, the credential and the three sleev headers move.
+// The protocol and the credential are deliberately untouched: the gateway
+// forwards what the provider's driver sends, so an Anthropic endpoint with an
+// Anthropic key stays exactly that, and the key reaches the upstream as the
+// provider's own. Only the address and the three sleev headers move.
 func (g *sleevGate) route(cfg *endpoint.Config, vendor catalog.Vendor) error {
 	if g == nil {
 		return nil
@@ -119,13 +120,6 @@ func (g *sleevGate) route(cfg *endpoint.Config, vendor catalog.Vendor) error {
 
 	cfg.BaseURL = g.baseURL
 	cfg.Headers = headers
-	if g.key != "" {
-		cfg.APIKey = g.key
-		// authHeader: the gateway reads its credential from Authorization
-		// whatever the provider's driver would have called that header, so it
-		// is stated here as well as through the key above.
-		headers["Authorization"] = "Bearer " + g.key
-	}
 	return nil
 }
 

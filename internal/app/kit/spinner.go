@@ -33,6 +33,14 @@ func LiveDot(frame int) string {
 	return liveDotMark(CurrentSymbols.LiveDot, frame)
 }
 
+// LiveTask is the breathing mark of the active checklist row. It shares the
+// live dot's breath so the running step, a pending tool call and the waiting
+// star all move in step, and uses the checklist's own active glyph so a todo
+// row never borrows the in-flight tool dot.
+func LiveTask(frame int) string {
+	return liveDotMark(CurrentSymbols.TaskActive, frame)
+}
+
 // MemoryMark identifies a memory being read or supplied as context. It is the
 // Unicode table's value — the canonical glyph — which the other tables replace.
 const MemoryMark = "⟡"
