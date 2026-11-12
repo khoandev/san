@@ -155,7 +155,9 @@ func TestNonInteractivePrintMode(t *testing.T) {
 
 	// Use an isolated HOME directory so that no providers.json from
 	// ~/.san/providers.json is picked up, and unset all API key env vars so
-	// no provider can be initialised via environment.
+	// no provider can be initialised via environment. Run from an empty
+	// directory too: a checkout carries its own project-level providers.json,
+	// which would otherwise supply the provider this test assumes is absent.
 	isolatedHome := t.TempDir()
 	env := filteredEnv(
 		"ANTHROPIC_API_KEY",
@@ -171,6 +173,7 @@ func TestNonInteractivePrintMode(t *testing.T) {
 
 	cmd := exec.Command(bin, "-p", "hello")
 	cmd.Env = env
+	cmd.Dir = t.TempDir()
 	out, err := cmd.CombinedOutput()
 
 	// With no provider, the binary should exit non-zero.
