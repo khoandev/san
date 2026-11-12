@@ -3,8 +3,10 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"github.com/genai-io/san/internal/confdir"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/secret"
+	"github.com/genai-io/san/internal/setting"
 )
 
 // testSleevGate is one enabled gateway, as loadSleevGate would resolve it.
@@ -34,160 +37,194 @@ func mustFindVendor(t *testing.T, id string) catalog.Vendor {
 	return vendor
 }
 
-// Routing moves the address and says the three things the gateway needs to
-// know — while leaving the protocol and the credential alone. The gateway
-// forwards the key it is handed, so the key has to stay the provider's own.
+// Routing moves the address — and only the address. The gateway carries
+// whichever protocol and credential the driver sends, and the vendor's own
+// headers still state who is calling.
 func TestSleevGateRoutesThroughTheGateway(t *testing.T) {
 	vendor := mustFindVendor(t, "moonshot")
-	cfg := endpoint.Config{APIKey: "sk-upstream", BaseURL: vendor.BaseURL, API: vendor.API}
+	cfg := ai.Config{
+		APIKey: "sk-upstream",
+		Model:  ai.Model{ID: "kimi-k3", BaseURL: vendor.BaseURL, API: vendor.API},
+	}
 
-	if err := testSleevGate().route(&cfg, vendor); err != nil {
+	if err := testSleevGate().route(&cfg, vendor, AuthAPIKey); err != nil {
 		t.Fatalf("route() error = %v", err)
 	}
 
-	if cfg.BaseURL != "http://127.0.0.1:17321" {
-		t.Fatalf("BaseURL = %q, want the gateway address", cfg.BaseURL)
+	if want := "http://127.0.0.1:17321/sleev/pi/moonshotai"; cfg.Model.BaseURL != want {
+		t.Fatalf("Model.BaseURL = %q, want %q", cfg.Model.BaseURL, want)
 	}
 	if cfg.APIKey != "sk-upstream" {
 		t.Fatalf("APIKey = %q, want the provider's own credential", cfg.APIKey)
 	}
-	if cfg.API != vendor.API {
-		t.Fatalf("API = %q, want the vendor's own protocol %q", cfg.API, vendor.API)
+	if cfg.Model.API != vendor.API {
+		t.Fatalf("Model.API = %q, want the vendor's own protocol %q", cfg.Model.API, vendor.API)
 	}
-	if got, ok := cfg.Headers["Authorization"]; ok {
-		t.Fatalf("Authorization = %q, want none: routing adds no credential of its own", got)
-	}
-	// Moonshot is one of the upstreams the gateway meters by name.
-	for name, want := range map[string]string{
-		sleevProviderHeader: "moonshotai",
-		sleevHarnessHeader:  "pi",
-		sleevBaseURLHeader:  "https://api.moonshot.cn/v1",
-	} {
-		if got := cfg.Headers[name]; got != want {
-			t.Fatalf("header %s = %q, want %q", name, got, want)
-		}
+	if cfg.Model.Headers != nil {
+		t.Fatalf("Model.Headers = %v, want none: the route is stated in the path, not in headers", cfg.Model.Headers)
 	}
 }
 
-// An endpoint address with a trailing slash must not produce a doubled path
-// once the gateway appends the request's own.
-func TestSleevGateTrimsTheUpstreamSlash(t *testing.T) {
-	vendor := mustFindVendor(t, "moonshot")
-	cfg := endpoint.Config{BaseURL: vendor.BaseURL + "//"}
+// The path is the whole contract: <gateway>/sleev/<harness>/<target>. The
+// target is the provider ID Sleev lists when it knows the vendor, and the
+// upstream's full base URL otherwise — the two forms Sleev documents, checked
+// here against its own examples.
+func TestSleevGateBuildsTheDocumentedPath(t *testing.T) {
+	piGate := sleevGate{baseURL: "http://127.0.0.1:17321", harness: "pi"}
+	opencodeGate := sleevGate{baseURL: "http://127.0.0.1:17321", harness: "opencode"}
 
-	if err := testSleevGate().route(&cfg, vendor); err != nil {
-		t.Fatalf("route() error = %v", err)
-	}
-	if got := cfg.Headers[sleevBaseURLHeader]; got != vendor.BaseURL {
-		t.Fatalf("%s = %q, want %q", sleevBaseURLHeader, got, vendor.BaseURL)
-	}
-}
-
-// The vendors that state no address — the drivers hold the default privately —
-// still have to be routed, so the protocol's own host answers for them.
-func TestSleevGateFallsBackToTheProtocolHost(t *testing.T) {
 	tests := []struct {
-		vendorID string
-		want     string
-		family   string
-	}{
-		{vendorID: "anthropic", want: "https://api.anthropic.com", family: "anthropic"},
-		{vendorID: "openai", want: "https://api.openai.com/v1", family: "openai"},
-		{vendorID: "google", want: "https://generativelanguage.googleapis.com", family: "google"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.vendorID, func(t *testing.T) {
-			vendor := mustFindVendor(t, tt.vendorID)
-			// The premise: the row states nothing, which is what a driver fills in.
-			if vendor.BaseURL != "" {
-				t.Fatalf("%s states base URL %q; the fallback is not what this test covers", tt.vendorID, vendor.BaseURL)
-			}
-
-			cfg := endpoint.Config{APIKey: "sk-upstream"}
-			if err := testSleevGate().route(&cfg, vendor); err != nil {
-				t.Fatalf("route() error = %v", err)
-			}
-			if got := cfg.Headers[sleevBaseURLHeader]; got != tt.want {
-				t.Fatalf("%s = %q, want %q", sleevBaseURLHeader, got, tt.want)
-			}
-			if got := cfg.Headers[sleevProviderHeader]; got != tt.family {
-				t.Fatalf("%s = %q, want %q", sleevProviderHeader, got, tt.family)
-			}
-			if cfg.BaseURL != "http://127.0.0.1:17321" {
-				t.Fatalf("BaseURL = %q, want the gateway address", cfg.BaseURL)
-			}
-		})
-	}
-}
-
-// The gateway names several upstreams it serves itself, and OpenCode Zen is
-// one of them: routing it as "openai" would send Zen's traffic to OpenAI. A
-// custom endpoint is the opposite case — the gateway has never heard of it, so
-// it routes by family and reaches it through the base URL San states.
-func TestSleevGateNamesTheVendorsTheGatewayKnows(t *testing.T) {
-	zen := mustFindVendor(t, opencodeVendorID)
-	tests := []struct {
-		name         string
-		vendor       catalog.Vendor
-		cfg          endpoint.Config
-		wantProvider string
-		wantBaseURL  string
+		name   string
+		gate   sleevGate
+		vendor catalog.Vendor
+		auth   AuthMethod
+		cfg    ai.Config
+		want   string
 	}{
 		{
-			name:   "opencode zen is its own provider",
-			vendor: zen,
-			// The factory fills cfg.BaseURL from the row, as it does here.
-			cfg:          endpoint.Config{APIKey: opencodePublicKey, BaseURL: zen.BaseURL},
-			wantProvider: "opencode",
-			wantBaseURL:  opencodeBaseURL,
+			// Sleev's Pi page states this one verbatim.
+			name:   "anthropic, as the Pi setup page shows it",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "anthropic", API: ai.APIAnthropicMessages},
+			auth:   AuthAPIKey,
+			want:   "http://127.0.0.1:17321/sleev/pi/anthropic",
 		},
 		{
-			name: "a custom endpoint routes by family and its own base URL",
-			vendor: catalog.Vendor{
-				ID:      string(CustomProvider),
-				API:     ai.APIOpenAIChat,
-				BaseURL: "https://llm.example.test/v1",
-			},
-			cfg:          endpoint.Config{APIKey: "sk-custom", BaseURL: "https://llm.example.test/v1"},
-			wantProvider: "openai",
-			wantBaseURL:  "https://llm.example.test/v1",
+			name:   "the harness segment follows the harness setting",
+			gate:   opencodeGate,
+			vendor: catalog.Vendor{ID: "openai", API: ai.APIOpenAIChat},
+			auth:   AuthAPIKey,
+			want:   "http://127.0.0.1:17321/sleev/opencode/openai",
+		},
+		{
+			name:   "codex is named after its backend, not the vendor row",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "openai-codex", API: ai.APIOpenAIResponses},
+			auth:   AuthSubscription,
+			want:   "http://127.0.0.1:17321/sleev/pi/codex",
+		},
+		{
+			name:   "copilot",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "copilot", API: ai.APIOpenAIChat},
+			auth:   AuthSubscription,
+			want:   "http://127.0.0.1:17321/sleev/pi/copilot",
+		},
+		{
+			name:   "google",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "google", API: ai.APIGoogleGenAI},
+			auth:   AuthAPIKey,
+			want:   "http://127.0.0.1:17321/sleev/pi/google",
+		},
+		{
+			name:   "moonshot is moonshotai",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "moonshot", API: ai.APIOpenAIChat},
+			auth:   AuthAPIKey,
+			want:   "http://127.0.0.1:17321/sleev/pi/moonshotai",
+		},
+		{
+			name:   "mimo",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "mimo", API: ai.APIOpenAIChat},
+			auth:   AuthAPIKey,
+			want:   "http://127.0.0.1:17321/sleev/pi/mimo",
+		},
+		{
+			name:   "opencode zen is its own provider, not openai",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: opencodeVendorID, API: ai.APIOpenAIChat},
+			auth:   AuthAPIKey,
+			want:   "http://127.0.0.1:17321/sleev/pi/opencode",
+		},
+		{
+			// The coding plan is the only Z.ai row Sleev names; the metered API
+			// of the same vendor row falls through to the URL form below.
+			name:   "z.ai coding plan",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "bigmodel", API: ai.APIOpenAIChat},
+			auth:   AuthCoding,
+			want:   "http://127.0.0.1:17321/sleev/pi/zai-coding-plan",
+		},
+		{
+			name:   "z.ai metered api states its own address",
+			gate:   piGate,
+			vendor: catalog.Vendor{ID: "bigmodel", API: ai.APIOpenAIChat},
+			auth:   AuthAPIKey,
+			cfg:    ai.Config{Model: ai.Model{BaseURL: "https://api.z.ai/api/paas/v4"}},
+			want:   "http://127.0.0.1:17321/sleev/pi/https://api.z.ai/api/paas/v4",
+		},
+		{
+			// Sleev's custom-providers page states this one verbatim.
+			name:   "a custom endpoint states its own base URL",
+			gate:   opencodeGate,
+			vendor: catalog.Vendor{ID: string(CustomProvider), API: ai.APIOpenAIChat},
+			auth:   AuthAPIKey,
+			cfg:    ai.Config{Model: ai.Model{BaseURL: "https://provider.example.test/v1"}},
+			want:   "http://127.0.0.1:17321/sleev/opencode/https://provider.example.test/v1",
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tt.cfg
-			if err := testSleevGate().route(&cfg, tt.vendor); err != nil {
+			if err := tt.gate.route(&cfg, tt.vendor, tt.auth); err != nil {
 				t.Fatalf("route() error = %v", err)
 			}
-			if got := cfg.Headers[sleevProviderHeader]; got != tt.wantProvider {
-				t.Fatalf("%s = %q, want %q", sleevProviderHeader, got, tt.wantProvider)
-			}
-			if got := cfg.Headers[sleevBaseURLHeader]; got != tt.wantBaseURL {
-				t.Fatalf("%s = %q, want %q", sleevBaseURLHeader, got, tt.wantBaseURL)
+			if cfg.Model.BaseURL != tt.want {
+				t.Fatalf("Model.BaseURL = %q, want %q", cfg.Model.BaseURL, tt.want)
 			}
 		})
 	}
 }
 
-// Routing adds headers; it must not take away the ones a vendor states, which
-// are the client identity the gateway forwards upstream.
-func TestSleevGateKeepsTheVendorsOwnHeaders(t *testing.T) {
-	vendor := mustFindVendor(t, opencodeVendorID)
-	if len(vendor.Headers) == 0 {
-		t.Fatal("opencode vendor states no headers; this test needs one that does")
-	}
-	cfg := endpoint.Config{BaseURL: vendor.BaseURL}
+// An address that arrives with a trailing slash must not produce a doubled
+// path once the gateway appends the request's own.
+func TestSleevGateTrimsTrailingSlashes(t *testing.T) {
+	gate := sleevGate{baseURL: "http://127.0.0.1:17321/", harness: "pi"}
+	vendor := catalog.Vendor{ID: string(CustomProvider), API: ai.APIOpenAIChat}
+	cfg := ai.Config{Model: ai.Model{BaseURL: " https://llm.example.test/v1// "}}
 
-	if err := testSleevGate().route(&cfg, vendor); err != nil {
+	if err := gate.route(&cfg, vendor, AuthAPIKey); err != nil {
 		t.Fatalf("route() error = %v", err)
 	}
-	for name, want := range vendor.Headers {
-		if got := cfg.Headers[name]; got != want {
-			t.Fatalf("vendor header %s = %q, want %q", name, got, want)
-		}
+	if want := "http://127.0.0.1:17321/sleev/pi/https://llm.example.test/v1"; cfg.Model.BaseURL != want {
+		t.Fatalf("Model.BaseURL = %q, want %q", cfg.Model.BaseURL, want)
 	}
-	if got := cfg.Headers[sleevBaseURLHeader]; got != opencodeBaseURL {
-		t.Fatalf("%s = %q, want %q", sleevBaseURLHeader, got, opencodeBaseURL)
+}
+
+// A vendor that states no address of its own — the drivers hold the default
+// privately — still has to be routed, so the protocol's own host answers for it
+// in the URL form.
+func TestSleevGateFallsBackToTheProtocolHost(t *testing.T) {
+	tests := []struct {
+		vendor catalog.Vendor
+		want   string
+	}{
+		{
+			vendor: catalog.Vendor{ID: "nowhere-anthropic", API: ai.APIAnthropicMessages},
+			want:   "http://127.0.0.1:17321/sleev/pi/https://api.anthropic.com",
+		},
+		{
+			vendor: catalog.Vendor{ID: "nowhere-openai", API: ai.APIOpenAIChat},
+			want:   "http://127.0.0.1:17321/sleev/pi/https://api.openai.com/v1",
+		},
+		{
+			vendor: catalog.Vendor{ID: "nowhere-google", API: ai.APIGoogleGenAI},
+			want:   "http://127.0.0.1:17321/sleev/pi/https://generativelanguage.googleapis.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.vendor.API), func(t *testing.T) {
+			cfg := ai.Config{APIKey: "sk-upstream"}
+			if err := testSleevGate().route(&cfg, tt.vendor, AuthAPIKey); err != nil {
+				t.Fatalf("route() error = %v", err)
+			}
+			if cfg.Model.BaseURL != tt.want {
+				t.Fatalf("Model.BaseURL = %q, want %q", cfg.Model.BaseURL, tt.want)
+			}
+		})
 	}
 }
 
@@ -198,13 +235,13 @@ func TestSleevGateRefusesAnUnknownUpstream(t *testing.T) {
 	tests := []struct {
 		name   string
 		vendor catalog.Vendor
-		cfg    endpoint.Config
+		cfg    ai.Config
 		want   string
 	}{
 		{
 			name:   "vertex deployment",
 			vendor: catalog.Vendor{ID: "anthropic-vertex", API: ai.APIAnthropicVertex},
-			cfg:    endpoint.Config{Vertex: &ai.VertexConfig{Project: "a-project"}},
+			cfg:    ai.Config{Vertex: &ai.VertexConfig{Project: "a-project"}},
 			want:   "anthropic-vertex",
 		},
 		{
@@ -223,7 +260,7 @@ func TestSleevGateRefusesAnUnknownUpstream(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := tt.cfg
 			cfg.APIKey = "sk-upstream"
-			err := testSleevGate().route(&cfg, tt.vendor)
+			err := testSleevGate().route(&cfg, tt.vendor, AuthAPIKey)
 			if err == nil {
 				t.Fatal("route() error = nil, want a refusal")
 			}
@@ -231,7 +268,7 @@ func TestSleevGateRefusesAnUnknownUpstream(t *testing.T) {
 				t.Fatalf("route() error = %q, want it to name %q", err, tt.want)
 			}
 			// Nothing is half-applied on the way to the refusal.
-			if cfg.BaseURL != tt.cfg.BaseURL || cfg.APIKey != "sk-upstream" || cfg.Headers != nil {
+			if cfg.Model.BaseURL != tt.cfg.Model.BaseURL || cfg.APIKey != "sk-upstream" || cfg.Model.Headers != nil {
 				t.Fatalf("refused config was mutated: %#v", cfg)
 			}
 		})
@@ -241,20 +278,83 @@ func TestSleevGateRefusesAnUnknownUpstream(t *testing.T) {
 // The common case: no gateway, so the endpoint the factory built stands.
 func TestNilSleevGateLeavesTheEndpointAlone(t *testing.T) {
 	vendor := mustFindVendor(t, "moonshot")
-	cfg := endpoint.Config{APIKey: "sk-upstream", BaseURL: vendor.BaseURL}
+	cfg := ai.Config{APIKey: "sk-upstream", Model: ai.Model{ID: "kimi-k3", BaseURL: vendor.BaseURL}}
 
 	var gate *sleevGate
-	if err := gate.route(&cfg, vendor); err != nil {
+	if err := gate.route(&cfg, vendor, AuthAPIKey); err != nil {
 		t.Fatalf("route() error = %v", err)
 	}
-	if cfg.BaseURL != vendor.BaseURL || cfg.APIKey != "sk-upstream" || cfg.Headers != nil {
+	if cfg.Model.BaseURL != vendor.BaseURL || cfg.APIKey != "sk-upstream" || cfg.Model.Headers != nil {
 		t.Fatalf("config changed with no gateway enabled: %#v", cfg)
 	}
 }
 
-// The gate is read from the store at the moment a provider is opened, which is
-// what makes a settings change take effect without a restart.
-func TestLoadSleevGateReadsTheStore(t *testing.T) {
+// A listing names no model, so the gateway refuses it: with the gateway on, the
+// picker still has to fill. Only the client a turn is built from is routed; the
+// endpoint the listing is fetched from keeps the vendor's own address.
+func TestSleevGateLeavesTheModelListingDirect(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	vendor := mustFindVendor(t, "anthropic")
+
+	var listings, turns int
+	var turnPath string
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		listings++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"id":"claude-opus-5","type":"model","display_name":"Claude Opus 5"}],"has_more":false}`)
+	}))
+	t.Cleanup(direct.Close)
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turns++
+		turnPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"model\":\"claude-opus-5\"}}\n\n")
+	}))
+	t.Cleanup(gateway.Close)
+
+	if err := setting.SaveSleev(true, gateway.URL, "pi"); err != nil {
+		t.Fatalf("setting.SaveSleev() error = %v", err)
+	}
+
+	p := newVendorProvider("anthropic:api_key", vendor,
+		endpoint.Config{APIKey: "test-key", BaseURL: direct.URL})
+
+	models, err := p.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels() with the gateway enabled error = %v", err)
+	}
+	if listings == 0 {
+		t.Fatal("the listing never reached the vendor's own address, so /models could not fill")
+	}
+	if turns != 0 {
+		t.Fatalf("the listing went to the gateway %d times, want the vendor's own address", turns)
+	}
+	if len(models) == 0 {
+		t.Fatal("ListModels() = nothing, want the vendor's listing")
+	}
+
+	// The turn is the one call that takes the gateway.
+	for range legacyStream(context.Background(), p, CompletionOptions{
+		Model:     models[0].ID,
+		Messages:  []core.Message{core.UserMessage("hi", nil)},
+		MaxTokens: 8,
+	}) {
+	}
+	if turns == 0 {
+		t.Fatal("the turn never reached the gateway")
+	}
+	if want := "/sleev/pi/anthropic"; !strings.HasPrefix(turnPath, want) {
+		t.Fatalf("turn path = %q, want it to start with %q", turnPath, want)
+	}
+}
+
+// The gate is read from the user's settings at the moment a provider is opened,
+// which is what makes a settings change take effect without a restart — and
+// what keeps the route out of reach of a project's providers.json.
+func TestLoadSleevGateReadsTheSettings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	secret.ResetDefault()
 	t.Cleanup(secret.ResetDefault)
@@ -263,12 +363,8 @@ func TestLoadSleevGateReadsTheStore(t *testing.T) {
 		t.Fatalf("loadSleevGate() = %#v, want nil before the user configures one", gate)
 	}
 
-	store, err := NewStore()
-	if err != nil {
-		t.Fatalf("NewStore() error = %v", err)
-	}
-	if err := store.SetSleev(SleevConfig{Enabled: true, BaseURL: "http://127.0.0.1:9999"}); err != nil {
-		t.Fatalf("SetSleev() error = %v", err)
+	if err := setting.SaveSleev(true, "http://127.0.0.1:9999", ""); err != nil {
+		t.Fatalf("setting.SaveSleev() error = %v", err)
 	}
 
 	gate := loadSleevGate()
@@ -278,12 +374,12 @@ func TestLoadSleevGateReadsTheStore(t *testing.T) {
 	if gate.baseURL != "http://127.0.0.1:9999" {
 		t.Fatalf("baseURL = %q, want the stored address", gate.baseURL)
 	}
-	if gate.harness != DefaultSleevHarness {
-		t.Fatalf("harness = %q, want %q", gate.harness, DefaultSleevHarness)
+	if gate.harness != setting.DefaultSleevHarness {
+		t.Fatalf("harness = %q, want %q", gate.harness, setting.DefaultSleevHarness)
 	}
 
-	if err := store.SetSleev(SleevConfig{Enabled: false}); err != nil {
-		t.Fatalf("SetSleev(disabled) error = %v", err)
+	if err := setting.SaveSleev(false, "http://127.0.0.1:9999", ""); err != nil {
+		t.Fatalf("setting.SaveSleev(disabled) error = %v", err)
 	}
 	if gate := loadSleevGate(); gate != nil {
 		t.Fatalf("loadSleevGate() = %#v after disabling, want nil", gate)
@@ -302,8 +398,8 @@ func TestEnabledSleevIsNotAProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	if err := store.SetSleev(SleevConfig{Enabled: true}); err != nil {
-		t.Fatalf("SetSleev() error = %v", err)
+	if err := setting.SaveSleev(true, "", ""); err != nil {
+		t.Fatalf("setting.SaveSleev() error = %v", err)
 	}
 
 	if _, ok := ResolveProvider(context.Background(), store); ok {
@@ -402,12 +498,12 @@ func TestSleevLiveGatewayRoutesConfiguredProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	if err := store.SetSleev(SleevConfig{Enabled: true}); err != nil {
-		t.Fatalf("SetSleev() error = %v", err)
+	if err := setting.SaveSleev(true, "", ""); err != nil {
+		t.Fatalf("setting.SaveSleev() error = %v", err)
 	}
-	gateway := store.Sleev()
-	if gateway == nil {
-		t.Fatal("Sleev() = nil after enabling, want the stored config")
+	gateway, ok := setting.UserSleev()
+	if !ok {
+		t.Fatal("UserSleev() = not found after enabling, want the stored config")
 	}
 	probeSleevGateway(t, gateway.BaseURL)
 
@@ -424,24 +520,24 @@ func TestSleevLiveGatewayRoutesConfiguredProviders(t *testing.T) {
 				t.Skipf("%s is not a provider this build serves: %v", name, err)
 			}
 
-			// The listing is a request of its own, so it proves the gateway
-			// answered this provider's GET path before any turn is sent.
+			// The listing is the half that must not travel: it names no model,
+			// so the gateway refuses it, and /models still has to fill with the
+			// gateway enabled. A list here is that contract holding.
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
 			models, err := p.ListModels(ctx)
 			if err != nil {
-				if isTransportFailure(err, gateway.BaseURL) {
-					t.Fatalf("listing models never reached the gateway: %v", err)
-				}
-				t.Logf("gateway forwarded the model listing; the upstream answered with an error: %v", err)
+				t.Fatalf("listing models failed with the gateway enabled, so /models could not fill: %v", err)
 			}
 			if len(models) == 0 {
 				t.Skip("no model to ask; the listing above says why")
 			}
 
-			// One model is enough to prove the turn path: the listing is
-			// ordered the way the vendor orders it.
-			model := models[0].ID
+			// One model is enough to prove the turn path. It has to be one a
+			// turn can answer with: a listing mixes chat models with image and
+			// embedding ones, and a turn sent to those comes back 400 without
+			// ever testing the gateway.
+			model := liveChatModel(models)
 			if override := os.Getenv("SAN_SLEEV_LIVE_MODEL"); override != "" && len(models) > 1 {
 				model = override
 			}
@@ -463,8 +559,8 @@ func TestSleevLiveGatewayRoutesConfiguredProviders(t *testing.T) {
 	// The other half of the switch. The gateway is turned off and its address
 	// pointed at a closed port, so a provider that still answers can only have
 	// bypassed it: its own host is the one address left to reach.
-	if err := store.SetSleev(SleevConfig{Enabled: false, BaseURL: "http://127.0.0.1:1"}); err != nil {
-		t.Fatalf("SetSleev(disabled) error = %v", err)
+	if err := setting.SaveSleev(false, "http://127.0.0.1:1", ""); err != nil {
+		t.Fatalf("setting.SaveSleev(disabled) error = %v", err)
 	}
 	for name, conn := range connections {
 		t.Run("direct/"+name, func(t *testing.T) {
@@ -484,6 +580,26 @@ func TestSleevLiveGatewayRoutesConfiguredProviders(t *testing.T) {
 			t.Logf("gateway off: %s listed %d models from its own endpoint", name, len(models))
 		})
 	}
+}
+
+// probeSleevGateway fails unless something answers at the gateway address and
+// liveChatModel picks the first model in a listing a conversation can use.
+// Listings put image, embedding and speech models in the same list as chat
+// ones, and a turn sent to one of those is refused upstream — which would make
+// the live check pass on a request that could never have produced an answer.
+func liveChatModel(models []ModelInfo) string {
+	for _, m := range models {
+		id := strings.ToLower(m.ID)
+		switch {
+		case strings.Contains(id, "image"),
+			strings.Contains(id, "embed"),
+			strings.Contains(id, "whisper"),
+			strings.Contains(id, "tts"):
+			continue
+		}
+		return m.ID
+	}
+	return models[0].ID
 }
 
 // probeSleevGateway fails unless something answers at the gateway address and

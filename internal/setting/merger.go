@@ -53,6 +53,7 @@ func mergeSettings(base, overlay *Data) *Data {
 	result.SelfLearn = mergeSelfLearn(base.SelfLearn, overlay.SelfLearn)
 	result.AutoPilot = mergeAutoPilot(base.AutoPilot, overlay.AutoPilot)
 	result.Advisor = mergeAdvisor(base.Advisor, overlay.Advisor)
+	result.Sleev = mergeSleev(base.Sleev, overlay.Sleev)
 	result.LastOperationMode = coalesce(overlay.LastOperationMode, base.LastOperationMode)
 
 	return result

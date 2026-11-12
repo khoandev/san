@@ -5,7 +5,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -54,54 +53,9 @@ const (
 	CustomAPIKeyEnvVar = "SAN_CUSTOM_API_KEY"
 )
 
-// The Sleev gateway.
-//
-// Sleev is not a provider of its own: it is a local proxy every configured
-// provider's traffic can be routed through, so the address below is a
-// destination rather than a source of models. Its configuration lives here
-// beside the custom provider's for the same reason — it is a decision the user
-// made, not something an endpoint told San about itself.
-const (
-	// DefaultSleevBaseURL is the address the gateway listens on when the user
-	// states none.
-	DefaultSleevBaseURL = "http://127.0.0.1:17321"
-	// DefaultSleevHarness is the harness name the gateway is told it is
-	// serving, when the user names no other.
-	DefaultSleevHarness = "pi"
-)
-
-// SleevConfig stores the local proxy requests are forwarded through while it is
-// enabled. There is no credential of its own: a routed request carries the
-// provider's key, which is what the gateway hands to the upstream.
-type SleevConfig struct {
-	// Enabled routes every provider's requests through the gateway. Opt-in:
-	// false is the zero value.
-	Enabled bool `json:"enabled"`
-	// BaseURL is the gateway's own address, e.g. http://127.0.0.1:17321.
-	BaseURL string `json:"baseURL,omitempty"`
-	// Harness names the client the gateway forwards for, sent as the
-	// sleev-harness header.
-	Harness string `json:"harness,omitempty"`
-}
-
-// IsEnabled reports whether traffic is routed through the gateway. Nil-receiver
-// safe, for callers that hold a config the user never saved.
-func (c *SleevConfig) IsEnabled() bool { return c != nil && c.Enabled }
-
-// Normalized returns the config with its defaults filled in: an unset address
-// is the local default, and trailing slashes are trimmed so the gateway path is
-// never doubled. Harness likewise falls back to its default.
-func (c SleevConfig) Normalized() SleevConfig {
-	c.BaseURL = strings.TrimRight(strings.TrimSpace(c.BaseURL), "/")
-	if c.BaseURL == "" {
-		c.BaseURL = DefaultSleevBaseURL
-	}
-	c.Harness = strings.TrimSpace(c.Harness)
-	if c.Harness == "" {
-		c.Harness = DefaultSleevHarness
-	}
-	return c
-}
+// The Sleev gateway is a setting, not a connection: it lives in settings.json
+// (see internal/setting) and is reached from here through loadSleevGate. The
+// block it used to occupy in providers.json is moved out on the first open.
 
 // CustomProviderConfig stores the user-defined OpenAI-compatible provider added
 // via the /models Providers tab. The API key is not kept here — it lives in the
@@ -120,7 +74,6 @@ type storeData struct {
 	ContextLimits   map[string]contextLimit   `json:"tokenLimits,omitempty"`     // key: modelID
 	ThinkingEfforts map[string]string         `json:"thinkingEfforts,omitempty"` // key: modelID; value: provider-native effort label
 	CustomProvider  *CustomProviderConfig     `json:"customProvider,omitempty"`  // user-defined OpenAI-compatible provider
-	Sleev           *SleevConfig              `json:"sleev,omitempty"`           // local gateway every provider may be routed through
 }
 
 // modelSelection is the project store; connections and preferences stay user-wide.
@@ -205,6 +158,9 @@ func ProjectModelFindings(cwd string) []string {
 func (s *Store) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A gateway block still in providers.json belongs to the settings: move it
+	// before this snapshot is taken, so nothing below can read or rewrite it.
+	migrateLegacySleevLogged(s.path)
 	return s.loadLocked()
 }
 
@@ -240,30 +196,48 @@ func (s *Store) Reload() error {
 
 // initMaps fills in the maps an older file — or a hand-edited one — may not
 // have, so every writer can assign without checking first.
-func (s *Store) initMaps() {
-	if s.data.Connections == nil {
-		s.data.Connections = make(map[string]ConnectionInfo)
+func (s *Store) initMaps() { s.data.ensureMaps() }
+
+// ensureMaps is initMaps on a plain file snapshot, for the freshly read copy
+// save applies its change to.
+func (d *storeData) ensureMaps() {
+	if d.Connections == nil {
+		d.Connections = make(map[string]ConnectionInfo)
 	}
-	if s.data.Models == nil {
-		s.data.Models = make(map[string]modelCache)
+	if d.Models == nil {
+		d.Models = make(map[string]modelCache)
 	}
-	if s.data.ContextLimits == nil {
-		s.data.ContextLimits = make(map[string]contextLimit)
+	if d.ContextLimits == nil {
+		d.ContextLimits = make(map[string]contextLimit)
 	}
-	if s.data.ThinkingEfforts == nil {
-		s.data.ThinkingEfforts = make(map[string]string)
+	if d.ThinkingEfforts == nil {
+		d.ThinkingEfforts = make(map[string]string)
 	}
 }
 
-// save writes user metadata without reverting a default selected by another
-// Store. Model selection writes use their own read-modify-write path.
-func (s *Store) save() error {
-	var latest modelSelection
+// save rewrites providers.json from a fresh read of it, with mutate stating the
+// one change the caller is making.
+//
+// Several Stores are open at once — the app has one, the /models picker opens
+// its own — and each holds only the snapshot it last read. Writing that
+// snapshot wholesale dropped every field another instance had written since,
+// which is how a connection or a hand-set limit could disappear while the
+// picker cached a model listing. Applying the change to what is on disk now,
+// then adopting that, keeps both instances' writes. Model selection writes use
+// their own read-modify-write path, since they also decide which file to write.
+// Caller locks.
+func (s *Store) save(mutate func(*storeData)) error {
+	var latest storeData
 	if err := atomicfile.ReadJSON(s.path, &latest); err != nil {
 		return err
 	}
-	s.data.Current = latest.Current
-	return atomicfile.WriteJSON(s.path, s.data, 0o644)
+	latest.ensureMaps()
+	mutate(&latest)
+	if err := atomicfile.WriteJSON(s.path, latest, 0o644); err != nil {
+		return err
+	}
+	s.data = latest
+	return nil
 }
 
 // Connect records that a provider is connected by this auth method.
@@ -271,12 +245,12 @@ func (s *Store) Connect(provider ProviderID, authMethod AuthMethod) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.data.Connections[string(provider)] = ConnectionInfo{
-		AuthMethod:  authMethod,
-		ConnectedAt: time.Now(),
-	}
-
-	return s.save()
+	return s.save(func(d *storeData) {
+		d.Connections[string(provider)] = ConnectionInfo{
+			AuthMethod:  authMethod,
+			ConnectedAt: time.Now(),
+		}
+	})
 }
 
 // IsConnected reports whether a provider is connected by this auth method.
@@ -343,8 +317,7 @@ func (s *Store) Disconnect(provider ProviderID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.data.Connections, string(provider))
-	return s.save()
+	return s.save(func(d *storeData) { delete(d.Connections, string(provider)) })
 }
 
 // ClearCurrentModel removes the effective selection, revealing the user default
@@ -444,8 +417,7 @@ func (s *Store) SetSearchProvider(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.data.SearchProvider = &name
-	return s.save()
+	return s.save(func(d *storeData) { d.SearchProvider = &name })
 }
 
 // ThinkingEffort returns the persisted thinking effort for modelID,
@@ -462,13 +434,13 @@ func (s *Store) SetThinkingEffort(modelID, effort string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.initMaps()
-	if effort == "" {
-		delete(s.data.ThinkingEfforts, modelID)
-	} else {
-		s.data.ThinkingEfforts[modelID] = effort
-	}
-	return s.save()
+	return s.save(func(d *storeData) {
+		if effort == "" {
+			delete(d.ThinkingEfforts, modelID)
+		} else {
+			d.ThinkingEfforts[modelID] = effort
+		}
+	})
 }
 
 // CustomProvider returns the stored custom provider config, or nil when the
@@ -489,31 +461,5 @@ func (s *Store) SetCustomProvider(cfg CustomProviderConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.data.CustomProvider = &cfg
-	return s.save()
-}
-
-// Sleev returns the gateway config, or nil when the user never configured one.
-// The copy is normalized, so a hand-edited file with an empty address still
-// says where the gateway is. Returns a copy so callers can't mutate the store.
-func (s *Store) Sleev() *SleevConfig {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.data.Sleev == nil {
-		return nil
-	}
-	cfg := s.data.Sleev.Normalized()
-	return &cfg
-}
-
-// SetSleev saves the gateway config, normalizing it first so what is written
-// back states its defaults rather than relying on the reader to supply them.
-func (s *Store) SetSleev(cfg SleevConfig) error {
-	cfg = cfg.Normalized()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.data.Sleev = &cfg
-	return s.save()
+	return s.save(func(d *storeData) { d.CustomProvider = &cfg })
 }

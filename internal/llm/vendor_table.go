@@ -224,11 +224,9 @@ func (e vendorEntry) factory() Factory {
 				return nil, err
 			}
 		}
-		// An enabled gateway takes the endpoint over: every model this vendor
-		// serves is reached through it, with the vendor's own credential.
-		if err := loadSleevGate().route(&cfg, vendor); err != nil {
-			return nil, err
-		}
+		// The endpoint keeps the vendor's own address: a gateway, when the user
+		// enabled one, is applied where a turn's client is built (see
+		// vendorProvider.Client), so the model listing still answers.
 		return newVendorProvider(providerName(e.meta), vendor, cfg), nil
 	}
 }

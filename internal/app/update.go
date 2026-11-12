@@ -503,6 +503,14 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case input.SleevProxySavedMsg:
+		// Re-read the settings first: the in-memory handle is what the panel and
+		// the rest of the app consult, and it still holds the value from before
+		// the save, so reopening the panel would show the old switch.
+		if err := m.services.Setting.Reload(m.env.CWD); err != nil {
+			log.Logger().Warn("reload settings after sleev save failed", zap.Error(err))
+			m.conv.AddNotice("Sleev proxy saved, but settings could not be re-read — restart to apply it")
+			return m, nil
+		}
 		// The route is baked into a provider when it is opened, so the live one
 		// still points where it did before the save. Rebuild it here rather
 		// than asking for a restart.

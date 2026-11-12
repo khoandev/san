@@ -178,6 +178,11 @@ type Data struct {
 	Advisor AdvisorSettings `json:"advisor,omitzero"`
 	// Agents tunes how delegations are routed (JSON key "agents").
 	Agents AgentsSettings `json:"agents,omitzero"`
+	// Sleev is the local gateway providers' traffic may be routed through
+	// (JSON key "sleev"). User-wide only: the loader drops a project file's
+	// block, since routing this machine's traffic is the user's decision. Read
+	// through UserSleev, which states the defaults for an unset block.
+	Sleev *SleevSettings `json:"sleev,omitempty"`
 	// LastOperationMode is the user-wide mode restored when starting a new session.
 	LastOperationMode string `json:"lastOperationMode,omitempty"`
 }
@@ -1071,6 +1076,7 @@ func (s *Data) Clone() *Data {
 	dst.SkillCommands = clonePtr(s.SkillCommands)
 	dst.BashPreviewLines = clonePtr(s.BashPreviewLines)
 	dst.AgentPreviewLines = clonePtr(s.AgentPreviewLines)
+	dst.Sleev = s.Sleev.Clone()
 	empty := NewData() // the maps are never nil on a clone
 	dst.Env, dst.EnabledPlugins = empty.Env, empty.EnabledPlugins
 	dst.DisabledTools, dst.ModelRoles, dst.Hooks = empty.DisabledTools, empty.ModelRoles, empty.Hooks

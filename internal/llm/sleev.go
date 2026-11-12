@@ -3,63 +3,68 @@
 //
 // A user runs Sleev beside San and configures it with the upstream it should
 // reach. San's half of that arrangement is small and sits here rather than in
-// each vendor: rewrite the endpoint the factory just built so its requests go
-// to the gateway instead of the vendor, and say — in the three headers the
-// gateway reads — which family the request belongs to, where to forward it,
-// and which client is asking. Everything else, the protocol above all, is left
-// exactly as the vendor stated it.
+// each vendor: rewrite the address of the client a turn is built from, so its
+// requests go to the gateway instead of the vendor. The gateway learns the rest
+// from the path, the way Sleev's harness setup pages prescribe it —
+//
+//	<gateway>/sleev/<harness ID>/<provider ID>     a provider Sleev knows
+//	<gateway>/sleev/<harness ID>/<full base URL>   a custom endpoint
+//
+// Everything else, the protocol and the credential above all, is left exactly
+// as the vendor stated it.
 package llm
 
 import (
 	"fmt"
-	"maps"
 	"strings"
 
+	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/sdk-go/pkg/ai"
 	"github.com/genai-io/sdk-go/pkg/ai/catalog"
-	"github.com/genai-io/sdk-go/pkg/ai/endpoint"
 )
 
-// The headers the gateway reads: which provider the request belongs to, where
-// to forward it, and which harness is asking. The provider is not derivable by
-// the gateway from the body, and it refuses a request that names none, so it
-// is the one header routing cannot leave out.
-const (
-	sleevProviderHeader = "sleev-provider"
-	sleevHarnessHeader  = "sleev-harness"
-	sleevBaseURLHeader  = "sleev-base-url"
-)
+// sleevProviders maps one of San's vendors to the provider ID the gateway
+// knows it by. Sleev lists the IDs per harness (see its Providers page); the
+// ones here are the providers those harnesses share, plus San's own OpenCode
+// Zen row.
+//
+// A vendor absent from this table — a custom endpoint above all, or one whose
+// Sleev name depends on the plan the connection is on (Alibaba, Z.ai's metered
+// API) — is routed by its own base URL instead, the custom-provider form the
+// gateway documents. A name only decides which upstream the gateway picks; the
+// URL form states it outright.
+var sleevProviders = map[string]sleevProvider{
+	"anthropic":      {id: "anthropic"},
+	"openai":         {id: "openai"},
+	"openai-codex":   {id: "codex"},
+	"copilot":        {id: "copilot"},
+	"google":         {id: "google"},
+	"moonshot":       {id: "moonshotai"},
+	"mimo":           {id: "mimo"},
+	opencodeVendorID: {id: "opencode"},
+	// San reaches Z.ai twice through the same vendor row: the metered API and
+	// the coding plan. Only the coding plan has a Sleev name, so the auth
+	// method is part of the match rather than the vendor ID alone.
+	"bigmodel": {id: "zai-coding-plan", auth: AuthCoding},
+}
 
-// sleevUpstreams is how one of San's protocols is reached through the gateway:
-// the family it routes as, and where that family's driver would go on its own.
+// sleevProvider is one row of sleevProviders: the gateway's ID for the vendor,
+// and the auth method it applies to. An empty auth matches every method.
+type sleevProvider struct {
+	id   string
+	auth AuthMethod
+}
+
+// sleevDefaultHosts is where each protocol's driver would go on its own, for
+// the vendors that state no address of their own.
 //
 // TODO(sdk-go): the default hosts belong to the drivers, which hold them
 // privately; expose them (e.g. ai.API.DefaultBaseURL) and drop them here.
-var sleevUpstreams = map[ai.API]struct {
-	provider       string
-	defaultBaseURL string
-}{
-	ai.APIAnthropicMessages: {provider: "anthropic", defaultBaseURL: "https://api.anthropic.com"},
-	ai.APIOpenAIChat:        {provider: "openai", defaultBaseURL: "https://api.openai.com/v1"},
-	ai.APIOpenAIResponses:   {provider: "openai", defaultBaseURL: "https://api.openai.com/v1"},
-	ai.APIGoogleGenAI:       {provider: "google", defaultBaseURL: "https://generativelanguage.googleapis.com"},
-}
-
-// sleevNamedProviders names the vendors the gateway knows by their own ID
-// rather than by the protocol family they speak. OpenCode Zen is the case that
-// matters: the gateway serves several OpenAI-speaking upstreams, and only the
-// name tells it which one is asking. Moonshot and MiMo are named for the same
-// reason — the gateway meters them, not OpenAI.
-//
-// A vendor absent here — a custom endpoint above all, or one whose Sleev name
-// depends on the plan the connection is on (Alibaba, Z.ai) — routes as its
-// family and states its own base URL in sleev-base-url, which is what
-// actually decides where the gateway forwards: it honours that header even for
-// a named provider, and the name only labels the request.
-var sleevNamedProviders = map[string]string{
-	opencodeVendorID: "opencode",
-	"moonshot":       "moonshotai",
-	"mimo":           "mimo",
+var sleevDefaultHosts = map[ai.API]string{
+	ai.APIAnthropicMessages: "https://api.anthropic.com",
+	ai.APIOpenAIChat:        "https://api.openai.com/v1",
+	ai.APIOpenAIResponses:   "https://api.openai.com/v1",
+	ai.APIGoogleGenAI:       "https://generativelanguage.googleapis.com",
 }
 
 // sleevGate is one enabled gateway, resolved: where to send a request and on
@@ -71,15 +76,15 @@ type sleevGate struct {
 }
 
 // loadSleevGate returns the gateway to route through, or nil when the user has
-// not enabled one. It never fails: a store San cannot read is the same
+// not enabled one. It never fails: a settings file San cannot read is the same
 // situation as a gateway that was never configured, and refusing to open every
 // provider over it would turn a settings problem into an unusable install.
+//
+// The settings are read straight from the user's file rather than through a
+// Store: the gateway is a user-wide setting, so no project file can state it,
+// and routing must not depend on providers.json being readable.
 func loadSleevGate() *sleevGate {
-	store, err := NewStore()
-	if err != nil {
-		return nil
-	}
-	cfg := store.Sleev()
+	cfg, _ := setting.UserSleev()
 	if !cfg.IsEnabled() {
 		return nil
 	}
@@ -89,67 +94,69 @@ func loadSleevGate() *sleevGate {
 	}
 }
 
-// route rewrites one vendor's endpoint config so its requests reach the
+// route rewrites the address of one turn's config so the request reaches the
 // gateway. A nil gate — the common case — changes nothing.
 //
-// The protocol and the credential are deliberately untouched: the gateway
-// forwards what the provider's driver sends, so an Anthropic endpoint with an
-// Anthropic key stays exactly that, and the key reaches the upstream as the
-// provider's own. Only the address and the three sleev headers move.
-func (g *sleevGate) route(cfg *endpoint.Config, vendor catalog.Vendor) error {
+// It is applied to the config a client is built from, not to the endpoint: the
+// gateway carries turns, while the metadata calls that open a connection — the
+// model listing above all — name no model and are refused there. Leaving the
+// endpoint on the vendor's own address is what keeps /models open with the
+// gateway on.
+//
+// The protocol, the credential and the headers are deliberately untouched: the
+// gateway forwards what the provider's driver sends, so an Anthropic endpoint
+// with an Anthropic key stays exactly that, its own headers still state who is
+// calling, and the key reaches the upstream as the provider's own. Only the
+// address moves.
+func (g *sleevGate) route(cfg *ai.Config, vendor catalog.Vendor, auth AuthMethod) error {
 	if g == nil {
 		return nil
 	}
-	provider, upstream, err := sleevTarget(cfg, vendor)
+	target, err := sleevTarget(cfg.Model.BaseURL, cfg.Vertex, vendor, auth)
 	if err != nil {
 		return err
 	}
-
-	// The vendor's own headers are the identity it expects the gateway to
-	// forward — OpenCode Zen's session markers, for one. endpoint.New only
-	// adopts them when the caller states none, so they are seeded here
-	// rather than replaced: routing must add headers, never drop them.
-	headers := maps.Clone(vendor.Headers)
-	if headers == nil {
-		headers = make(map[string]string, len(cfg.Headers)+4)
-	}
-	maps.Copy(headers, cfg.Headers)
-	headers[sleevProviderHeader] = provider
-	headers[sleevHarnessHeader] = g.harness
-	headers[sleevBaseURLHeader] = upstream
-
-	cfg.BaseURL = g.baseURL
-	cfg.Headers = headers
+	cfg.Model.BaseURL = sleevRouteURL(g.baseURL, g.harness, target)
 	return nil
 }
 
-// sleevTarget is what the gateway is told about one endpoint: which provider
-// it belongs to, and the base URL to forward to.
-func sleevTarget(cfg *endpoint.Config, vendor catalog.Vendor) (provider, upstream string, err error) {
+// sleevRouteURL builds the address the docs prescribe:
+// <gateway>/sleev/<harness>/<target>. The target is appended verbatim — a
+// provider ID, or a full base URL whose scheme and slashes are part of it —
+// because the gateway parses the remainder of the path rather than expecting it
+// escaped.
+func sleevRouteURL(gateway, harness, target string) string {
+	return strings.TrimRight(gateway, "/") + "/sleev/" + harness + "/" + target
+}
+
+// sleevTarget is the tail of the gateway's path for one endpoint: the provider
+// ID the gateway knows, or the upstream's own base URL when it knows the vendor
+// by neither name nor row.
+func sleevTarget(upstream string, vertex *ai.VertexConfig, vendor catalog.Vendor, auth AuthMethod) (string, error) {
 	// A Vertex deployment's host is computed from its project and region, and
 	// names a tenant rather than the product, so there is no single address to
 	// hand the gateway.
-	if cfg.Vertex != nil {
-		return "", "", fmt.Errorf(
+	if vertex != nil || strings.HasSuffix(vendor.ID, "-vertex") {
+		return "", fmt.Errorf(
 			"llm: sleev cannot route %q: a Vertex deployment's host is computed from its project and region", vendor.ID)
 	}
-	family, ok := sleevUpstreams[vendor.API]
+	if provider, ok := sleevProviders[vendor.ID]; ok && (provider.auth == "" || provider.auth == auth) {
+		return provider.id, nil
+	}
+
+	host, ok := sleevDefaultHosts[vendor.API]
 	if !ok {
-		return "", "", fmt.Errorf(
+		return "", fmt.Errorf(
 			"llm: sleev cannot route %q: the gateway speaks the Anthropic, OpenAI and Google protocols, not %q",
 			vendor.ID, vendor.API)
 	}
-	provider = sleevNamedProviders[vendor.ID]
-	if provider == "" {
-		provider = family.provider
+	// The custom-provider form: the endpoint's own address when it states one —
+	// a custom endpoint, or a vendor San overrides — else the protocol's default
+	// host. The trailing slash is trimmed so the gateway's own path is never
+	// doubled once it appends the request's.
+	target := strings.TrimRight(strings.TrimSpace(upstream), "/")
+	if target == "" {
+		target = host
 	}
-	// The address the gateway forwards to: the endpoint's own when it states
-	// one — a custom endpoint, or a vendor San overrides — else the family's
-	// default host. The gateway honours it for a named provider too, which is
-	// what lets one code path serve both.
-	upstream = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
-	if upstream == "" {
-		upstream = family.defaultBaseURL
-	}
-	return provider, upstream, nil
+	return target, nil
 }

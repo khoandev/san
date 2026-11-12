@@ -43,6 +43,7 @@ func TestCloneCopiesEveryField(t *testing.T) {
 		AutoPilot:               AutoPilotSettings{Model: "openai/gpt"},
 		Advisor:                 AdvisorSettings{Enable: &yes, Model: "openai/gpt-mini"},
 		Agents:                  AgentsSettings{AutoTier: &no, Roles: map[string]string{AgentReviewer: "deep"}},
+		Sleev:                   &SleevSettings{Enabled: &yes, BaseURL: "http://127.0.0.1:17321", Harness: "pi"},
 		LastOperationMode:       "auto",
 	}
 	v := reflect.ValueOf(*src)

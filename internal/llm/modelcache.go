@@ -35,12 +35,12 @@ func (s *Store) CacheModels(provider ProviderID, authMethod AuthMethod, models [
 	defer s.mu.Unlock()
 
 	key := providerKey(provider, authMethod)
-	s.data.Models[key] = modelCache{
-		CachedAt: time.Now(),
-		Models:   models,
-	}
-
-	return s.save()
+	return s.save(func(d *storeData) {
+		d.Models[key] = modelCache{
+			CachedAt: time.Now(),
+			Models:   models,
+		}
+	})
 }
 
 // CachedModels returns cached models if they exist and are not expired
@@ -94,8 +94,8 @@ func (s *Store) RemoveCachedModels(provider ProviderID, authMethod AuthMethod) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.data.Models, providerKey(provider, authMethod))
-	return s.save()
+	key := providerKey(provider, authMethod)
+	return s.save(func(d *storeData) { delete(d.Models, key) })
 }
 
 // CachedModelDisplayName returns the display name for a model ID found in any
@@ -225,9 +225,9 @@ func (s *Store) SetContextLimit(modelID string, contextWindow, maxOutput int) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.initMaps()
-	s.data.ContextLimits[modelID] = contextLimit{ContextWindow: contextWindow, MaxOutput: maxOutput}
-	return s.save()
+	return s.save(func(d *storeData) {
+		d.ContextLimits[modelID] = contextLimit{ContextWindow: contextWindow, MaxOutput: maxOutput}
+	})
 }
 
 // ClearContextLimit drops a model's hand-set override.
@@ -235,8 +235,7 @@ func (s *Store) ClearContextLimit(modelID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.data.ContextLimits, modelID)
-	return s.save()
+	return s.save(func(d *storeData) { delete(d.ContextLimits, modelID) })
 }
 
 // ContextLimit returns custom token limits for a model
