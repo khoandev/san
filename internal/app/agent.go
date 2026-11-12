@@ -380,27 +380,67 @@ func (m *model) roleModelInfo(target llm.RoleTarget) *llm.CurrentModelInfo {
 	return info
 }
 
-// planModelTarget is the model Plan Mode runs on, reported only when it differs
-// from the session model. False — the session model answers — when Plan Mode is
-// off, the plan store or settings are not wired, the deep role is unassigned, or
-// its reference resolves back to the session model (an "@role" chain that loops,
-// a vendor this session has not connected). Plan Mode never fails a turn over an
-// unassigned role; it just runs where the conversation already runs.
+// planModelTarget is the model Plan Mode runs on. Plan Mode always resolves the
+// deep role, so everything bound there reaches the turn: a different model, an
+// "@role" chain, or an effort of the role's own on a model the session already
+// holds. False — the session model answers and nothing changes — when Plan Mode
+// is off, the plan store or settings are not wired, the deep role is unassigned,
+// its reference resolves nowhere (an "@role" chain that loops, a vendor this
+// session has not connected), or it lands on the session model with no effort
+// bound. Plan Mode never fails a turn over an unassigned role; it runs where the
+// conversation already runs and says so through warnPlanModelFallback.
 func (m *model) planModelTarget() (llm.RoleTarget, bool) {
 	if m.plan == nil || m.plan.Mode() != plan.ModePlan || m.services.Setting == nil {
 		return llm.RoleTarget{}, false
 	}
-	if strings.TrimSpace(m.services.Setting.ModelRole(string(llm.RoleDeep))) == "" {
-		return llm.RoleTarget{}, false
-	}
 	target := m.resolveRole(llm.RoleDeep)
+	// An inherited target is the session model by definition: either the role
+	// is unassigned or its reference did not resolve. Either way there is
+	// nothing here to route.
 	if target.Inherited || target.ModelID == "" {
 		return llm.RoleTarget{}, false
 	}
-	if target.ModelID == m.env.GetModelID() && providerName(target.Provider) == providerName(m.env.LLMProvider) {
+	// The same model with no effort of the role's own is the session model
+	// again; reporting it would only churn the runtime on every toggle.
+	if target.ModelID == m.env.GetModelID() &&
+		providerName(target.Provider) == providerName(m.env.LLMProvider) &&
+		target.Effort == "" {
 		return llm.RoleTarget{}, false
 	}
 	return target, true
+}
+
+// planDeepRoleNotice is what Plan Mode says when the deep role has no model: the
+// turn still runs, on the session model, so the person learns the routing gap
+// and where to close it instead of wondering why planning feels cheap.
+const planDeepRoleNotice = "Plan Mode has no model assigned to the deep role, so it runs on the session model. " +
+	"Assign one in /models → Roles → deep to plan on a stronger model."
+
+// planDeepRoleUnassigned reports whether Plan Mode has nowhere to route: the
+// deep role has no binding at all. A binding that fails to resolve is not this
+// case — the turn lands on the session model either way, but the settings do
+// name an intent, and only the missing binding is worth a notice.
+func (m *model) planDeepRoleUnassigned() bool {
+	if m.services.Setting == nil {
+		return false
+	}
+	return strings.TrimSpace(m.services.Setting.ModelRole(string(llm.RoleDeep))) == ""
+}
+
+// warnPlanModelFallback tells the person once per gap that Plan Mode is running
+// on the session model because the deep role is unassigned. The flag clears as
+// soon as the role is assigned, so removing the assignment later warns again
+// rather than staying silent for the rest of the session.
+func (m *model) warnPlanModelFallback() {
+	if !m.planDeepRoleUnassigned() {
+		m.planDeepWarned = false
+		return
+	}
+	if m.plan == nil || m.plan.Mode() != plan.ModePlan || m.planDeepWarned {
+		return
+	}
+	m.planDeepWarned = true
+	m.conv.AddNotice(planDeepRoleNotice)
 }
 
 // planModelSignature fingerprints the model and depth Plan Mode runs on: "" when

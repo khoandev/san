@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/genai-io/san/internal/agent"
@@ -199,5 +200,88 @@ func TestResumedPlanModeBuildsPlanModel(t *testing.T) {
 	}
 	if got := resumed.env.GetModelDisplayName(); got != "plan-model · plan" {
 		t.Fatalf("resumed status-line model = %q", got)
+	}
+}
+
+// Plan Mode says so once when the deep role has no model: the turn still runs on
+// the session model, and the notice names the role and where to assign it. The
+// gap is reported again only after the role has been assigned and cleared.
+func TestPlanModeWarnsWhenDeepRoleUnassigned(t *testing.T) {
+	notices := func(m *model) []string {
+		t.Helper()
+		var out []string
+		for _, msg := range m.conv.Messages {
+			if msg.Role == core.ChatNotice && strings.Contains(msg.Content, "deep role") {
+				out = append(out, msg.Content)
+			}
+		}
+		return out
+	}
+
+	m := planModeModel(t, nil)
+	m.enterPlanMode()
+	got := notices(m)
+	if len(got) != 1 {
+		t.Fatalf("notices on entering Plan Mode = %d, want 1", len(got))
+	}
+	if !strings.Contains(got[0], "/models") {
+		t.Fatalf("the notice does not say where to assign the role: %q", got[0])
+	}
+
+	// Toggling Plan Mode must not repeat the same warning.
+	m.leavePlanMode()
+	m.enterPlanMode()
+	if got := len(notices(m)); got != 1 {
+		t.Fatalf("notices after a toggle = %d, want the warning to stay silent", got)
+	}
+
+	// An assigned role closes the gap; unassigning it opens a new one, and the
+	// person is told again rather than left with a stale silence.
+	m.services.Setting = setting.New(&setting.Data{ModelRoles: map[string]string{"deep": "plan-model"}})
+	m.leavePlanMode()
+	m.enterPlanMode()
+	if got := len(notices(m)); got != 1 {
+		t.Fatalf("notices with the deep role assigned = %d, want 1", got)
+	}
+	m.services.Setting = setting.New(&setting.Data{})
+	m.leavePlanMode()
+	m.enterPlanMode()
+	if got := len(notices(m)); got != 2 {
+		t.Fatalf("notices after clearing the deep role = %d, want a second warning", got)
+	}
+
+	// The turn still answers on the session model, as before.
+	params, err := m.buildAgentParams()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.ModelID != "m" {
+		t.Fatalf("plan-mode model = %q, want the session model", params.ModelID)
+	}
+}
+
+// A deep role bound to the session's own model still moves the turn: the effort
+// bound to the role is what it asked for, so Plan Mode carries it instead of
+// treating the identical model id as "nothing to do".
+func TestPlanRoleEffortOnSessionModel(t *testing.T) {
+	ladder := &testThinkingProvider{efforts: []string{"low", "medium", "high"}, def: "medium"}
+	m := planModeModel(t, nil)
+	m.services.Setting = setting.New(&setting.Data{
+		ModelRoles:       map[string]string{"deep": "m"},
+		ModelRoleEfforts: map[string]string{"deep": "high"},
+	})
+	m.env.LLMProvider = ladder
+	m.env.ThinkingEffort = "low"
+	m.enterPlanMode()
+
+	params, err := m.buildAgentParams()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.ModelID != "m" {
+		t.Fatalf("plan-mode model = %q, want the session model m", params.ModelID)
+	}
+	if params.ThinkingEffort != "high" {
+		t.Fatalf("plan effort = %q, want the deep role's high over the session's low", params.ThinkingEffort)
 	}
 }

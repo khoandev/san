@@ -222,6 +222,12 @@ type model struct {
 	// a toggle that happened mid-turn at the next turn start.
 	agentPlanModel string
 
+	// planDeepWarned records that the person was told Plan Mode is running on
+	// the session model because the deep role has no model. It keeps the notice
+	// to once per gap instead of once per /plan toggle, and clears as soon as
+	// the role gets an assignment. UI goroutine only.
+	planDeepWarned bool
+
 	// turnOpenedBy is the message that started the running turn; messages
 	// that enter mid-turn belong to it.
 	turnOpenedBy string

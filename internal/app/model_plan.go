@@ -56,6 +56,7 @@ func (m *model) enterPlanMode() {
 	m.syncPlanTodos()
 	m.persistPlan()
 	m.syncPlanModelDisplay()
+	m.warnPlanModelFallback()
 	m.syncPlanModelRuntime()
 }
 
@@ -543,6 +544,9 @@ func (m *model) restorePlanState(state plan.State) {
 	// status line has to name it from the first frame. The runtime is always
 	// fresh here, so the next turn simply builds with it.
 	m.syncPlanModelDisplay()
+	// A resumed plan inherits the routing gap too: the notice has to appear in
+	// this session, not only in the one that entered Plan Mode.
+	m.warnPlanModelFallback()
 	if m.plan.Mode() == plan.ModeChat && state.ActiveID == "" {
 		m.userInput.Plan.Close()
 		return
