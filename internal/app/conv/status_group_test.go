@@ -15,10 +15,10 @@ func TestGroupStatusSitsLeftAfterTheMode(t *testing.T) {
 	line := func(mode setting.OperationMode, waiting int) string {
 		return xansi.Strip(RenderModeStatus(OperationModeParams{Mode: mode, ModeHint: true, ModelName: "M", Width: 100, Group: "shop", GroupSelf: "api", GroupWaiting: waiting}))
 	}
-	if got := line(setting.ModeBypassPermissions, 0); !strings.HasPrefix(got, "  ⏵⏵ YOLO (shift+tab) · ◆ shop/api") {
+	if got := line(setting.ModeBypassPermissions, 0); !strings.HasPrefix(got, "  ▸▸ YOLO (shift+tab) · ◇ shop/api") {
 		t.Errorf("after the mode: %q", got)
 	}
-	if got := line(setting.ModeNormal, 2); !strings.HasPrefix(got, "  ◆ shop/api · 2 waiting") {
+	if got := line(setting.ModeNormal, 2); !strings.HasPrefix(got, "  ◇ shop/api · 2 waiting") {
 		t.Errorf("no mode: %q", got)
 	}
 }
@@ -39,10 +39,10 @@ func TestHoldShowsQuietlyInTheStatusBar(t *testing.T) {
 	render := func(waiting int) string {
 		return RenderModeStatus(OperationModeParams{ModelName: "M", Width: 100, Group: "shop", GroupSelf: "web", GroupHold: true, GroupWaiting: waiting})
 	}
-	if got := xansi.Strip(render(0)); !strings.HasPrefix(got, "  ◆ shop/web · hold") || strings.Contains(got, "waiting") {
+	if got := xansi.Strip(render(0)); !strings.HasPrefix(got, "  ◇ shop/web · hold") || strings.Contains(got, "waiting") {
 		t.Errorf("held, nothing waiting: %q", got)
 	}
-	if got := xansi.Strip(render(2)); !strings.HasPrefix(got, "  ◆ shop/web · hold · 2 waiting") {
+	if got := xansi.Strip(render(2)); !strings.HasPrefix(got, "  ◇ shop/web · hold · 2 waiting") {
 		t.Errorf("held, two waiting: %q", got)
 	}
 	if render(0) == render(2) {

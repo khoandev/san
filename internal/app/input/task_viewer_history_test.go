@@ -162,7 +162,7 @@ func TestTaskViewerHistoryNarrowAndShort(t *testing.T) {
 					if !strings.Contains(plain, "h history") || !strings.Contains(plain, "Esc close") {
 						t.Fatalf("history/close hint is unreachable:\n%s", plain)
 					}
-					if expanded && !strings.Contains(plain, "› ●") {
+					if expanded && !strings.Contains(plain, "› •") {
 						t.Fatalf("selected historical row scrolled out of view:\n%s", plain)
 					}
 				}

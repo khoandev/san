@@ -24,7 +24,7 @@ func TestToolSelectorShowsTheRuntimeLayerOverTheSetting(t *testing.T) {
 	s.list.load([]toolItem{{Name: "SendMessage", Description: "Send a message to another session."}}, 120, 60)
 	for _, line := range strings.Split(xansi.Strip(s.Render()), "\n") {
 		if strings.Contains(line, "SendMessage") {
-			if !strings.Contains(line, "●") || !strings.Contains(line, "on while in a group · setting: off") {
+			if !strings.Contains(line, "•") || !strings.Contains(line, "on while in a group · setting: off") {
 				t.Errorf("held row = %q", line)
 			}
 			return

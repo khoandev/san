@@ -52,7 +52,7 @@ type permissionsPanel struct {
 
 	cursor int
 
-	// baseline is the effective value on disk, marked "● current".
+	// baseline is the effective value on disk, marked "• current".
 	baseline bool
 
 	// saveErr holds the last failed persist so Render can surface it inline
@@ -68,7 +68,7 @@ func (p *permissionsPanel) Title() string { return "permissions" }
 
 func (p *permissionsPanel) Enter() {
 	// Unset means allowed — mirror Settings.AllowBypass's opt-out default so a
-	// fresh install shows "Allowed ● current" instead of a wrong "Locked".
+	// fresh install shows "Allowed • current" instead of a wrong "Locked".
 	p.baseline = p.settings == nil || p.settings.AllowBypass()
 	p.cursor = 0
 	for i, opt := range yoloOptions {

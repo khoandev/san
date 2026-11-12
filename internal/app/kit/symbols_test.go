@@ -113,30 +113,34 @@ func TestEveryTableFillsEveryField(t *testing.T) {
 	}
 }
 
-// TestUnicodeTableKeepsTheOldGlyphs pins the default table to the glyphs the
-// TUI drew before icon styles existed: they are what every terminal without a
-// preference sees, and what the golden tests compare against.
-func TestUnicodeTableKeepsTheOldGlyphs(t *testing.T) {
+// TestUnicodeTableKeepsItsGlyphs pins the default table: it is what every
+// terminal without a preference sees and what the golden tests compare
+// against, so a changed mark must be a deliberate edit here rather than a
+// side effect of some other change.
+func TestUnicodeTableKeepsItsGlyphs(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		got  string
 		want string
 	}{
-		{"LiveDot", unicodeSymbols.LiveDot, "●"},
+		{"LiveDot", unicodeSymbols.LiveDot, "•"},
 		{"ThinkingStar", unicodeSymbols.ThinkingStar, "✦"},
 		{"MemoryMark", unicodeSymbols.MemoryMark, "⟡"},
 		{"Success", unicodeSymbols.Success, "✓"},
 		{"Error", unicodeSymbols.Error, "✗"},
-		{"RadioOn", unicodeSymbols.RadioOn, "●"},
-		{"RadioOff", unicodeSymbols.RadioOff, "○"},
+		{"RadioOn", unicodeSymbols.RadioOn, "•"},
+		{"RadioOff", unicodeSymbols.RadioOff, "◦"},
 		{"Cursor", unicodeSymbols.Cursor, "▸"},
 		{"PlanBadge", unicodeSymbols.PlanBadge, "✎"},
-		{"ExecuteBadge", unicodeSymbols.ExecuteBadge, "▶"},
-		{"AutoAccept", unicodeSymbols.AutoAccept, "⏵⏵"},
-		{"GroupMark", unicodeSymbols.GroupMark, "◆"},
+		{"ExecuteBadge", unicodeSymbols.ExecuteBadge, "▸"},
+		{"AutoAccept", unicodeSymbols.AutoAccept, "▸▸"},
+		{"GroupMark", unicodeSymbols.GroupMark, "◇"},
+		{"TaskPending", unicodeSymbols.TaskPending, "◦"},
+		{"TaskActive", unicodeSymbols.TaskActive, "▸"},
+		{"TaskBlocked", unicodeSymbols.TaskBlocked, "△"},
 		{"ToolResult", unicodeSymbols.ToolResult, "⎿"},
 		{"BrandStar", unicodeSymbols.BrandStar, "✦"},
-		{"AutoPilot", unicodeSymbols.AutoPilot, "⏵"},
+		{"AutoPilot", unicodeSymbols.AutoPilot, "▸"},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("%s = %q, want %q", tt.name, tt.got, tt.want)

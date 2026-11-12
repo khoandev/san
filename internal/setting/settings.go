@@ -62,7 +62,7 @@ const (
 	// environment opts in, otherwise plain Unicode — and plain ASCII when the
 	// output is not a color terminal. It is the default.
 	IconStyleAuto = "auto"
-	// IconStyleUnicode draws the default symbol set (●, ✦, ✓, …).
+	// IconStyleUnicode draws the default symbol set (•, ✦, ✓, …).
 	IconStyleUnicode = "unicode"
 	// IconStyleEmoji draws colorful emoji in place of the symbols. They are
 	// double-width, so every row that pads by glyph width must measure them.

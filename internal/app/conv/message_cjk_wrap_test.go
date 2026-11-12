@@ -18,7 +18,7 @@ func TestAssistantCJKKeycapsPreserveText(t *testing.T) {
 					"message":    RenderAssistantMessage(AssistantParams{Content: text, Width: width, MDRenderer: md}),
 					"scrollback": RenderCommittedContentBlock(text, true, md),
 				} {
-					plain := strings.TrimPrefix(ansi.Strip(rendered), "● ")
+					plain := strings.TrimPrefix(ansi.Strip(rendered), "• ")
 					if strings.Join(strings.Fields(plain), "") != strings.Join(strings.Fields(text), "") {
 						t.Errorf("%s lost keycap paragraph content: %q", name, plain)
 					}
@@ -44,7 +44,7 @@ func TestAssistantCJKParagraphUsesAvailableWidth(t *testing.T) {
 			} {
 				plain := ansi.Strip(rendered)
 				first, _, _ := strings.Cut(plain, "\n")
-				if !strings.HasPrefix(first, "● ") || ansi.StringWidth(strings.TrimRight(first, " ")) < width-8 {
+				if !strings.HasPrefix(first, "• ") || ansi.StringWidth(strings.TrimRight(first, " ")) < width-8 {
 					t.Errorf("%s leaves unused paragraph width: %q", name, first)
 				}
 				var recovered strings.Builder
@@ -53,7 +53,7 @@ func TestAssistantCJKParagraphUsesAvailableWidth(t *testing.T) {
 						t.Errorf("%s exceeds %d columns: %q", name, width, line)
 					}
 					if i == 0 {
-						line = strings.TrimPrefix(line, "● ")
+						line = strings.TrimPrefix(line, "• ")
 					}
 					recovered.WriteString(strings.TrimSpace(line))
 				}

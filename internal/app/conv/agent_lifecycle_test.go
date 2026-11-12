@@ -80,7 +80,7 @@ func TestAgentLifecycleElapsedSharesTitle(t *testing.T) {
 		ToolStartedAt: map[string]time.Time{call.ID: time.Now().Add(-12 * time.Second)},
 		TaskActivity:  map[int][]string{0: {"Read(main.go)"}}, Width: 40}
 	got := ansi.Strip(RenderToolCalls(params))
-	if got != "● Agent · Review · 12s\n  Read(main.go)\n" {
+	if got != "• Agent · Review · 12s\n  Read(main.go)\n" {
 		t.Fatalf("timer should share the title row: %q", got)
 	}
 	params.CurrentIdx = 1
@@ -120,7 +120,7 @@ func TestAgentLifecycleShortLayoutKeepsStateAfterLongIdentity(t *testing.T) {
 			view, active := RenderActiveWorkers(params, 2)
 			plain := ansi.Strip(view)
 			lines := strings.Split(plain, "\n")
-			if !active || len(lines) != 2 || !strings.HasPrefix(lines[0], "● Agent · reviewer · ") || !strings.HasSuffix(lines[0], suffix) || ansi.StringWidth(lines[0]) > width || lines[1] != "  "+state {
+			if !active || len(lines) != 2 || !strings.HasPrefix(lines[0], "• Agent · reviewer · ") || !strings.HasSuffix(lines[0], suffix) || ansi.StringWidth(lines[0]) > width || lines[1] != "  "+state {
 				t.Fatalf("width %d: wrapped identity displaced current state: %q", width, plain)
 			}
 		}
@@ -151,13 +151,13 @@ func TestAgentLifecycleIdentityAndStateTransitions(t *testing.T) {
 		} {
 			call := core.ToolCall{ID: "worker", Name: "Agent", Input: input}
 			params := ToolCallsParams{AgentPreviewLines: 1, ToolCalls: []core.ToolCall{call}, PendingCalls: []core.ToolCall{call}, Width: width}
-			header := ansi.Strip(renderAgentToolLine(formatAgentLabel(parseAgentInput(input)), width, "●", "")) + "\n"
+			header := ansi.Strip(renderAgentToolLine(formatAgentLabel(parseAgentInput(input)), width, "•", "")) + "\n"
 			check := func(state string, absent ...string) {
 				t.Helper()
 				got := ansi.Strip(RenderToolCalls(params))
 				wantHeader := header
 				if params.agentExecuting(call) && !params.parkedOnUser(call.ID) && len(params.ResultMap) == 0 {
-					wantHeader = appendRowDetail(ansi.Strip(renderAgentToolLine(formatAgentLabel(parseAgentInput(input)), width-6, "●", ""))+"\n", " · 12s")
+					wantHeader = appendRowDetail(ansi.Strip(renderAgentToolLine(formatAgentLabel(parseAgentInput(input)), width-6, "•", ""))+"\n", " · 12s")
 				}
 				if !strings.HasPrefix(got, wantHeader) || !strings.Contains(got, "  "+state+"\n") {
 					t.Fatalf("width %d: identity or state changed for %q: %q", width, state, got)
@@ -187,7 +187,7 @@ func TestAgentLifecycleIdentityAndStateTransitions(t *testing.T) {
 				ToolName: "Agent", Content: "No vulnerabilities found", Details: toolresult.AgentDetails{},
 			}}
 			completedHeader, _, _ := strings.Cut(ansi.Strip(RenderToolCalls(params)), "\n")
-			if !strings.HasPrefix(completedHeader, "● Agent · ") || ansi.StringWidth(completedHeader) > width {
+			if !strings.HasPrefix(completedHeader, "• Agent · ") || ansi.StringWidth(completedHeader) > width {
 				t.Fatalf("width %d: completed identity missing or overflowing: %q", width, completedHeader)
 			}
 			header = completedHeader + "\n"
@@ -238,7 +238,7 @@ func TestAgentLifecycleStoppedWithoutError(t *testing.T) {
 
 func TestAgentLifecycleBuildingKeepsIdentity(t *testing.T) {
 	got := ansi.Strip(RenderPendingToolSpinner(PendingToolSpinnerParams{BuildingTool: "Agent", Width: 32}))
-	if got != "● Agent\n  Pending\n" {
+	if got != "• Agent\n  Pending\n" {
 		t.Fatalf("streamed Agent call lost its identity: %q", got)
 	}
 }
@@ -259,7 +259,7 @@ func TestAgentLifecycleNegativeCurrentIndex(t *testing.T) {
 	if got := RenderPendingToolSpinner(PendingToolSpinnerParams{PendingCalls: []core.ToolCall{call}, CurrentIdx: -1}); got != "" {
 		t.Fatalf("invalid selection rendered a worker: %q", got)
 	}
-	if got := ansi.Strip(RenderPendingToolSpinner(PendingToolSpinnerParams{BuildingTool: "Agent", PendingCalls: []core.ToolCall{call}, CurrentIdx: -1, Width: 32})); got != "● Agent\n  Pending\n" {
+	if got := ansi.Strip(RenderPendingToolSpinner(PendingToolSpinnerParams{BuildingTool: "Agent", PendingCalls: []core.ToolCall{call}, CurrentIdx: -1, Width: 32})); got != "• Agent\n  Pending\n" {
 		t.Fatalf("building fallback lost identity: %q", got)
 	}
 }

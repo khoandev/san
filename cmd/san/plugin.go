@@ -91,16 +91,18 @@ var pluginListCmd = &cobra.Command{
 			printPluginSummary(p)
 		}
 
-		fmt.Println("\nLegend: ● enabled  ○ disabled  👤 user  📁 project  💻 local")
+		fmt.Println("\nLegend: • enabled  ◦ disabled  👤 user  📁 project  💻 local")
 		return nil
 	},
 }
 
 // printPluginSummary prints a single plugin's summary to stdout.
 func printPluginSummary(p *plugin.Plugin) {
-	status := "○"
+	// The small dot pair the TUI draws (• enabled, ◦ disabled), so the CLI
+	// listing and /plugins read alike.
+	status := "◦"
 	if p.Enabled {
-		status = "●"
+		status = "•"
 	}
 
 	fmt.Printf("  %s %s %s (%s)\n", status, p.Scope.Icon(), p.FullName(), p.Scope)

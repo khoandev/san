@@ -142,7 +142,7 @@ func appearanceOptions() []appearanceOption {
 		// keeping it off the top leaves the theme and the status bars — the
 		// rows people change most — in the first screenful.
 		{section: "ICONS", kind: kindIconStyle, label: "Auto", desc: "Follow the terminal — plain ASCII when it cannot draw glyphs", iconStyle: setting.IconStyleAuto},
-		{section: "ICONS", kind: kindIconStyle, label: "Symbols", desc: "The quiet set: ● ✦ ✓ ○", iconStyle: setting.IconStyleUnicode},
+		{section: "ICONS", kind: kindIconStyle, label: "Symbols", desc: "The quiet set: • ✦ ✓ ◦", iconStyle: setting.IconStyleUnicode},
 		{section: "ICONS", kind: kindIconStyle, label: "Emoji", desc: "Colorful, double-width: 🟢 ✨ ✅ ⚪", iconStyle: setting.IconStyleEmoji},
 		{section: "ICONS", kind: kindIconStyle, label: "Nerd Font", desc: "Private-use glyphs — needs a patched terminal font", iconStyle: setting.IconStyleNerd},
 	}
@@ -154,7 +154,7 @@ type appearancePanel struct {
 	options []appearanceOption
 	cursor  int // hovered row in options
 
-	// Baselines are the values persisted on disk, marked "● current" in their
+	// Baselines are the values persisted on disk, marked "• current" in their
 	// group. A group is "dirty" while the cursor hovers a row that diverges
 	// from its baseline.
 	themeBaseline         string
@@ -227,7 +227,7 @@ func iconStyleLabel(style string) string {
 }
 
 // Dirty reports whether the hovered row diverges from its group's saved
-// value, so the shell pins the "● unsaved" indicator.
+// value, so the shell pins the "• unsaved" indicator.
 func (p *appearancePanel) Dirty() bool {
 	return !p.isCurrent(p.options[p.cursor])
 }
@@ -367,7 +367,7 @@ func renderAppearanceSection(title string, width int) string {
 }
 
 // renderRadioRow renders one selectable row of a /settings radio group: the
-// focus bar, the ○/● radio marking the persisted choice, and a label padded to
+// focus bar, the ◦/• radio marking the persisted choice, and a label padded to
 // a common column so the descriptions line up. Shared by every panel with a
 // radio group so the tabs cannot drift apart.
 //

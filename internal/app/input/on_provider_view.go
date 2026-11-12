@@ -568,7 +568,7 @@ func (s *ProviderSelector) renderLoginPrompt() string {
 // ── Connection result ───────────────────────────────────────────────────────
 
 // appendConnectResult appends the inline connect/refresh result (an in-flight
-// spinner, or e.g. "● 2 models" once done) to a row's info column when it
+// spinner, or e.g. "• 2 models" once done) to a row's info column when it
 // belongs to itemIdx, separated from the env-var status by a gap.
 func (s *ProviderSelector) appendConnectResult(envInfo string, itemIdx int) string {
 	if s.lastConnectResult == "" || itemIdx != s.lastConnectAuthIdx {

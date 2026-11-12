@@ -31,7 +31,7 @@ func TestAgentPreviewWrappedIdentityAndProse(t *testing.T) {
 			}
 			p := NewApproval()
 			p.Show(&perm.PermissionRequest{ToolName: "Agent", AgentMeta: meta}, width, 12)
-			if !strings.HasPrefix(ansi.Strip(p.renderInline()), "● ") {
+			if !strings.HasPrefix(ansi.Strip(p.renderInline()), "• ") {
 				t.Fatal("missing round marker")
 			}
 			for i := 0; i < 20; i++ {

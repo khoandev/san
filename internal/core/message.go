@@ -159,7 +159,7 @@ type ChatMessage struct {
 	// compact reprint) renders it whole. Transient UI state, never persisted.
 	ContentCommittedLen  int  // bytes of Content already flushed to scrollback
 	ThinkingCommittedLen int  // bytes of Thinking already flushed to scrollback
-	BulletEmitted        bool // the "● " content marker has already been emitted
+	BulletEmitted        bool // the "• " content marker has already been emitted
 	ThinkingEmitted      bool // the "✦ " thinking marker has already been emitted
 
 	// Reasoning time, first thinking delta to latest (see AppendThinking).

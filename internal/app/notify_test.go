@@ -17,7 +17,7 @@ func TestStoppedNotificationKeepsOneConciseDisplayLine(t *testing.T) {
 		m := commitTestModel()
 		m.showNoticeLine(fromBrokerMessage(msg))
 		view := ansi.Strip(conv.RenderSingleMessage(conv.RenderContext{Messages: m.conv.Messages, Width: 80}, 0))
-		if strings.TrimSpace(view) != "● Security review stopped · worker" {
+		if strings.TrimSpace(view) != "• Security review stopped · worker" {
 			t.Fatalf("stop has redundant type, detail, or completion row: %q", view)
 		}
 		if !strings.Contains(msg.Content, "Error: "+reason) {

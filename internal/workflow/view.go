@@ -203,11 +203,12 @@ func (w *Workflow) ActivityStreamView(events []ActivityEvent, width int) string 
 			message := event.Text
 			indent := "    │  "
 			if event.ToolID != "" {
-				marker := "●"
+				marks := currentMarks()
+				marker := marks.Running
 				if event.ToolFinished {
-					marker = "✓"
+					marker = marks.Succeeded
 					if event.ToolFailed {
-						marker = "✗"
+						marker = marks.Failed
 					}
 				}
 				message = marker + " " + message

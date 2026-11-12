@@ -389,7 +389,7 @@ func renderAdvisorBadge(b AdvisorBadge) string {
 	return lipgloss.NewStyle().Foreground(clr).Render(label)
 }
 
-// renderGroupStatus reads "◆ shop/api", "· hold" when it holds messages, then,
+// renderGroupStatus reads "◇ shop/api", "· hold" when it holds messages, then,
 // in amber, whatever waits on the person: held messages, which scroll out of
 // sight, and members stuck on approval.
 func renderGroupStatus(p OperationModeParams) string {

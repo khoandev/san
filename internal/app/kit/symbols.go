@@ -15,8 +15,8 @@ import (
 const (
 	// IconStyleAuto picks a style from the environment (see ResolveIconStyle).
 	IconStyleAuto = "auto"
-	// IconStyleUnicode draws the default symbol set: the glyphs the TUI has
-	// always used (●, ✦, ✓, …). It is the zero-value default.
+	// IconStyleUnicode draws the default symbol set: quiet one-column glyphs
+	// sized to body text (•, ✦, ✓, …). It is the zero-value default.
 	IconStyleUnicode = "unicode"
 	// IconStyleEmoji draws colorful emoji. Every emoji is double-width, so any
 	// row that pads by a glyph's width must measure it instead of assuming one
@@ -62,7 +62,7 @@ type Symbols struct {
 	ExecuteBadge string
 	// AutoAccept leads the "accept edits", autopilot and YOLO mode indicator.
 	AutoAccept string
-	// AutoPilot leads the one-line autopilot notices ("⏵ autopilot · …"). It is
+	// AutoPilot leads the one-line autopilot notices ("▸ autopilot · …"). It is
 	// a single mark, distinct from the mode indicator's AutoAccept pair.
 	AutoPilot string
 	// The Task* marks draw one todo or plan-step row. They are a set of their
@@ -76,7 +76,7 @@ type Symbols struct {
 	TaskBlocked string
 	TaskFailed  string
 	TaskStalled string
-	// GroupMark leads the session's group identity ("◆ host/self").
+	// GroupMark leads the session's group identity ("◇ host/self").
 	GroupMark string
 	// ToolResult leads a tool's result trailer line ("⎿ …").
 	ToolResult string
@@ -87,34 +87,41 @@ type Symbols struct {
 	SpinnerFrames []string
 }
 
-// The Unicode table is the default and must keep the glyphs the TUI has always
-// drawn: it is what every terminal without a chosen preference sees, and what
-// the golden tests compare against.
+// The Unicode table is the default and what every terminal without a chosen
+// preference sees, so the golden tests compare against it.
+//
+// Marks are drawn at the size the terminal font gives their code point, and a
+// cell cannot be scaled, so the table sizes a mark by picking its small sibling
+// instead: the same shape drawn a notch smaller — ● beside •, ▶ beside ▸, ◆
+// beside ◇. A glyph that already sits well below the text height (✓, ✗, ✦, ⎿,
+// ✎, ◌) keeps its code point, and so does the ✦ wordmark. A new mark should
+// follow the same rule: choose the code point whose shape reads at body-text
+// height, not the boldest one that carries the meaning.
 var unicodeSymbols = Symbols{
-	LiveDot:       "●",
+	LiveDot:       "•",
 	ThinkingStar:  ThinkingMark,
 	MemoryMark:    MemoryMark,
 	Success:       "✓",
 	Error:         "✗",
 	Warning:       "⚡",
-	RadioOn:       "●",
-	RadioOff:      "○",
+	RadioOn:       "•",
+	RadioOff:      "◦",
 	Cursor:        "▸",
 	PlanBadge:     "✎",
-	ExecuteBadge:  "▶",
-	AutoAccept:    "⏵⏵",
-	AutoPilot:     "⏵",
-	TaskPending:   "○",
+	ExecuteBadge:  "▸",
+	AutoAccept:    "▸▸",
+	AutoPilot:     "▸",
+	TaskPending:   "◦",
 	TaskActive:    "▸",
 	TaskDone:      "✓",
 	TaskSkipped:   "-",
-	TaskBlocked:   "▲",
+	TaskBlocked:   "△",
 	TaskFailed:    "✗",
 	TaskStalled:   "◌",
-	GroupMark:     "◆",
+	GroupMark:     "◇",
 	ToolResult:    "⎿",
 	BrandStar:     "✦",
-	SpinnerFrames: []string{"●"},
+	SpinnerFrames: []string{"•"},
 }
 
 // The emoji table trades the quiet symbols for colorful, double-width ones.

@@ -337,19 +337,23 @@ func (r *Result) Summary(w *Workflow) string {
 	return b.String()
 }
 
+// statusGlyph is the mark one status draws. It reads the installed mark source
+// rather than a literal, so the graph, the run summary and the TUI around them
+// agree on the icon style.
 func statusGlyph(s Status) string {
+	marks := currentMarks()
 	switch s {
 	case StatusSucceeded:
-		return "✓"
+		return marks.Succeeded
 	case StatusFailed:
-		return "✗"
+		return marks.Failed
 	case StatusSkipped:
-		return "↷"
+		return marks.Skipped
 	case StatusOmitted:
-		return "⊘"
+		return marks.Omitted
 	case StatusRunning:
-		return "●"
+		return marks.Running
 	default:
-		return "○"
+		return marks.Pending
 	}
 }

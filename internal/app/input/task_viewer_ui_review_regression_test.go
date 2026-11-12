@@ -20,7 +20,7 @@ func TestUIReviewTaskRefreshPreservesDeliberatePageScroll(t *testing.T) {
 	v.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	v.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	offset := v.body.YOffset()
-	if offset == 0 || strings.Contains(ansi.Strip(v.body.View()), "› ● worker0") {
+	if offset == 0 || strings.Contains(ansi.Strip(v.body.View()), "› • worker0") {
 		t.Fatal("page scrolling did not hide unchanged selection")
 	}
 	v.Refresh(items)
@@ -28,7 +28,7 @@ func TestUIReviewTaskRefreshPreservesDeliberatePageScroll(t *testing.T) {
 		t.Fatalf("refresh reset page scroll: selection %s, offset %d, want %d", v.selected, v.body.YOffset(), offset)
 	}
 	v.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyDown})
-	if v.selected != "worker1" || !strings.Contains(ansi.Strip(v.body.View()), "› ● worker1") {
+	if v.selected != "worker1" || !strings.Contains(ansi.Strip(v.body.View()), "› • worker1") {
 		t.Fatal("arrow navigation did not restore selection visibility")
 	}
 	v.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -69,11 +69,11 @@ func TestUIReviewTaskAsyncCompletionSelectionVisible(t *testing.T) {
 				}
 				v.HandleKeypress(tea.KeyPressMsg{Code: 'h', Text: "h"})
 			}
-			if v.selected != "worker0" || !strings.Contains(ansi.Strip(v.body.View()), "› ● worker0") {
+			if v.selected != "worker0" || !strings.Contains(ansi.Strip(v.body.View()), "› • worker0") {
 				t.Fatalf("selection invisible: %s offset %d: %s", v.selected, v.body.YOffset(), v.body.View())
 			}
 			v.Refresh(items)
-			if !strings.Contains(ansi.Strip(v.body.View()), "› ● worker0") {
+			if !strings.Contains(ansi.Strip(v.body.View()), "› • worker0") {
 				t.Fatal("refresh hid selection")
 			}
 			v.HandleKeypress(tea.KeyPressMsg{Code: tea.KeyEnter})

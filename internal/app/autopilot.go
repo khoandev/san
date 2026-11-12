@@ -123,7 +123,7 @@ var (
 	autopilotDoneMark = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Success)
 )
 
-// autopilotHint formats a plain amber "⏵ autopilot · <detail>" notice — the
+// autopilotHint formats a plain amber "▸ autopilot · <detail>" notice — the
 // neutral copilot mark (same brand as the mode indicator). Used for the one-off
 // "start failed" message; the handback / action / mission-done notices below
 // carry their own arrow + colour.

@@ -113,7 +113,7 @@ func (f *configForm[T]) Enter() {
 }
 
 // Dirty reports whether the working snapshot diverges from the baseline — the
-// shell uses it to pin the "● unsaved" indicator.
+// shell uses it to pin the "• unsaved" indicator.
 func (f *configForm[T]) Dirty() bool {
 	if f.equal == nil {
 		return any(f.snap) != any(f.baseline)

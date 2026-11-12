@@ -129,13 +129,13 @@ func Test_extractToolArgsPreservesFullCommand(t *testing.T) {
 }
 
 func Test_renderBashToolCallSingleLineStylesDescriptionAsDimmed(t *testing.T) {
-	raw := renderShellToolCall("Bash", `{"command":"git status","description":"inspect\nrepository"}`, 100, "●", "")
+	raw := renderShellToolCall("Bash", `{"command":"git status","description":"inspect\nrepository"}`, 100, "•", "")
 	out := stripANSI(raw)
-	if out != "● Bash(git status) (inspect repository)\n" {
+	if out != "• Bash(git status) (inspect repository)\n" {
 		t.Fatalf("single-line command should render as one preview row, got %q", out)
 	}
 	if raw != lipgloss.JoinHorizontal(lipgloss.Top,
-		toolCallStyle.Width(2).Render("●"),
+		toolCallStyle.Width(2).Render("•"),
 		toolCallStyle.Render("Bash(git status)"),
 		toolResultStyle.Render(" (inspect repository)"),
 	)+"\n" {
@@ -144,7 +144,7 @@ func Test_renderBashToolCallSingleLineStylesDescriptionAsDimmed(t *testing.T) {
 }
 
 func Test_renderBashToolCallEmptyCommandUsesCommandBlock(t *testing.T) {
-	out := stripANSI(renderShellToolCall("Bash", `{}`, 100, "●", ""))
+	out := stripANSI(renderShellToolCall("Bash", `{}`, 100, "•", ""))
 	if strings.Contains(out, "Bash(") || !strings.Contains(out, "Bash\n"+stripANSI(kit.RenderCommandBlock("(no command)", 100))) {
 		t.Fatalf("empty command should retain the Bash command block, got %q", out)
 	}
@@ -152,7 +152,7 @@ func Test_renderBashToolCallEmptyCommandUsesCommandBlock(t *testing.T) {
 
 func Test_renderBashToolCallMultiLineShowsEveryLine(t *testing.T) {
 	input := `{"command":"for f in a b; do\n  echo \"$f\"\ndone","description":"loop over files"}`
-	out := renderShellToolCall("Bash", input, 100, "●", "")
+	out := renderShellToolCall("Bash", input, 100, "•", "")
 
 	// Every command line renders in the block, not folded away behind ctrl+o.
 	for _, want := range []string{"for f in a b; do", `echo "$f"`, "done"} {
@@ -178,7 +178,7 @@ func Test_renderBashToolCallMultiLineShowsEveryLine(t *testing.T) {
 func Test_renderBashToolCallShowsShellPrompt(t *testing.T) {
 	// Wrapped commands have a prompt once and a blank continuation gutter.
 	long := `{"command":"git log --oneline --graph --all --decorate --abbrev-commit --since='2 weeks ago' | head -50\necho done"}`
-	raw := renderShellToolCall("Bash", long, 70, "●", "")
+	raw := renderShellToolCall("Bash", long, 70, "•", "")
 	if strings.ContainsAny(raw, "│┊") || !strings.Contains(raw, "48;2;") {
 		t.Fatalf("command block should have CommandBg and no rail, got %q", raw)
 	}
@@ -204,20 +204,20 @@ func Test_renderBashToolCallMarksBlankCommandLines(t *testing.T) {
 		`{"command":"first\n\nthird"}`,
 		`{"command":"first\n   \nthird"}`,
 	} {
-		out := stripANSI(renderShellToolCall("Bash", input, 100, "●", ""))
+		out := stripANSI(renderShellToolCall("Bash", input, 100, "•", ""))
 		rows := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 		if len(rows) != 4 || strings.TrimRight(rows[1], " ") != "  $ first" || strings.TrimSpace(rows[2]) != "" || !strings.HasPrefix(rows[2], "    ") || strings.TrimRight(rows[3], " ") != "    third" {
 			t.Fatalf("a blank command line should retain its blank continuation gutter, got %q", out)
 		}
 	}
 
-	if out := stripANSI(renderShellToolCall("Bash", `{"command":"first\n"}`, 100, "●", "")); !strings.HasSuffix(out, "Bash\n"+stripANSI(kit.RenderCommandBlock("first\n", 100))) {
+	if out := stripANSI(renderShellToolCall("Bash", `{"command":"first\n"}`, 100, "•", "")); !strings.HasSuffix(out, "Bash\n"+stripANSI(kit.RenderCommandBlock("first\n", 100))) {
 		t.Fatalf("trailing blank command lines should retain a blank continuation gutter, got %q", out)
 	}
-	if out := stripANSI(renderShellToolCall("Bash", `{"command":"\nfirst"}`, 100, "●", "")); !strings.HasSuffix(out, "Bash\n"+stripANSI(kit.RenderCommandBlock("\nfirst", 100))) {
+	if out := stripANSI(renderShellToolCall("Bash", `{"command":"\nfirst"}`, 100, "•", "")); !strings.HasSuffix(out, "Bash\n"+stripANSI(kit.RenderCommandBlock("\nfirst", 100))) {
 		t.Fatalf("leading blank command lines should preserve the first-row prompt and continuation gutter, got %q", out)
 	}
-	if out := stripANSI(renderShellToolCall("Bash", `{"command":"   "}`, 100, "●", "")); !strings.Contains(out, stripANSI(kit.RenderCommandBlock("(no command)", 100))) {
+	if out := stripANSI(renderShellToolCall("Bash", `{"command":"   "}`, 100, "•", "")); !strings.Contains(out, stripANSI(kit.RenderCommandBlock("(no command)", 100))) {
 		t.Fatalf("whitespace-only command should use the empty-command fallback, got %q", out)
 	}
 }
@@ -227,8 +227,8 @@ func Test_renderBashToolCallMovesOversizedSingleLineCommandToFullBlock(t *testin
 	input := `{"command":` + strconv.Quote(command) + `,"description":"Inspect pull request details and review status"}`
 	const width = 80
 
-	rendered := stripANSI(renderShellToolCall("Bash", input, width, "●", ""))
-	if !strings.HasPrefix(rendered, "● Bash (Inspect pull request details and review status)\n") {
+	rendered := stripANSI(renderShellToolCall("Bash", input, width, "•", ""))
+	if !strings.HasPrefix(rendered, "• Bash (Inspect pull request details and review status)\n") {
 		t.Fatalf("oversized command should use a Bash header, got %q", rendered)
 	}
 	if strings.Contains(rendered, "...") || strings.Contains(rendered, "…") {
@@ -476,7 +476,7 @@ func TestRenderToolCallsWrapsLongSingleLineBashCommandWithoutTruncating(t *testi
 
 	rendered := stripANSI(RenderToolCalls(params))
 	fullCommand := "Bash(cd /Users/myan/Workspace/ideas/san && git describe --tags --abbrev=0 2>/dev/null)"
-	if !strings.HasPrefix(rendered, "● "+fullCommand) {
+	if !strings.HasPrefix(rendered, "• "+fullCommand) {
 		t.Fatalf("RenderToolCalls() = %q, want the complete Bash command", rendered)
 	}
 	if strings.Count(strings.TrimSuffix(rendered, "\n"), "\n") != 0 {
@@ -795,7 +795,7 @@ func TestRenderActiveContentHoldsTheReplyMarkerBetweenSteps(t *testing.T) {
 		{Role: core.ChatUser, ToolResult: &core.ToolResult{ToolCallID: "a", ToolName: "Bash"}},
 	}
 	p := RenderContext{Messages: msgs, CommittedCount: len(msgs), StreamActive: true, SpinnerView: "*", Width: 80}
-	if got := strings.TrimSpace(stripANSI(RenderActiveContent(p))); got != "●" {
+	if got := strings.TrimSpace(stripANSI(RenderActiveContent(p))); got != "•" {
 		t.Errorf("between steps = %q, want the reply mark", got)
 	}
 	p.StreamActive = false
@@ -849,7 +849,7 @@ func TestRenderToolCallsShowsCompletedIconForResultEvenWhenPending(t *testing.T)
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	if !strings.Contains(rendered, "● WebFetch(https://github.com/features/copilot/plans)") {
+	if !strings.Contains(rendered, "• WebFetch(https://github.com/features/copilot/plans)") {
 		t.Fatalf("RenderToolCalls() = %q, want completed WebFetch icon", rendered)
 	}
 	if strings.Contains(rendered, "⋯ WebFetch") {
@@ -901,7 +901,7 @@ func TestRenderToolCallsShowsGapForPendingAgent(t *testing.T) {
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	want := "● Agent · Explore · HA code structure"
+	want := "• Agent · Explore · HA code structure"
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("RenderToolCalls() = %q, want a single visible gap before explicit agent label", rendered)
 	}
@@ -924,7 +924,7 @@ func TestRenderToolCallsPreservesAgentName(t *testing.T) {
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	want := "● Agent · general-purpose · audit git changes"
+	want := "• Agent · general-purpose · audit git changes"
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("RenderToolCalls() = %q, want named agent label", rendered)
 	}
@@ -962,7 +962,7 @@ func TestRenderToolCallsShowsSingleAgentRuntimeActivity(t *testing.T) {
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	want := "● Agent · Explore · audit git changes before review"
+	want := "• Agent · Explore · audit git changes before review"
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("RenderToolCalls() = %q, want agent header", rendered)
 	}
@@ -1587,7 +1587,7 @@ func TestRenderDecision(t *testing.T) {
 }
 
 // An Agent call waiting on its permission prompt must hold its glyph instead
-// of blinking ●/○ off the frame counter — a blink reads as a subagent working
+// of blinking •/◦ off the frame counter — a blink reads as a subagent working
 // while the user is still deciding whether to let it spawn.
 func TestRenderToolCallsFreezesAgentRowAwaitingApproval(t *testing.T) {
 	call := core.ToolCall{ID: "tc-1", Name: tool.ToolAgent, Input: `{"agent":"reviewer","prompt":"review it"}`}
@@ -1614,10 +1614,10 @@ func TestRenderToolCallsFreezesAgentRowAwaitingApproval(t *testing.T) {
 		frozen := stripANSI(RenderToolCalls(params))
 		params.AwaitingApprovalID = ""
 
-		if !strings.Contains(frozen, "●") {
+		if !strings.Contains(frozen, "•") {
 			t.Fatalf("blink %d: RenderToolCalls() = %q, want a static bullet while the call waits on approval", blink, frozen)
 		}
-		if !strings.Contains(frozen, "● Agent") {
+		if !strings.Contains(frozen, "• Agent") {
 			t.Fatalf("blink %d: RenderToolCalls() = %q, agent row still blinks while it waits on approval", blink, frozen)
 		}
 	}
@@ -1667,7 +1667,7 @@ func TestRenderToolCallsSeparatesAwaitingCallFromRunningSibling(t *testing.T) {
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	if !strings.Contains(rendered, "● Bash(rm -rf build) · waiting for approval") {
+	if !strings.Contains(rendered, "• Bash(rm -rf build) · waiting for approval") {
 		t.Fatalf("RenderToolCalls() = %q, want the gated row to report waiting instead of running", rendered)
 	}
 	if strings.Contains(rendered, "Bash(rm -rf build) · 9s") {
@@ -1715,7 +1715,7 @@ func TestRenderToolCallsFreezesEveryRowUnderModalNamingNoCall(t *testing.T) {
 		if strings.Contains(rendered, "waiting for approval") {
 			t.Fatalf("blink %d: RenderToolCalls() = %q, no approval was asked for", blink, rendered)
 		}
-		if !strings.Contains(rendered, "● Agent") {
+		if !strings.Contains(rendered, "• Agent") {
 			t.Fatalf("blink %d: RenderToolCalls() = %q, agent row still blinks under the modal", blink, rendered)
 		}
 	}
@@ -1726,7 +1726,7 @@ func TestRenderToolCallsFreezesEveryRowUnderModalNamingNoCall(t *testing.T) {
 func TestRenderAssistantMessageRestsOnTheReplyMarkBeforeFirstToken(t *testing.T) {
 	p := AssistantParams{StreamActive: true, IsLast: true, Width: 80}
 	for p.Frame = range 6 {
-		if out := stripANSI(RenderAssistantMessage(p)); strings.TrimSpace(out) != "●" {
+		if out := stripANSI(RenderAssistantMessage(p)); strings.TrimSpace(out) != "•" {
 			t.Fatalf("frame %d: the reply mark should hold still:\n%s", p.Frame, out)
 		}
 	}
@@ -1736,7 +1736,7 @@ func TestRenderAssistantMessageRestsOnTheReplyMarkBeforeFirstToken(t *testing.T)
 		t.Fatalf("streaming reasoning should not be followed by a duplicate wait row:\n%s", out)
 	}
 	p.Content = "streaming reply"
-	if out := stripANSI(RenderAssistantMessage(p)); strings.Contains(out, "Thinking") || strings.Count(out, "✦") != 1 || !strings.Contains(out, "● streaming reply") {
+	if out := stripANSI(RenderAssistantMessage(p)); strings.Contains(out, "Thinking") || strings.Count(out, "✦") != 1 || !strings.Contains(out, "• streaming reply") {
 		t.Fatalf("a streaming reply should rest on a plain bullet:\n%s", out)
 	}
 }

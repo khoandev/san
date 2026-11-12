@@ -163,7 +163,7 @@ func TestAgentResultPreviewIdentityExpansion(t *testing.T) {
 		params := ToolCallsParams{AgentPreviewLines: 3, ToolCalls: []core.ToolCall{call}, Width: width, ResultMap: map[string]ToolResultData{"a": {ToolName: "Agent", Content: "Useful result", Details: toolresult.AgentDetails{}}}}
 		got := ansi.Strip(RenderToolCalls(params))
 		header, body, _ := strings.Cut(got, "\n")
-		if !strings.HasPrefix(header, "● Agent · reviewer · Review") || ansi.StringWidth(header) > width || strings.TrimSpace(body) != "Useful result" {
+		if !strings.HasPrefix(header, "• Agent · reviewer · Review") || ansi.StringWidth(header) > width || strings.TrimSpace(body) != "Useful result" {
 			t.Fatalf("completed identity should occupy one bounded row: %q", got)
 		}
 		if width < 100 && !strings.HasSuffix(header, "…") {

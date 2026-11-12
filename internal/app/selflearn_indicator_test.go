@@ -25,7 +25,7 @@ func TestSelfLearnIndicatorPhaseTransitions(t *testing.T) {
 		t.Fatalf("phase: got %v, want reviewing", snap.Phase)
 	}
 	// Reviewing render is just the live dot.
-	if got := ansi.Strip(snap.Render()); got != "●" {
+	if got := ansi.Strip(snap.Render()); got != "•" {
 		t.Fatalf("reviewing render without target: %q", got)
 	}
 

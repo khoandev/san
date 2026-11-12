@@ -114,7 +114,7 @@ func TestTaskViewerNarrowActionsAndWrappedSelection(t *testing.T) {
 			v.HandleKeypress(taskKey("j"))
 		}
 		plain := ansi.Strip(v.Render())
-		for _, want := range []string{"› ● reviewer", "s stop", "r approval", "Esc close"} {
+		for _, want := range []string{"› • reviewer", "s stop", "r approval", "Esc close"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("width %d hid selection/action %q:\n%s", width, want, plain)
 			}

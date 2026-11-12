@@ -84,7 +84,7 @@ const blockQuoteIndentWidth = 2
 // NewMDRenderer creates a new markdown renderer with the given terminal width.
 // The width passed should be the raw terminal column count; the renderer
 // subtracts aiIndentWidth internally so glamour wraps exactly at the
-// visible boundary after the "● " prompt icon + indent are applied.
+// visible boundary after the "• " prompt icon + indent are applied.
 func NewMDRenderer(width int) *MDRenderer {
 	r := &MDRenderer{width: max(width-4, minWrapWidth)}
 	r.buildRenderers(kit.IsDarkBackground())

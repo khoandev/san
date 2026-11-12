@@ -94,7 +94,7 @@ type generalPanel struct {
 	options []generalOption
 	cursor  int
 
-	baseline      bool   // the auto-update value on disk, marked "● current"
+	baseline      bool   // the auto-update value on disk, marked "• current"
 	sleevBaseline bool   // the proxy's on/off value on disk
 	baseURL       string // the proxy's address on disk
 	harness       string // the harness the gateway is told it serves

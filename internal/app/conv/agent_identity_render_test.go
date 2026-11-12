@@ -34,7 +34,7 @@ func TestAgentIdentityColorAcrossLifecycle(t *testing.T) {
 				call := core.ToolCall{ID: "spawn", Name: "Agent", Input: `{"name":"reviewer","description":"Check"}`}
 				params := ToolCallsParams{AgentPreviewLines: 1, ToolCalls: []core.ToolCall{call}, PendingCalls: []core.ToolCall{call}, Width: width,
 					AgentIdentities: identities, ToolStartedAt: map[string]time.Time{call.ID: time.Now()}}
-				header := renderAgentColoredLine("Agent · reviewer · Check", width, "●", memberPalette[slot])
+				header := renderAgentColoredLine("Agent · reviewer · Check", width, "•", memberPalette[slot])
 				live := RenderToolCalls(params)
 				spinner := RenderPendingToolSpinner(PendingToolSpinnerParams{
 					PendingCalls: params.PendingCalls, CurrentIdx: 0, Width: width, AgentPreviewLines: params.AgentPreviewLines,
@@ -68,7 +68,7 @@ func TestAgentIdentityColorAcrossLifecycle(t *testing.T) {
 				}
 				notice := parseAgentEnvelope(`<task-notification task-id="worker-route" status="failed" description="Check limits">Error: provider unavailable</task-notification>`).renderWithIdentity(ctx)
 				identityStyle := lipgloss.NewStyle().Foreground(memberPalette[slot])
-				if !strings.Contains(notice, identityStyle.Render("●")) || !strings.Contains(ansi.Strip(notice), "reviewer") || !strings.Contains(ansi.Strip(notice), "failed") {
+				if !strings.Contains(notice, identityStyle.Render("•")) || !strings.Contains(ansi.Strip(notice), "reviewer") || !strings.Contains(ansi.Strip(notice), "failed") {
 					t.Fatalf("%s width %d: failure changed identity or lost outcome: %q", theme, width, notice)
 				}
 				if !strings.Contains(notice, backgroundStatusStyle("failed").Render("failed")) {
@@ -117,7 +117,7 @@ func TestAgentIdentityDuplicateAndUnknownNames(t *testing.T) {
 		t.Fatalf("duplicate name lacks stable ID: %q", got)
 	}
 	id := "unresolved-agent-123456789abcdef"
-	got := ansi.Strip(renderAgentMessageLine("●", "To", id, "Check", 32, nil, nil, nil))
+	got := ansi.Strip(renderAgentMessageLine("•", "To", id, "Check", 32, nil, nil, nil))
 	if strings.Contains(got, id) || !strings.Contains(got, shortAgentDisplayID(id)) || ansi.StringWidth(got) > 32 {
 		t.Fatalf("unknown recipient lacks bounded ID fallback: %q", got)
 	}

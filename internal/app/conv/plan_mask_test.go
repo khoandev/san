@@ -23,7 +23,7 @@ func TestRenderAssistantMessageHidesPlanBlock(t *testing.T) {
 	if strings.Contains(out, "```") || strings.Contains(out, "{") {
 		t.Fatalf("the plan JSON reached the transcript: %q", out)
 	}
-	if !strings.Contains(out, "● ▸ plan ready") {
+	if !strings.Contains(out, "• ▸ plan ready") {
 		t.Fatalf("block-only message = %q, want one summary row under the bullet", out)
 	}
 }

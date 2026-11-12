@@ -22,6 +22,7 @@ import (
 	"github.com/genai-io/san/internal/persona"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/task"
+	"github.com/genai-io/san/internal/workflow"
 )
 
 // Run routes to either print mode or interactive TUI.
@@ -68,6 +69,18 @@ func Run(opts setting.RunOptions) (runErr error) {
 	// Install the glyph table before the first frame, so the splash and the
 	// status line already draw in the user's chosen style.
 	kit.InitSymbols(setting.LoadIconStyle())
+	// The workflow graph is drawn below the conversation rather than by it, so
+	// it reads the same table through its own source hook — a function, not a
+	// copy, so a style picked in /appearance reaches the graph on the next frame
+	// without a second install.
+	workflow.SetMarkSource(func() workflow.Marks {
+		return workflow.Marks{
+			Running:   kit.CurrentSymbols.LiveDot,
+			Pending:   kit.CurrentSymbols.TaskPending,
+			Succeeded: kit.CurrentSymbols.Success,
+			Failed:    kit.CurrentSymbols.Error,
+		}
+	})
 	if cwd, err := os.Getwd(); err == nil {
 		if userQuit, err := resolveWorkspaceTrust(cwd); userQuit || err != nil {
 			return err

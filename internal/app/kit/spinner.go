@@ -26,7 +26,7 @@ var (
 )
 
 // LiveDot is the one indicator for a reply or action still in flight: a
-// breathing ●. The row settles into a solid ● in its own color when the work
+// breathing •. The row settles into a solid • in its own color when the work
 // is done, so the color says done and the breathing says waiting. The glyph
 // follows CurrentSymbols; only the breath is fixed.
 func LiveDot(frame int) string {
@@ -55,7 +55,7 @@ func liveDotMark(mark string, frame int) string {
 }
 
 // ThinkingMark leads reasoning: the star of the San mark, apart from the
-// reply's ●. It is the Unicode table's value — the canonical glyph — which the
+// reply's •. It is the Unicode table's value — the canonical glyph — which the
 // other tables replace.
 const ThinkingMark = "✦"
 

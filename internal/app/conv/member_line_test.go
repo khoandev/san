@@ -10,7 +10,7 @@ import (
 
 func TestBackgroundNoticeUsesAccentOnlyOnMarker(t *testing.T) {
 	content := "Tests finished · exit 0"
-	want := agentNoticeStyle.Render("●") + toolCallStyle.Render(" "+content) + "\n"
+	want := agentNoticeStyle.Render("•") + toolCallStyle.Render(" "+content) + "\n"
 	if got := RenderAgentNotice(content, 80, nil); got != want {
 		t.Fatalf("notice should use an neutral marker and normal body: %q", got)
 	}
@@ -25,7 +25,7 @@ func TestBackgroundNoticeUsesAccentOnlyOnMarker(t *testing.T) {
 func TestMemberLinesFitOneLineAndKeepTheNote(t *testing.T) {
 	body := strings.Repeat("字段名和单位都要对齐 ", 10) + " · waits for you"
 	for _, width := range []int{40, 49, 120} {
-		line := renderMemberLine("◆", "From", "api", body, width, nil)
+		line := renderMemberLine("◇", "From", "api", body, width, nil)
 		if w := lipgloss.Width(line); w > width || strings.Contains(line, "\n") {
 			t.Errorf("width %d: line is %d wide or wraps: %q", width, w, xansi.Strip(line))
 		}
@@ -39,15 +39,15 @@ func TestMemberLinesFitOneLineAndKeepTheNote(t *testing.T) {
 // out of the body.
 func TestMemberLinesWithoutASubject(t *testing.T) {
 	for in, want := range map[string]string{
-		"From @api · waits for you": "● From @api · waits for you",
-		"From @api":                 "● From @api",
-		"From @api: schema changed": "● From @api: schema changed",
+		"From @api · waits for you": "• From @api · waits for you",
+		"From @api":                 "• From @api",
+		"From @api: schema changed": "• From @api: schema changed",
 	} {
 		if got := strings.TrimSpace(xansi.Strip(RenderAgentNotice(in, 80, nil))); got != want {
 			t.Errorf("RenderAgentNotice(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if got := xansi.Strip(renderMemberLine("●", "To", "web", "", 80, nil)); got != "● To @web" {
+	if got := xansi.Strip(renderMemberLine("•", "To", "web", "", 80, nil)); got != "• To @web" {
 		t.Errorf("To without a subject = %q", got)
 	}
 	msg := "<group-message>\nFrom: @api\nTo: @web\nSent: 2026-09-29 10:15\nUnattended-Turns: 1\n\nbody\n</group-message>"

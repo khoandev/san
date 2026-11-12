@@ -19,7 +19,7 @@ func TestAskUserResultShowsAnswerWithoutRepeatingQuestion(t *testing.T) {
 		}},
 		Width: 120,
 	}))
-	if !strings.Contains(out, "● 你觉得效果如何？") || strings.Contains(out, "AskUserQuestion(") {
+	if !strings.Contains(out, "• 你觉得效果如何？") || strings.Contains(out, "AskUserQuestion(") {
 		t.Fatalf("question should replace tool name in call: %q", out)
 	}
 	if !strings.Contains(out, "  ↳ 需要调整") || strings.Contains(out, "⎿  →") {
@@ -36,7 +36,7 @@ func TestAskUserCallShowsQuestionsWithoutToolNameWhilePendingOrExpanded(t *testi
 		out := stripANSI(RenderToolCalls(ToolCallsParams{
 			ToolCalls: []core.ToolCall{call}, ToolCallsExpanded: expanded, Width: 80,
 		}))
-		if !strings.Contains(out, "● Q1: First?") || !strings.Contains(out, "Q2: Second?") || strings.Contains(out, "AskUserQuestion") {
+		if !strings.Contains(out, "• Q1: First?") || !strings.Contains(out, "Q2: Second?") || strings.Contains(out, "AskUserQuestion") {
 			t.Fatalf("expanded=%v: question call = %q", expanded, out)
 		}
 	}
@@ -51,7 +51,7 @@ func TestAskUserCancelledCallKeepsQuestionAndShowsCancellation(t *testing.T) {
 			Content:  "User cancelled the question prompt without answering.",
 		}}, Width: 80,
 	}))
-	if !strings.Contains(out, "● Continue?") || !strings.Contains(out, "↳ Cancelled") || strings.Contains(out, "AskUserQuestion") {
+	if !strings.Contains(out, "• Continue?") || !strings.Contains(out, "↳ Cancelled") || strings.Contains(out, "AskUserQuestion") {
 		t.Fatalf("cancelled question = %q", out)
 	}
 }

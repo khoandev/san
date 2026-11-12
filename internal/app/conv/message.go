@@ -23,7 +23,7 @@ const (
 	minWrapWidth = 40
 
 	// streamWrapReserve is the column budget held back when plain-wrapping the
-	// live streaming tail: 2 cols for the "● "/"✦ " gutter plus 2 cols of slack
+	// live streaming tail: 2 cols for the "• "/"✦ " gutter plus 2 cols of slack
 	// so an ambiguous-width glyph (the spinner star ✶ counted 1 cell but drawn
 	// 2, CJK, box-drawing) can't push a line into the last column — that makes
 	// the inline-mode insertAbove miscount rows and weld a stale frame into
@@ -57,10 +57,20 @@ var (
 				Bold(true)
 
 	// A settled bullet is the body text color, the same as a tool row's, so
-	// every finished ● in the conversation reads alike. The conversation body
+	// every finished • in the conversation reads alike. The conversation body
 	// stays monochrome — teal is reserved for the user's "❭" marker.
 	bulletStyle = lipgloss.NewStyle().
 			Foreground(kit.CurrentTheme.Text)
+
+	// replyMarkStyle draws the "• " that opens a turn's first content block. It
+	// is bulletStyle's color plus weight: the mark shrank to the size of the
+	// "• " glamour puts on a list item, and the weight is what still sets the
+	// speaker apart from a list entry two columns to its right. It stays a
+	// separate style because bulletStyle also tones whole /btw question lines,
+	// which must not turn bold.
+	replyMarkStyle = lipgloss.NewStyle().
+			Foreground(kit.CurrentTheme.Text).
+			Bold(true)
 
 	// Matching neutral rules give the composer one stable boundary.
 	SeparatorStyle = lipgloss.NewStyle().
@@ -203,7 +213,7 @@ type AssistantParams struct {
 
 	// Streaming-commit offsets: how much of Content/Thinking is already in
 	// scrollback (see FlushStreamingBlocks). Only the remainder is rendered
-	// here. BulletEmitted swaps the "● " marker for a continuation gutter once
+	// here. BulletEmitted swaps the "• " marker for a continuation gutter once
 	// the turn's first content block has been committed; ThinkingEmitted does the
 	// same for the "✦ " marker once the turn's first thinking block is committed.
 	ContentCommittedLen  int
@@ -249,15 +259,15 @@ func RenderCollapsedThinking(d time.Duration) string {
 }
 
 // continuationGutter is the 2-column blank that aligns continuation lines, and
-// content blocks committed after the first, under the "● " assistant marker.
+// content blocks committed after the first, under the "• " assistant marker.
 const continuationGutter = "  "
 
 // contentGutter returns the 2-column lead for an assistant content block: the
-// "● " marker for the turn's first content, or a blank gutter for blocks that
+// "• " marker for the turn's first content, or a blank gutter for blocks that
 // continue a turn whose marker was already emitted.
 func contentGutter(showBullet bool) string {
 	if showBullet {
-		return bulletStyle.Render(kit.CurrentSymbols.LiveDot + " ")
+		return replyMarkStyle.Render(kit.CurrentSymbols.LiveDot + " ")
 	}
 	return continuationGutter
 }
@@ -344,7 +354,7 @@ func RenderCommittedThinkingBlock(thinking string, showIcon bool, width int, md 
 
 // RenderCommittedContentBlock renders one or more completed markdown blocks of
 // assistant content for commit to native scrollback. showBullet leads the block
-// with the "● " marker (the turn's first content) or a blank continuation
+// with the "• " marker (the turn's first content) or a blank continuation
 // gutter. Returns "" when the slice renders empty (e.g. only blank lines).
 func RenderCommittedContentBlock(content string, showBullet bool, md *MDRenderer) string {
 	// The plan protocol travels as fenced JSON; the person reads the plan in
@@ -373,7 +383,7 @@ func RenderAssistantMessage(params AssistantParams) string {
 	// read Content, and the panel is drawn from the plan store that parsed it.
 	params.Content = plan.MaskBlocks(params.Content)
 
-	// The first content of a turn leads with "● "; once a block has been
+	// The first content of a turn leads with "• "; once a block has been
 	// committed the bullet is spent and the remainder aligns under a gutter.
 	aiIcon := contentGutter(!params.BulletEmitted)
 
@@ -567,7 +577,7 @@ func RenderRecap(mark, facts, body string, width int) string {
 }
 
 // RenderSideAnswer renders a /btw exchange: a muted "◇ btw" mark leading the
-// question, set apart from the reply's ●, and the answer under the reply
+// question, set apart from the reply's •, and the answer under the reply
 // gutter. The question is wrapped, not padded: a row filled out to the width
 // rewraps into an extra blank row once scrollback is narrowed.
 func RenderSideAnswer(question, answer string, width int, md *MDRenderer) string {

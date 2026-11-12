@@ -40,7 +40,7 @@ type Panel interface {
 	Render(width, height int) string
 	HintLine() string
 	// Dirty reports whether the panel has unsaved edits. The shell uses
-	// this to pin a "● unsaved" tag to the top-right of the header.
+	// this to pin a "• unsaved" tag to the top-right of the header.
 	Dirty() bool
 }
 
@@ -262,7 +262,7 @@ func (c *PanelPopup) activePanel() Panel {
 }
 
 // renderHeader renders the title lockup ("✦ Self-Learning" + tagline, or a
-// "› panel › sub-view" breadcrumb when inside a sub-view), an "● unsaved" tag
+// "› panel › sub-view" breadcrumb when inside a sub-view), an "• unsaved" tag
 // pinned right, and the tab strip below when more than one panel is registered.
 func (c *PanelPopup) renderHeader(width int) string {
 	left := popupGlyphStyle.Render(c.glyph+" ") + popupTitleStyle.Render(c.title)
@@ -349,7 +349,7 @@ var (
 	popupCrumbDimStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.TextDim)
 	popupCrumbStyle    = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Text).Bold(true)
 
-	// "● unsaved" tag — muted, so it's noticeable without shouting in a hue.
+	// "• unsaved" tag — muted, so it's noticeable without shouting in a hue.
 	popupUnsavedDotStyle  = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted).Bold(true)
 	popupUnsavedTextStyle = lipgloss.NewStyle().Foreground(kit.CurrentTheme.Muted)
 

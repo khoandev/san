@@ -629,9 +629,9 @@ func TestToolBatchCommitsCallsAndResultsTogether(t *testing.T) {
 	}
 	printed := ansi.Strip(m.flush.pendingPrints[0].remaining)
 	for _, pair := range []string{
-		"● Read(first.go)\n  └ 1 line\n",
-		"● Read(second.go)\n  └ 2 lines\n",
-		"● Read(third.go)\n  └ 3 lines",
+		"• Read(first.go)\n  └ 1 line\n",
+		"• Read(second.go)\n  └ 2 lines\n",
+		"• Read(third.go)\n  └ 3 lines",
 	} {
 		if strings.Count(printed, pair) != 1 {
 			t.Fatalf("call and result must appear together once; missing %q:\n%s", pair, printed)

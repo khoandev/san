@@ -50,7 +50,7 @@ func TestBackgroundIdentityAndSeverity(t *testing.T) {
 			wantStatus := lipgloss.NewStyle().Foreground(wantColor).Render(status)
 			e := parseAgentEnvelope(`<task-notification task-id="task-a12" status="` + status + `" description="Run tests">Error: provider unavailable</task-notification>`)
 			view := e.render(100, nil)
-			if !strings.Contains(view, identity.Render("●")) || !strings.Contains(view, identity.Render("Run tests")) || !strings.Contains(view, wantStatus) {
+			if !strings.Contains(view, identity.Render("•")) || !strings.Contains(view, identity.Render("Run tests")) || !strings.Contains(view, wantStatus) {
 				t.Fatalf("%s: identity/status lost: %q", status, view)
 			}
 			if strings.Contains(ansi.Strip(view), "provider unavailable") && !strings.Contains(view, toolCallStyle.Render(" · provider unavailable")) {
@@ -94,7 +94,7 @@ func TestBackgroundNoticeKeepsConfiguredAgentColor(t *testing.T) {
 	e := parseAgentEnvelope(`<task-notification task-id="task-one" status="failed" description="Check">Error: denied</task-notification>`)
 	got := e.renderWithIdentity(ctx)
 	style := lipgloss.NewStyle().Foreground(agentIdentityColor(identity, ctx.AgentColors))
-	if !strings.Contains(got, style.Render("●")) || !strings.Contains(got, style.Render("reviewer · Check")) {
+	if !strings.Contains(got, style.Render("•")) || !strings.Contains(got, style.Render("reviewer · Check")) {
 		t.Fatalf("configured identity lost: %q", got)
 	}
 }
