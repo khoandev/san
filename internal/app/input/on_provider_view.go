@@ -541,7 +541,11 @@ func (s *ProviderSelector) renderHints() string {
 	case providerTabRoles:
 		parts = append(parts, "Enter assign model + effort", "Ctrl+D clear")
 	default:
-		parts = append(parts, "Space mark · Enter confirm")
+		enterHint := "Enter project"
+		if s.store != nil && s.store.UserDefaultModel() == nil {
+			enterHint = "Enter user default"
+		}
+		parts = append(parts, "Space mark", enterHint, "Ctrl+G user default")
 	}
 	parts = append(parts, "←/→/Tab switch", "Esc cancel")
 	return kit.DimStyle().Render(strings.Join(parts, " · "))
