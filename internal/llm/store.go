@@ -53,10 +53,6 @@ const (
 	CustomAPIKeyEnvVar = "SAN_CUSTOM_API_KEY"
 )
 
-// The Sleev gateway is a setting, not a connection: it lives in settings.json
-// (see internal/setting) and is reached from here through loadSleevGate. The
-// block it used to occupy in providers.json is moved out on the first open.
-
 // CustomProviderConfig stores the user-defined OpenAI-compatible provider added
 // via the /models Providers tab. The API key is not kept here — it lives in the
 // secret store under CustomAPIKeyEnvVar.
@@ -158,9 +154,6 @@ func ProjectModelFindings(cwd string) []string {
 func (s *Store) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A gateway block still in providers.json belongs to the settings: move it
-	// before this snapshot is taken, so nothing below can read or rewrite it.
-	migrateLegacySleevLogged(s.path)
 	return s.loadLocked()
 }
 

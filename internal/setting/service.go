@@ -113,19 +113,6 @@ func (s *Settings) ShowSkillCommands() bool {
 	return s.data == nil || s.data.SkillCommands == nil || *s.data.SkillCommands
 }
 
-// Sleev returns the gateway setting the loaded files state, with its defaults
-// filled in: the switch, the address and the harness name. A project file can
-// never state it — Loader.Load drops the block from every project source — so
-// this is either the user's own decision or the defaults.
-func (s *Settings) Sleev() SleevSettings {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.data == nil || s.data.Sleev == nil {
-		return SleevSettings{}.Normalized()
-	}
-	return s.data.Sleev.Normalized()
-}
-
 // IconStyleKind reports the icon style the TUI should draw, already normalized
 // to one of the IconStyle* constants. It is a display preference only; the
 // glyph table a style draws is chosen by the UI kit.

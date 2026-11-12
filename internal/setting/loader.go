@@ -105,7 +105,7 @@ func (l *Loader) Load() (*Data, error) {
 		sources = append(sources, settingsSource{path: filepath.Join(homeDir, ".claude", "settings.json"), claudeCompat: true})
 	}
 	if l.userDir != "" {
-		sources = append(sources, settingsSource{path: filepath.Join(l.userDir, "settings.json"), gateway: true})
+		sources = append(sources, settingsSource{path: filepath.Join(l.userDir, "settings.json")})
 	}
 	sources = append(sources, l.projectSettingsFiles()...)
 
@@ -133,15 +133,6 @@ func (l *Loader) Load() (*Data, error) {
 		foldSettings(&s)
 		if src.project && l.untrusted && !(src.local && UntrackedInRepo(src.path)) {
 			s = Data{Permissions: PermissionSettings{Deny: s.Permissions.Deny, Ask: s.Permissions.Ask}}
-		}
-		// A gateway routes this machine's traffic through one address, so only
-		// the user's own San settings file may state it: a project file's block
-		// — or the Claude-compat one that also sits in the home directory — is
-		// dropped rather than layered, however trusted the checkout is. This is
-		// also what keeps the General panel's display and the routing in
-		// agreement, since the routing reads that one file.
-		if !src.gateway {
-			s.Sleev = nil
 		}
 
 		// Extract hooks before merging — we'll merge hooks manually
@@ -191,11 +182,6 @@ type settingsSource struct {
 	claudeCompat bool
 	project      bool // from the working directory, not the user's home
 	local        bool // a settings.local.json
-	// gateway marks the user's own San settings file as the only source
-	// allowed to state the Sleev gateway block: routing this machine's traffic
-	// through one address is the user's decision, so neither a project file nor
-	// the Claude-compat one beside it may state it.
-	gateway bool
 }
 
 // projectSettingsFiles lists the project's settings files, lowest priority

@@ -110,30 +110,6 @@ func (m *model) switchProvider(p llm.Provider) {
 	m.wireHookCompleter()
 }
 
-// reopenProvider rebuilds the provider the session infers through without
-// touching the model choice, so a change made beneath it — the Sleev proxy's
-// switch or its address — reaches the next turn. A turn already streaming
-// finishes on the provider it started with.
-func (m *model) reopenProvider() error {
-	ctx := context.Background()
-	if current := m.env.CurrentModel; current != nil {
-		p, err := llm.GetProvider(ctx, current.Provider, current.AuthMethod)
-		if err != nil {
-			return err
-		}
-		m.switchProvider(p)
-		return nil
-	}
-	// No model chosen yet: the next turn resolves one, and it must not reuse a
-	// connection opened before the switch.
-	if resolved, ok := llm.ResolveProvider(ctx, m.services.LLM.Store()); ok {
-		m.switchProvider(resolved.Provider)
-		return nil
-	}
-	m.switchProvider(nil)
-	return nil
-}
-
 // wireHookCompleter points prompt and agent hooks at the fast role. A hook
 // completion is a one-shot utility call, repeated for every event and invisible
 // to the conversation — exactly what a cheap role exists for. An unassigned

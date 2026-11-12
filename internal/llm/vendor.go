@@ -48,12 +48,8 @@ type vendorProvider struct {
 	models vendorModels
 	// endpoint carries the credential, the host and the live model listing.
 	// Its host is always the vendor's own: the listing and the per-model detail
-	// lookups are metadata about the vendor, so they go direct; only the client
-	// a turn is built from is routed through the gateway.
+	// lookups are metadata about the vendor, so they go direct.
 	endpoint *endpoint.Endpoint
-	// gate is the Sleev gateway this provider's turns take, when the user has
-	// enabled one. Nil otherwise.
-	gate *sleevGate
 	// turnHeaders are the headers whose value depends on what a turn sends,
 	// for the one endpoint that has any. Nil everywhere else.
 	turnHeaders func([]core.Message) map[string]string
@@ -84,7 +80,6 @@ func newVendorProvider(name string, vendor catalog.Vendor, cfg endpoint.Config) 
 		vendor:      vendor,
 		models:      models,
 		endpoint:    vendor.Endpoint(cfg),
-		gate:        loadSleevGate(),
 		turnHeaders: turnHeadersFor(vendor.ID),
 		clients:     make(map[string]*ai.Client),
 	}
@@ -195,12 +190,6 @@ func (p *vendorProvider) Client(modelID string, headers map[string]string) (*ai.
 			cfg.Model.Headers = make(map[string]string, len(headers))
 		}
 		maps.Copy(cfg.Model.Headers, headers)
-	}
-	// The gateway is applied here rather than to the endpoint above, so this
-	// turn takes the gateway while everything else about the connection — the
-	// model listing above all — still answers from the vendor's own address.
-	if err := p.gate.route(&cfg, p.vendor); err != nil {
-		return nil, err
 	}
 	client, err := ai.New(cfg)
 	if err != nil {
