@@ -86,7 +86,10 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 	recorded := make(map[string]bool)
 	sessionID := m.sessionID()
 	for _, worker := range workers {
-		info := worker.GetStatus()
+		// A roster row shows one screen of output, so ask for that much: the
+		// poll runs once a second, and a full status read copies up to 512 KiB
+		// per finished worker to throw all but the tail away.
+		info := task.PreviewOf(worker, taskViewerOutputLimit)
 		seen[info.ID] = true
 		if info.ParentSessionID != "" && info.ParentSessionID != sessionID {
 			continue
@@ -143,15 +146,14 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 	}
 	items := make([]input.TaskViewItem, 0, len(infos))
 	for _, info := range infos {
-		output := info.Output
-		truncated := len(output) > taskViewerOutputLimit
-		if truncated {
-			output = output[len(output)-taskViewerOutputLimit:]
-			// Avoid starting the bounded preview in the middle of a UTF-8 rune.
+		// PreviewOf already bounded the output, cutting on a rune boundary; the
+		// fallback path for a worker that does not opt in bounds it here too.
+		output, truncated := info.Output, info.OutputTruncated
+		if !truncated && len(output) > taskViewerOutputLimit {
+			output, truncated = output[len(output)-taskViewerOutputLimit:], true
 			for len(output) > 0 && output[0]&0xc0 == 0x80 {
 				output = output[1:]
 			}
-			output = strings.Clone(output)
 		}
 		owner := info.AgentName
 		if owner == "" {

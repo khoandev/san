@@ -56,6 +56,24 @@ type Briefer interface {
 	Brief() Brief
 }
 
+// Previewer is implemented by task types that can answer a roster's read
+// without copying more retained output than the row can show.
+type Previewer interface {
+	Preview(limit int) TaskInfo
+}
+
+// PreviewOf reads a task's status with Output bounded to limit trailing bytes.
+// A task that does not opt in pays the full copy, so a renderer still gets a
+// correct row.
+func PreviewOf(worker BackgroundTask, limit int) TaskInfo {
+	if previewer, ok := worker.(Previewer); ok {
+		return previewer.Preview(limit)
+	}
+	info := worker.GetStatus()
+	info.Output, info.OutputTruncated = boundOutput(info.Output, limit)
+	return info
+}
+
 // BriefOf reads a task's display slice without copying its retained output,
 // falling back to a full status read for implementations that do not opt in.
 func BriefOf(worker BackgroundTask) Brief {
@@ -173,10 +191,13 @@ type TaskInfo struct {
 	Output      string
 	OutputFile  string
 	OutputError string // First output-log failure, separate from execution outcome.
-	Progress    string // Latest meaningful activity, separate from final model-facing output.
-	Error       string
-	Failure     FailureInfo
-	Lifetime    Lifetime
+	// OutputTruncated reports that Output is a bounded tail rather than
+	// everything retained; only a Preview read sets it.
+	OutputTruncated bool
+	Progress        string // Latest meaningful activity, separate from final model-facing output.
+	Error           string
+	Failure         FailureInfo
+	Lifetime        Lifetime
 
 	// Bash-specific fields
 	Command  string

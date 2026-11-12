@@ -31,3 +31,32 @@ func appendCapped(buf *bytes.Buffer, data []byte) {
 	}
 	buf.Write(data)
 }
+
+// boundOutput returns s whole when limit is not positive or s already fits,
+// otherwise its trailing limit bytes cut on a rune boundary. The truncated flag
+// says which happened, so a caller can label a preview as one.
+func boundOutput(s string, limit int) (string, bool) {
+	if limit <= 0 || len(s) <= limit {
+		return s, false
+	}
+	return tailRunes(s[len(s)-limit:]), true
+}
+
+// boundBuffer is boundOutput for a live buffer. It slices the buffer before
+// making a string: Buffer.String copies everything, which is the whole cost a
+// bounded read exists to avoid.
+func boundBuffer(buf *bytes.Buffer, limit int) (string, bool) {
+	if limit <= 0 || buf.Len() <= limit {
+		return buf.String(), false
+	}
+	return tailRunes(string(buf.Bytes()[buf.Len()-limit:])), true
+}
+
+// tailRunes drops the leading continuation bytes of a cut, so a preview never
+// starts inside a rune.
+func tailRunes(tail string) string {
+	for len(tail) > 0 && tail[0]&0xc0 == 0x80 {
+		tail = tail[1:]
+	}
+	return tail
+}

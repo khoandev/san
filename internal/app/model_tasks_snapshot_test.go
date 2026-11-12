@@ -117,11 +117,14 @@ func TestTaskViewerSnapshotsOnlyOnRefreshBoundaries(t *testing.T) {
 	msg, _ := taskCompletionMessage(worker.info)
 	m.pendingMessages.Hold(nil)
 	m.Update(mainNoticeMsg{notice: fromBrokerMessage(msg)})
-	if view := ansi.Strip(m.userInput.Tasks.Render()); !strings.Contains(view, "History · 1") || strings.Contains(view, "[completed]") {
+	// Folded history draws no rows: the count is the whole record until it is
+	// expanded. The stage is a plain cell in the roster ("completed · 0s"),
+	// not the bracketed status the pre-hub row carried.
+	if view := ansi.Strip(m.userInput.Tasks.Render()); !strings.Contains(view, "History · 1") || strings.Contains(view, "subject-counted") {
 		t.Fatalf("completion did not fold into history immediately: %s", view)
 	}
 	m.userInput.Tasks.HandleKeypress(tea.KeyPressMsg{Code: 'h', Text: "h"})
-	if view := ansi.Strip(m.userInput.Tasks.Render()); !strings.Contains(view, "[completed]") {
+	if view := ansi.Strip(m.userInput.Tasks.Render()); !strings.Contains(view, "subject-counted") || !strings.Contains(view, "completed") {
 		t.Fatalf("expanded history lost the completion: %s", view)
 	}
 	m.services.sessionID = "other"

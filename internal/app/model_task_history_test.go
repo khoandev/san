@@ -83,8 +83,10 @@ func TestTaskHistoryRecordedInterruptedWorkerIsNotFailure(t *testing.T) {
 	if !strings.Contains(plain, "History · 1") || strings.Contains(plain, "failed") || strings.Contains(plain, "Interrupted review") {
 		t.Fatalf("interrupted history was misclassified:\n%s", plain)
 	}
+	// The expanded roster names the stage as its own cell rather than the
+	// bracketed status the pre-hub row carried; the word is the assertion.
 	m.userInput.Tasks.HandleKeypress(tea.KeyPressMsg{Code: 'h', Text: "h"})
-	if plain = ansi.Strip(m.userInput.Tasks.Render()); !strings.Contains(plain, "[interrupted]") {
+	if plain = ansi.Strip(m.userInput.Tasks.Render()); !strings.Contains(plain, "interrupted") {
 		t.Fatalf("history lost the interrupted status:\n%s", plain)
 	}
 }

@@ -365,30 +365,57 @@ func (t *AgentTask) Brief() Brief {
 func (t *AgentTask) GetStatus() TaskInfo {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	return t.statusLocked(0)
+}
 
+// Preview reports the same status with Output bounded to limit trailing bytes
+// and each attempt's output dropped: a roster row shows one screen of output,
+// and copying the whole buffer (up to 512 KiB per task) to print it is the
+// difference between a snapshot that costs microseconds and one that costs
+// milliseconds per refresh.
+func (t *AgentTask) Preview(limit int) TaskInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.statusLocked(limit)
+}
+
+// statusLocked is the one status body; limit 0 keeps the whole output.
+func (t *AgentTask) statusLocked(limit int) TaskInfo {
+	attempts := t.attempts
+	if limit > 0 && len(attempts) > 0 {
+		attempts = make([]AttemptInfo, len(t.attempts))
+		for i, attempt := range t.attempts {
+			attempt.Output = ""
+			attempts[i] = attempt
+		}
+	} else {
+		attempts = append([]AttemptInfo(nil), t.attempts...)
+	}
+	output, truncated := boundBuffer(&t.attemptOutput, limit)
 	return TaskInfo{
 		Attempt:         t.attempt,
-		Attempts:        append([]AttemptInfo(nil), t.attempts...),
+		Attempts:        attempts,
 		ParentSessionID: t.parentSessionID,
 
-		ID:             t.ID,
-		Type:           TaskTypeAgent,
-		Description:    t.Description,
-		Status:         t.Status,
-		StartTime:      t.StartTime,
-		EndTime:        t.EndTime,
-		Error:          t.Error,
-		Output:         t.attemptOutput.String(),
-		OutputFile:     t.inspectionPathLocked(),
-		OutputError:    t.outputErr,
-		Progress:       t.progress,
-		AgentName:      t.AgentName,
-		PermissionMode: t.permissionMode,
-		AgentSessionID: t.SessionID,
-		Model:          t.model,
-		StepCount:      t.StepCount,
-		TokenUsage:     t.TokenUsage,
-		LiveView:       t.liveView,
+		ID:              t.ID,
+		Type:            TaskTypeAgent,
+		Description:     t.Description,
+		Status:          t.Status,
+		StartTime:       t.StartTime,
+		EndTime:         t.EndTime,
+		Error:           t.Error,
+		Output:          output,
+		OutputTruncated: truncated,
+		OutputFile:      t.inspectionPathLocked(),
+		OutputError:     t.outputErr,
+		Progress:        t.progress,
+		AgentName:       t.AgentName,
+		PermissionMode:  t.permissionMode,
+		AgentSessionID:  t.SessionID,
+		Model:           t.model,
+		StepCount:       t.StepCount,
+		TokenUsage:      t.TokenUsage,
+		LiveView:        t.liveView,
 	}
 }
 

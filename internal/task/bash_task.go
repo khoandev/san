@@ -350,25 +350,39 @@ func (t *BashTask) Brief() Brief {
 func (t *BashTask) GetStatus() TaskInfo {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	return t.statusLocked(0)
+}
 
+// Preview reports the same status with Output bounded to limit trailing bytes,
+// for a caller that shows one screen of it; see AgentTask.Preview.
+func (t *BashTask) Preview(limit int) TaskInfo {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.statusLocked(limit)
+}
+
+// statusLocked is the one status body; limit 0 keeps the whole output.
+func (t *BashTask) statusLocked(limit int) TaskInfo {
+	output, truncated := boundBuffer(&t.output, limit)
 	return TaskInfo{
 		ParentSessionID: t.parentSessionID,
 		OwnerAgentID:    t.ownerAgentID,
 
-		ID:          t.ID,
-		Type:        TaskTypeBash,
-		Command:     t.Command,
-		Description: t.Description,
-		Status:      t.status,
-		PID:         t.PID,
-		StartTime:   t.StartTime,
-		EndTime:     t.endTime,
-		ExitCode:    t.exitCode,
-		OutputFile:  usableOutputPath(t.OutputFile, t.outputErr),
-		OutputError: t.outputErr,
-		Failure:     t.failure,
-		Lifetime:    t.lifetime,
-		Error:       t.errMsg,
-		Output:      t.output.String(),
+		ID:              t.ID,
+		Type:            TaskTypeBash,
+		Command:         t.Command,
+		Description:     t.Description,
+		Status:          t.status,
+		PID:             t.PID,
+		StartTime:       t.StartTime,
+		EndTime:         t.endTime,
+		ExitCode:        t.exitCode,
+		OutputFile:      usableOutputPath(t.OutputFile, t.outputErr),
+		OutputError:     t.outputErr,
+		Failure:         t.failure,
+		Lifetime:        t.lifetime,
+		Error:           t.errMsg,
+		Output:          output,
+		OutputTruncated: truncated,
 	}
 }
