@@ -45,6 +45,10 @@ type preparedRun struct {
 	batchCwdIdx  int
 	startedAt    time.Time
 	hookID       string
+	// onSession reports the durable child session the moment its lease exists,
+	// so a roster can read a worker's transcript while it is still running.
+	// Nil for hosts that only need the final identity.
+	onSession func(sessionID string)
 	// activity is the inspection trail, carried as display details by Agent.
 	// Model, mode, usage, and spinner status go only to the live display.
 	activity     []string
@@ -235,6 +239,10 @@ func (e *Executor) executePreparedRun(ctx context.Context, run *preparedRun) (ou
 		}
 	}
 	run.reportIdentity()
+	if run.native != nil && run.onSession != nil {
+		run.onSession(run.native.ID())
+		run.onSession = nil
+	}
 	if run.native != nil {
 		defer func() {
 			if run.checkpoint != nil {

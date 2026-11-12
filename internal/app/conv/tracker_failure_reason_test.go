@@ -16,8 +16,8 @@ func TestFailedTrackerPrefersTerminalReasonOverActivity(t *testing.T) {
 			Metadata: map[string]any{"background_task_id": "worker", "background_status_detail": "failed", "background_error": reason}}
 		params := TrackerListParams{Items: []*todo.Item{item}, Width: 100, CompletionShown: func(string) bool { return false }}
 		if live {
-			params.WorkerStatus = func(string) task.TaskInfo {
-				return task.TaskInfo{Status: task.StatusFailed, Error: reason, Progress: "Read(stale.go)", OutputError: "log unavailable"}
+			params.WorkerStatus = func(string) task.Brief {
+				return task.Brief{Status: task.StatusFailed, Error: reason, Progress: "Read(stale.go)", OutputError: "log unavailable"}
 			}
 		}
 		view := ansi.Strip(RenderTrackerList(params))

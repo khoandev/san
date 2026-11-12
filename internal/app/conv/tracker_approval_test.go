@@ -21,7 +21,9 @@ func TestTrackerTerminalRowsRetireTransientActivity(t *testing.T) {
 				info.Error = "provider unavailable"
 			}
 			todo.CompleteWorker(store, info)
-			view := stripANSI(RenderTrackerList(TrackerListParams{Items: store.List(), Width: 100, CompletionShown: func(string) bool { return false }, WorkerStatus: func(string) task.TaskInfo { return info }}))
+			view := stripANSI(RenderTrackerList(TrackerListParams{Items: store.List(), Width: 100, CompletionShown: func(string) bool { return false }, WorkerStatus: func(string) task.Brief {
+				return task.Brief{ID: info.ID, AgentName: info.AgentName, Status: info.Status, Error: info.Error, Progress: info.Progress, OutputError: info.OutputError}
+			}}))
 			if strings.Contains(view, "Thinking...") || strings.Contains(view, "stopped before completion") {
 				t.Fatalf("terminal row retained transient activity: %q", view)
 			}
@@ -38,7 +40,7 @@ func TestTrackerExplicitApprovalAndMixedPlan(t *testing.T) {
 	worker := todo.Default().Create("Worker", "", "", map[string]any{"background_task_id": "bg", "background_status_detail": "running"})
 	_ = todo.Default().Update(worker.ID, todo.WithStatus(todo.StatusInProgress))
 	todo.Default().Create("Plan intent", "", "", nil)
-	p := TrackerListParams{Items: todo.Default().List(), Width: 120, StreamActive: true, AwaitingApproval: map[string]bool{"bg": true}, WorkerStatus: func(string) task.TaskInfo { return task.TaskInfo{Status: task.StatusRunning} }}
+	p := TrackerListParams{Items: todo.Default().List(), Width: 120, StreamActive: true, AwaitingApproval: map[string]bool{"bg": true}, WorkerStatus: func(string) task.Brief { return task.Brief{Status: task.StatusRunning} }}
 	a := RenderTrackerList(p)
 	b := RenderTrackerList(p)
 	if a != b || !strings.Contains(stripANSI(a), "awaiting approval") {
@@ -52,7 +54,7 @@ func TestTrackerExplicitApprovalAndMixedPlan(t *testing.T) {
 		t.Fatal("stale worker should remain stalled")
 	}
 	p.AwaitingApproval = map[string]bool{"bg": true}
-	p.WorkerStatus = func(string) task.TaskInfo { return task.TaskInfo{Status: task.StatusStopped} }
+	p.WorkerStatus = func(string) task.Brief { return task.Brief{Status: task.StatusStopped} }
 	if strings.Contains(RenderTrackerList(p), "awaiting approval") {
 		t.Fatal("terminal worker cannot await approval")
 	}

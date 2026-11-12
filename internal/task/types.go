@@ -26,6 +26,53 @@ const (
 	StatusStopped TaskStatus = "stopped"
 )
 
+// Brief is the display slice of a task: identity, lifecycle, and the activity a
+// tracker row names — everything a renderer reads, and none of the output.
+//
+// GetStatus copies up to the retained output (512 KiB per task) and clones the
+// attempt rows; a renderer runs several times per frame, so anything that only
+// draws a task must ask for a Brief instead.
+type Brief struct {
+	ID              string
+	ParentSessionID string
+	AgentSessionID  string
+	Type            TaskType
+	Status          TaskStatus
+	Attempt         int
+
+	// Display-only detail: what a tracker row prints beside the identity.
+	AgentName   string
+	Description string
+	Error       string
+	OutputError string // First output-log failure; a nonempty path alone is not proof of durability.
+	Progress    string
+	LiveView    string
+	StartTime   time.Time
+	EndTime     time.Time
+}
+
+// Briefer is implemented by task types that can answer without copying output.
+type Briefer interface {
+	Brief() Brief
+}
+
+// BriefOf reads a task's display slice without copying its retained output,
+// falling back to a full status read for implementations that do not opt in.
+func BriefOf(worker BackgroundTask) Brief {
+	if briefer, ok := worker.(Briefer); ok {
+		return briefer.Brief()
+	}
+	info := worker.GetStatus()
+	return Brief{
+		ID: info.ID, ParentSessionID: info.ParentSessionID, AgentSessionID: info.AgentSessionID,
+		Type: info.Type, Status: info.Status, Attempt: info.Attempt,
+		AgentName: info.AgentName, Description: info.Description,
+		Error: info.Error, OutputError: info.OutputError,
+		Progress: info.Progress, LiveView: info.LiveView,
+		StartTime: info.StartTime, EndTime: info.EndTime,
+	}
+}
+
 // BackgroundTask is the common interface for all background task types
 // Both BashTask and AgentTask implement this interface
 //
@@ -140,6 +187,7 @@ type TaskInfo struct {
 	AgentName      string
 	PermissionMode string // Effective launch-time mode for ordinary subagent tasks.
 	AgentSessionID string
+	Model          string // Model the launch resolved to, as its lease reported it.
 	StepCount      int
 	TokenUsage     int
 	LiveView       string // Current display for a running structured task, if any.

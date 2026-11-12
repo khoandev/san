@@ -39,6 +39,7 @@ type AgentTask struct {
 	attemptOutput  bytes.Buffer
 	launchState    any
 	permissionMode string           // Effective mode resolved before the worker starts.
+	model          string           // Resolved model id, reported once the launch is prepared.
 	progress       string           // Latest non-metadata activity for the live tracker.
 	outputErr      string           // First output-log failure; a nonempty path alone is not proof of durability.
 	liveView       string           // Current structured progress, if the caller supplies one.
@@ -114,6 +115,25 @@ func (t *AgentTask) SetPermissionMode(mode string) {
 	t.recordOutput(outputFile, outputRecord{
 		Event:    "agent.permissions",
 		Metadata: map[string]any{"mode": mode},
+	})
+}
+
+// SetModel records the model the launch resolved to, so a roster can name it
+// without reaching into the run that owns the lease.
+func (t *AgentTask) SetModel(model string) {
+	t.mu.Lock()
+	changed := t.model != model && model != ""
+	if changed {
+		t.model = model
+	}
+	outputFile := t.OutputFile
+	t.mu.Unlock()
+	if !changed {
+		return
+	}
+	t.recordOutput(outputFile, outputRecord{
+		Event:    "agent.model",
+		Metadata: map[string]any{"model": model},
 	})
 }
 
@@ -327,6 +347,20 @@ func (t *AgentTask) Kill() error {
 	return t.KillAttempt(info.Attempt)
 }
 
+// Brief reports the display slice without copying output or attempt rows.
+func (t *AgentTask) Brief() Brief {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return Brief{
+		ID: t.ID, ParentSessionID: t.parentSessionID, AgentSessionID: t.SessionID,
+		Type: TaskTypeAgent, Status: t.Status, Attempt: t.attempt,
+		AgentName: t.AgentName, Description: t.Description,
+		Error: t.Error, OutputError: t.outputErr,
+		Progress: t.progress, LiveView: t.liveView,
+		StartTime: t.StartTime, EndTime: t.EndTime,
+	}
+}
+
 // GetStatus returns the current task status info
 func (t *AgentTask) GetStatus() TaskInfo {
 	t.mu.RLock()
@@ -351,6 +385,7 @@ func (t *AgentTask) GetStatus() TaskInfo {
 		AgentName:      t.AgentName,
 		PermissionMode: t.permissionMode,
 		AgentSessionID: t.SessionID,
+		Model:          t.model,
 		StepCount:      t.StepCount,
 		TokenUsage:     t.TokenUsage,
 		LiveView:       t.liveView,

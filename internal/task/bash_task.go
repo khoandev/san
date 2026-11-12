@@ -335,6 +335,17 @@ func (t *BashTask) MarkReaped() {
 	t.reaped.Store(true)
 }
 
+// Brief reports the display slice without copying the collected output.
+func (t *BashTask) Brief() Brief {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return Brief{
+		ID: t.ID, ParentSessionID: t.parentSessionID, Type: TaskTypeBash, Status: t.status,
+		Description: t.Description, Error: t.errMsg, OutputError: t.outputErr,
+		StartTime: t.StartTime, EndTime: t.endTime,
+	}
+}
+
 // GetStatus returns the current task status info
 func (t *BashTask) GetStatus() TaskInfo {
 	t.mu.RLock()

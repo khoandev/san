@@ -3,9 +3,12 @@ package input
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/task"
@@ -23,6 +26,15 @@ type TaskViewItem struct {
 	Attempt                                                      int
 	SessionID                                                    string
 	Attempts                                                     string // Concise immutable run history, not the child conversation.
+	// What the row needs to answer "which worker, how far, on what" without
+	// opening the inspector. Zero values simply omit the cell.
+	Model     string
+	Mode      string
+	Activity  string // Latest structured activity of a running worker.
+	Steps     int
+	Tokens    int
+	StartedAt time.Time
+	EndedAt   time.Time
 }
 type TaskStopMsg struct {
 	TaskID  string
@@ -38,6 +50,23 @@ type TaskContinueMsg struct {
 type TaskReviewApprovalMsg struct {
 	TaskID string
 	ViewID uint64
+}
+
+// TaskTranscriptMsg asks the app to open a worker's own conversation. The
+// viewer only names the session; reading it is the app's job.
+type TaskTranscriptMsg struct {
+	TaskID    string
+	SessionID string
+	ViewID    uint64
+}
+
+// TaskSteerMsg carries a line the user typed straight into a running worker.
+// It is ordinary inbox mail, not a new execution.
+type TaskSteerMsg struct {
+	TaskID  string
+	Message string
+	ViewID  uint64
+	Attempt int
 }
 type TaskViewerClosedMsg struct{ ViewID uint64 }
 
@@ -55,6 +84,8 @@ type TaskViewer struct {
 	stopAttempt                          int
 	viewID                               uint64
 	pendingAction                        bool
+	steer                                bool
+	steerInput                           textinput.Model
 }
 
 func (v *TaskViewer) IsActive() bool      { return v.active }
@@ -158,6 +189,18 @@ func (v *TaskViewer) rebuild() {
 			lines = []string{"Task no longer available."}
 		} else {
 			lines = []string{taskViewSubject(item), "Owner: " + item.AgentName, "ID: " + item.ID, "Status: " + taskViewStatus(item)}
+			if item.Model != "" {
+				lines = append(lines, "Model: "+item.Model)
+			}
+			if item.Mode != "" {
+				lines = append(lines, "Mode: "+item.Mode)
+			}
+			if usage := taskViewUsage(item); usage != "" {
+				lines = append(lines, "Usage: "+usage)
+			}
+			if timing := taskViewTiming(item, time.Now()); timing != "" {
+				lines = append(lines, timing)
+			}
 			if item.SessionID != "" {
 				lines = append(lines, "Session: "+item.SessionID)
 			}
@@ -178,6 +221,9 @@ func (v *TaskViewer) rebuild() {
 			}
 			if item.Status == task.StatusRunning && item.Progress != "" {
 				lines = append(lines, "Progress: "+item.Progress)
+			}
+			if item.Status == task.StatusRunning && item.Activity != "" && item.Activity != item.Progress {
+				lines = append(lines, "Activity: "+item.Activity)
 			}
 			if item.Error != "" && (!taskViewStopped(item) || !kit.IsRoutineStopReason(item.Error)) {
 				label := "Error: "
@@ -207,13 +253,14 @@ func (v *TaskViewer) rebuild() {
 			lines = append(lines, line)
 			rowOffset += strings.Count(ansi.Wrap(line, max(1, v.width-2), " "), "\n") + 1
 		}
+		now := time.Now()
 		addItem := func(item TaskViewItem) {
 			v.rowOffsets[item.ID] = rowOffset
 			prefix := "  " + kit.CurrentSymbols.LiveDot + " "
 			if item.ID == v.selected {
 				prefix = "› " + kit.CurrentSymbols.LiveDot + " "
 			}
-			addLine(prefix + taskViewSubject(item) + " [" + taskViewStatus(item) + "]")
+			addLine(prefix + taskViewRow(item, now, max(1, v.width-2-lipgloss.Width(prefix))))
 		}
 		for _, item := range active {
 			addItem(item)
@@ -281,9 +328,12 @@ func (v *TaskViewer) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 	if !v.active {
 		return nil
 	}
+	if v.steer {
+		return v.handleSteerKey(key)
+	}
 	k := key.String()
 	// Repeated activation keys must never confirm a destructive action.
-	if key.Key().IsRepeat && (k == "enter" || k == "s" || k == "r" || k == "c") {
+	if key.Key().IsRepeat && (k == "enter" || k == "s" || k == "r" || k == "c" || k == "t" || k == "m") {
 		return nil
 	}
 	if v.confirm {
@@ -352,6 +402,23 @@ func (v *TaskViewer) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 			v.pendingAction = true
 			return func() tea.Msg { return TaskReviewApprovalMsg{TaskID: id, ViewID: viewID} }
 		}
+	case "t":
+		// Read the worker's own conversation, not a summary of it. A worker
+		// without a durable session has nothing to open.
+		if item, ok := v.current(); ok && item.SessionID != "" {
+			id, sessionID, viewID := item.ID, item.SessionID, v.viewID
+			return func() tea.Msg {
+				return TaskTranscriptMsg{TaskID: id, SessionID: sessionID, ViewID: viewID}
+			}
+		}
+	case "m":
+		// Steer a live worker with one line of ordinary owner input.
+		if item, ok := v.live(v.selected); ok && !item.Recorded && item.Status == task.StatusRunning {
+			v.steer = true
+			v.steerInput = textinput.New()
+			v.steerInput.Placeholder = "message to " + taskViewSubject(item)
+			v.steerInput.Focus()
+		}
 	case "up", "k", "down", "j":
 		if v.detail {
 			if k == "up" || k == "k" {
@@ -389,13 +456,64 @@ func (v *TaskViewer) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 	}
 	return nil
 }
+
+// handleSteerKey owns the keyboard while the one-line steer input is open:
+// every other key belongs to the text field, and Enter hands the line to the
+// app, which routes it through the same inbox the SendMessage tool uses.
+func (v *TaskViewer) handleSteerKey(key tea.KeyMsg) tea.Cmd {
+	switch key.String() {
+	case "esc":
+		v.steer, v.steerInput = false, textinput.Model{}
+		return nil
+	case "enter":
+		text := strings.TrimSpace(v.steerInput.Value())
+		item, ok := v.live(v.selected)
+		if text == "" || !ok || item.Recorded || item.Status != task.StatusRunning {
+			return nil
+		}
+		id, attempt, viewID := item.ID, item.Attempt, v.viewID
+		v.steer, v.steerInput = false, textinput.Model{}
+		v.Suspend()
+		v.pendingAction = true
+		return func() tea.Msg {
+			return TaskSteerMsg{TaskID: id, Message: text, ViewID: viewID, Attempt: attempt}
+		}
+	}
+	var cmd tea.Cmd
+	v.steerInput, cmd = v.steerInput.Update(key)
+	return cmd
+}
+
+// HandlePaste implements pasteHandler while the steer input is open; without it
+// the app drops the paste rather than let it leak into the prompt behind.
+func (v *TaskViewer) HandlePaste(content string) tea.Cmd {
+	if !v.steer || content == "" {
+		return nil
+	}
+	v.steerInput.SetValue(v.steerInput.Value() + strings.ReplaceAll(content, "\n", " "))
+	return nil
+}
+
 func (v *TaskViewer) hint() string {
+	if v.steer {
+		return "enter send · esc cancel"
+	}
 	hint := "↑/↓ select · Enter details\ns stop · r approval · Esc close"
 	if _, history := v.groupedItems(); !v.detail && len(history) > 0 {
 		hint = "↑/↓ select · Enter · h history\ns stop · r approval · Esc close"
 	}
 	if v.detail {
 		hint = "↑/↓ scroll · PgUp/PgDown\ns stop · r approval · Esc back"
+	}
+	// Only advertise the row's own keys where the width can hold them: a hint
+	// that wraps mid-word is worse than an unlisted key.
+	if v.width >= 56 {
+		if item, ok := v.current(); ok && item.SessionID != "" {
+			hint = strings.Replace(hint, "s stop", "t transcript · s stop", 1)
+		}
+		if item, ok := v.live(v.selected); ok && !item.Recorded && item.Status == task.StatusRunning {
+			hint = strings.Replace(hint, "s stop", "m steer · s stop", 1)
+		}
 	}
 	if item, ok := v.live(v.selected); ok && !item.Recorded && item.CanContinue && (item.Status == task.StatusFailed || item.Status == task.StatusCompleted) {
 		label := "c ask main to continue"
@@ -427,5 +545,126 @@ func (v *TaskViewer) Render() string {
 	}
 	active, _ := v.groupedItems()
 	title := kit.TruncateText(fmt.Sprintf("Tasks · %d active", len(active)), max(1, v.width-1))
-	return strings.Join([]string{rule, kit.SelectorTitleStyle().Render(title), "", v.body.View(), rule, kit.HintLine(v.hint())}, "\n")
+	hintLine := kit.HintLine(v.hint())
+	if v.steer {
+		title = "Steer worker"
+		hintLine = v.steerInput.View()
+	}
+	return strings.Join([]string{rule, kit.SelectorTitleStyle().Render(title), "", v.body.View(), rule, hintLine}, "\n")
+}
+
+// ── Row content ─────────────────────────────────────────────────────────────
+
+// taskViewStage names the lifecycle in the roster's vocabulary rather than the
+// backend's. "completed" is what the task record says; a finished worker whose
+// session is still resumable is idle, which is the state a reader acts on.
+// The inspector keeps the exact backend word.
+func taskViewStage(item TaskViewItem) string {
+	switch item.Status {
+	case task.StatusRunning:
+		if item.AwaitingApproval {
+			return "awaiting approval"
+		}
+		return "running"
+	case task.StatusCompleted, task.StatusFailed:
+		if item.CanContinue {
+			return "idle"
+		}
+	case task.StatusStopped, task.StatusKilled:
+		return "stopped"
+	}
+	if item.Status == "" {
+		return "unknown"
+	}
+	return string(item.Status)
+}
+
+// taskViewCells is the right-hand scan column: how far, on what, how much. Cells
+// are dropped from the end while the row is too narrow, so the stage never
+// disappears and the subject keeps a readable stub.
+func taskViewCells(item TaskViewItem, now time.Time, width int) string {
+	cells := []string{taskViewStage(item)}
+	if age := taskViewAge(item, now); age != "" {
+		cells = append(cells, age)
+	}
+	if item.Tokens > 0 {
+		cells = append(cells, kit.FormatTokenCount(item.Tokens)+" tok")
+	}
+	if item.Steps > 0 {
+		cells = append(cells, fmt.Sprintf("%d steps", item.Steps))
+	}
+	if item.Model != "" && width >= 72 {
+		cells = append(cells, item.Model)
+	}
+	budget := max(8, width-14)
+	for len(cells) > 1 && lipgloss.Width(strings.Join(cells, " · ")) > budget {
+		cells = cells[:len(cells)-1]
+	}
+	return strings.Join(cells, " · ")
+}
+
+func taskViewRow(item TaskViewItem, now time.Time, width int) string {
+	subject := taskViewSubject(item)
+	meta := taskViewCells(item, now, width)
+	room := width - lipgloss.Width(meta) - 2
+	if meta == "" || room < 12 {
+		return kit.TruncateText(subject, width)
+	}
+	subject = kit.TruncateText(subject, room)
+	gap := max(1, width-lipgloss.Width(subject)-lipgloss.Width(meta))
+	return subject + strings.Repeat(" ", gap) + meta
+}
+
+// taskViewAge measures how long the row has been the state it reports: a
+// running worker ages from its start, a settled one from its end.
+func taskViewAge(item TaskViewItem, now time.Time) string {
+	if item.StartedAt.IsZero() {
+		return ""
+	}
+	until := now
+	if !item.EndedAt.IsZero() {
+		until = item.EndedAt
+	}
+	if until.Before(item.StartedAt) {
+		return ""
+	}
+	return taskViewSpan(until.Sub(item.StartedAt))
+}
+
+func taskViewSpan(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	default:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
+func taskViewUsage(item TaskViewItem) string {
+	var parts []string
+	if item.Steps > 0 {
+		parts = append(parts, fmt.Sprintf("%d steps", item.Steps))
+	}
+	if item.Tokens > 0 {
+		parts = append(parts, kit.FormatTokenCount(item.Tokens)+" tokens")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// taskViewTiming says how long the work took and, once it settled, how long ago
+// that was — the two facts a roster's age column folds together.
+func taskViewTiming(item TaskViewItem, now time.Time) string {
+	if item.StartedAt.IsZero() {
+		return ""
+	}
+	if item.EndedAt.IsZero() {
+		return "Elapsed: " + taskViewSpan(now.Sub(item.StartedAt))
+	}
+	timing := "Took: " + taskViewSpan(item.EndedAt.Sub(item.StartedAt))
+	if ago := now.Sub(item.EndedAt); ago >= time.Second {
+		timing += " · ended " + taskViewSpan(ago) + " ago"
+	}
+	return timing
 }

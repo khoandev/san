@@ -12,8 +12,11 @@ import (
 
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"
+	"github.com/genai-io/san/internal/core"
+	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/task"
 	"github.com/genai-io/san/internal/todo"
+	agenttool "github.com/genai-io/san/internal/tool/agent"
 )
 
 const taskViewerOutputLimit = 32 * 1024
@@ -33,6 +36,15 @@ type taskStopFinishedMsg struct {
 	taskID    string
 	viewID    uint64
 	err       error
+}
+
+// taskTranscriptLoadedMsg carries a worker's conversation back to the UI
+// thread, where the existing renderers turn it into viewer entries.
+type taskTranscriptLoadedMsg struct {
+	generation uint64
+	taskID     string
+	messages   []core.ChatMessage
+	err        error
 }
 
 // pendingTaskApprovals derives waiting state from actual, valid permission
@@ -158,6 +170,10 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 			}
 			history = append(history, line)
 		}
+		activity := info.LiveView
+		if activity == "" && info.Status == task.StatusRunning {
+			activity = info.Progress
+		}
 		items = append(items, input.TaskViewItem{
 			ID: info.ID, AgentName: owner, Description: info.Description,
 			Subject: info.Description, Status: info.Status, Progress: progress,
@@ -166,6 +182,9 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 			CanContinue: canContinueTask(info), Attempt: info.Attempt, SessionID: info.AgentSessionID, Attempts: strings.Join(history, "\n"),
 			AwaitingApproval: info.Status == task.StatusRunning && waiting[info.ID],
 			ApprovalQueued:   waiting[info.ID] && activeTask != info.ID,
+			Model:            info.Model, Mode: info.PermissionMode, Activity: activity,
+			Steps: info.StepCount, Tokens: info.TokenUsage,
+			StartedAt: info.StartTime, EndedAt: info.EndTime,
 		})
 	}
 	return items
@@ -281,6 +300,78 @@ func (m *model) reviewTaskApproval(msg input.TaskReviewApprovalMsg) tea.Cmd {
 		m.resumeTaskViewer()
 	}
 	return cmd
+}
+
+// openTaskTranscript reads a worker's own conversation. The task viewer stays
+// behind the transcript, so closing it returns to the same roster and selection
+// without rebuilding anything.
+func (m *model) openTaskTranscript(msg input.TaskTranscriptMsg) tea.Cmd {
+	store := m.services.SessionStore
+	if store == nil || msg.SessionID == "" {
+		m.conv.AddNotice("Task " + msg.TaskID + " has no recorded conversation")
+		return nil
+	}
+	m.userInput.Transcript.Enter("Task "+msg.TaskID+" · Loading…", nil, m.env.Width, m.env.Height)
+	generation, sessionID := m.userInput.Transcript.Generation(), msg.SessionID
+	return func() tea.Msg {
+		history, err := store.Read(sessionID, session.LegacyReadOptions{FullHistory: true})
+		if err != nil {
+			return taskTranscriptLoadedMsg{generation: generation, taskID: msg.TaskID, err: err}
+		}
+		return taskTranscriptLoadedMsg{
+			generation: generation, taskID: msg.TaskID, messages: store.ChatRows(history),
+		}
+	}
+}
+
+func (m *model) taskTranscriptLoaded(msg taskTranscriptLoadedMsg) {
+	viewer := &m.userInput.Transcript
+	if !viewer.IsActive() || viewer.Generation() != msg.generation {
+		return
+	}
+	title := "Task " + msg.taskID
+	if msg.err != nil {
+		viewer.Enter(title, []string{"Unable to read the worker transcript: " + msg.err.Error()}, m.env.Width, m.env.Height)
+		return
+	}
+	entries := m.historyEntries(msg.messages)
+	if len(entries) == 0 {
+		viewer.Enter(title, []string{"Nothing recorded yet."}, m.env.Width, m.env.Height)
+		return
+	}
+	viewer.EnterEntriesTitled(title, entries, m.env.Width, m.env.Height)
+}
+
+// steerViewedTask forwards one line the user typed to a running worker. It uses
+// the same inbox delivery as the SendMessage tool, so a steer is ordinary mail:
+// no new execution, no new permission, and the worker reads it at its next step.
+func (m *model) steerViewedTask(msg input.TaskSteerMsg) tea.Cmd {
+	if !m.consumeTaskAction(msg.ViewID) {
+		return nil
+	}
+	worker, known := m.services.Task.Get(msg.TaskID)
+	if !known {
+		m.resumeTaskViewer()
+		return nil
+	}
+	info := worker.GetStatus()
+	if !worker.IsRunning() || info.Attempt != msg.Attempt {
+		m.conv.AddNotice("Task " + msg.TaskID + " is no longer running; nothing was sent")
+		m.resumeTaskViewer()
+		return nil
+	}
+	if err := agenttool.DeliverToRunning(m.services.Task, msg.TaskID, m.sessionID(), "", msg.Message); err != nil {
+		m.conv.AddNotice("Could not message task " + msg.TaskID + ": " + err.Error())
+		m.resumeTaskViewer()
+		return nil
+	}
+	subject := info.AgentName
+	if subject == "" {
+		subject = msg.TaskID
+	}
+	m.conv.AddNotice("Steered " + subject + ": " + msg.Message)
+	m.resumeTaskViewer()
+	return nil
 }
 
 func (m *model) stopViewedTask(msg input.TaskStopMsg) tea.Cmd {

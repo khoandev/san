@@ -304,6 +304,8 @@ func (e *Executor) Run(ctx context.Context, req tool.AgentExecRequest) (*AgentRe
 	run.checkpoint = newContinuationState(run, e.parentSessionID, worker.GetID())
 	worker.SetLaunchState(run.checkpoint)
 	worker.SetPermissionMode(string(run.cfg.permMode))
+	worker.SetModel(run.cfg.modelID)
+	run.onSession = func(sessionID string) { worker.SetIdentity(run.cfg.config.Name, sessionID) }
 	result, err := e.runPrepared(ctx, run)
 	if result != nil {
 		worker.SetIdentity(run.cfg.config.Name, result.AgentID)
@@ -449,6 +451,8 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 	}
 	agentTask.SetIdentity(identity, "")
 	agentTask.SetPermissionMode(string(run.cfg.permMode))
+	agentTask.SetModel(run.cfg.modelID)
+	run.onSession = func(sessionID string) { agentTask.SetIdentity(identity, sessionID) }
 
 	run.req.TaskID = agentTask.GetID()
 	run.reportIdentity() // Report on the spawning call, before returning the launch.
@@ -848,6 +852,7 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 		MaxSteps:       rc.maxSteps,
 		OutboxBuf:      -1,
 		OnEvent:        onEvent,
+		ResultFilter:   e.resultFilter(run),
 	})
 
 	return ag, cleanup, nil

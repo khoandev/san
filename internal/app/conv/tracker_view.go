@@ -42,8 +42,11 @@ type TrackerListParams struct {
 	// the status palette.
 	AgentColors map[string]string
 	// WorkerStatus provides display-only live activity and output-log health.
+	// It answers with a Brief rather than a TaskInfo: this runs twice per
+	// visible row on every frame, and a status read copies the worker's whole
+	// retained output (up to 512 KiB) to print one line of it.
 	AwaitingApproval map[string]bool
-	WorkerStatus     func(taskID string) task.TaskInfo
+	WorkerStatus     func(taskID string) task.Brief
 
 	// PlanTitle names the plan whose steps are projected into Items. Empty
 	// means no plan owns rows, and the strip is a plain todo list.

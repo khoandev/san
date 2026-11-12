@@ -457,8 +457,9 @@ func (m *model) renderTrackerList() string {
 		running = m.services.Task.ListRunning()
 		liveWorkflowIDs := make(map[string]bool)
 		for _, bg := range running {
-			info := bg.GetStatus()
-			if info.AgentName == "workflow" && info.LiveView != "" {
+			// BriefOf, not GetStatus: this frame path needs two fields and a
+			// status read would copy the worker's retained output.
+			if info := task.BriefOf(bg); info.AgentName == "workflow" && info.LiveView != "" {
 				liveWorkflowIDs[info.ID] = true
 			}
 		}
@@ -489,13 +490,13 @@ func (m *model) renderTrackerList() string {
 		Executing:        m.executingTrackerItem,
 		AgentColors:      m.agentColors(),
 		AwaitingApproval: m.pendingTaskApprovals(),
-		WorkerStatus: func(id string) task.TaskInfo {
+		WorkerStatus: func(id string) task.Brief {
 			if m.services.Task != nil {
 				if worker, ok := m.services.Task.Get(id); ok {
-					return worker.GetStatus()
+					return task.BriefOf(worker)
 				}
 			}
-			return task.TaskInfo{}
+			return task.Brief{}
 		},
 		PlanTitle:      title,
 		PlanStatusNote: note,
@@ -537,13 +538,14 @@ func (m *model) trackerPlanHeading() (title, note string, paused, awaiting bool)
 
 func appendLiveWorkflowViews(view string, running []task.BackgroundTask, frame, width int) string {
 	type liveWorkflow struct {
-		info task.TaskInfo
+		info task.Brief
 		task task.BackgroundTask
 	}
 	var workflows []liveWorkflow
 	for _, bg := range running {
-		info := bg.GetStatus()
-		if info.AgentName == "workflow" && info.LiveView != "" {
+		// BriefOf: this frame path draws the view the renderer supplies and
+		// never reads the retained output.
+		if info := task.BriefOf(bg); info.AgentName == "workflow" && info.LiveView != "" {
 			workflows = append(workflows, liveWorkflow{info: info, task: bg})
 		}
 	}
@@ -722,16 +724,17 @@ func (m model) renderQueuePreview() string {
 func (m model) messageRenderParams() conv.RenderContext {
 	var activeAgentIDs []string
 	if m.services.Task != nil {
-		for _, worker := range m.services.Task.List() {
-			info := worker.GetStatus()
-			if info.Type != task.TaskTypeAgent {
+		// Brief, not GetStatus: this runs several times per frame, and a status
+		// read copies each task's retained output.
+		for _, brief := range m.services.Task.ListBriefs() {
+			if brief.Type != task.TaskTypeAgent {
 				continue
 			}
-			if info.ParentSessionID != "" && info.ParentSessionID != m.sessionID() {
+			if brief.ParentSessionID != "" && brief.ParentSessionID != m.sessionID() {
 				continue
 			}
-			if info.Status == task.StatusRunning || !m.taskCompletionsShown[taskCompletionKey(info.ID, info.Attempt)] {
-				activeAgentIDs = append(activeAgentIDs, info.ID, info.AgentSessionID)
+			if brief.Status == task.StatusRunning || !m.taskCompletionsShown[taskCompletionKey(brief.ID, brief.Attempt)] {
+				activeAgentIDs = append(activeAgentIDs, brief.ID, brief.AgentSessionID)
 			}
 		}
 	}

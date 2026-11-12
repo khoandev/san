@@ -51,7 +51,13 @@ func (h *TranscriptViewer) Enter(title string, lines []string, width, height int
 // EnterEntries opens at the most recent tool result, every result expanded:
 // this view is for reading what the chat folds.
 func (h *TranscriptViewer) EnterEntries(entries []TranscriptEntry, width, height int) {
-	h.Enter("History", nil, width, height)
+	h.EnterEntriesTitled("History", entries, width, height)
+}
+
+// EnterEntriesTitled is the same view under a caller's title, so a worker's
+// conversation is never mislabelled as this session's history.
+func (h *TranscriptViewer) EnterEntriesTitled(title string, entries []TranscriptEntry, width, height int) {
+	h.Enter(title, nil, width, height)
 	h.entries = entries
 	for i, entry := range entries {
 		if entry.Tool {
@@ -193,7 +199,7 @@ func (h *TranscriptViewer) Render() string {
 	title := h.title
 	if len(h.tools) > 0 {
 		entry := h.entries[h.tools[h.selected]]
-		title = fmt.Sprintf("History · tool %d/%d · %s", h.selected+1, len(h.tools), entry.Label)
+		title = fmt.Sprintf("%s · tool %d/%d · %s", h.title, h.selected+1, len(h.tools), entry.Label)
 	}
 	return strings.Join([]string{
 		separator,

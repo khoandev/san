@@ -240,6 +240,13 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.continueViewedTask(msg)
 	case input.TaskReviewApprovalMsg:
 		return m, m.reviewTaskApproval(msg)
+	case input.TaskTranscriptMsg:
+		return m, m.openTaskTranscript(msg)
+	case input.TaskSteerMsg:
+		return m, m.steerViewedTask(msg)
+	case taskTranscriptLoadedMsg:
+		m.taskTranscriptLoaded(msg)
+		return m, nil
 	case input.TaskViewerClosedMsg:
 		if m.consumeTaskAction(msg.ViewID) {
 			m.hideTaskViewer()

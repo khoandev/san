@@ -126,6 +126,20 @@ func (m *Manager) List() []BackgroundTask {
 	return tasks
 }
 
+// ListBriefs reads every task's identity without copying retained output. A
+// renderer that only needs to know which workers are live must prefer it over
+// List+GetStatus, which copies up to 512 KiB per task on every frame.
+func (m *Manager) ListBriefs() []Brief {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	briefs := make([]Brief, 0, len(m.tasks))
+	for _, t := range m.tasks {
+		briefs = append(briefs, BriefOf(t))
+	}
+	return briefs
+}
+
 // ListRunning returns all running tasks
 func (m *Manager) ListRunning() []BackgroundTask {
 	m.mu.RLock()

@@ -117,15 +117,22 @@ func (t *SendMessageTool) execute(ctx context.Context, params map[string]any) to
 		}
 	}
 
-	display := brokerSubject(from, subject)
-	delivered := broker.Send(broker.Message{
-		SessionID: task.SessionIDFromContext(ctx),
-		From:      from,
-		To:        to,
-		Subject:   display,
-		Content:   wrapAgentMessage(from, display, message),
-	})
-	if !delivered {
+	sessionID := task.SessionIDFromContext(ctx)
+	var delivered error
+	if from == broker.Main {
+		delivered = DeliverToRunning(task.Default(), to, sessionID, subject, message)
+	} else {
+		// A peer sender addresses an agent id, not only "main", so it keeps the
+		// direct broker path; the shared helper speaks for the main conversation.
+		display := brokerSubject(from, subject)
+		if !broker.Send(broker.Message{
+			SessionID: sessionID, From: from, To: to, Subject: display,
+			Content: wrapAgentMessage(from, display, message),
+		}) {
+			delivered = fmt.Errorf("worker %q is starting up or its inbox is momentarily full", to)
+		}
+	}
+	if delivered != nil {
 		if worker, found := task.Default().Get(to); found && worker.GetType() == task.TaskTypeAgent {
 			if info := worker.GetStatus(); info.Status != task.StatusRunning {
 				return t.continueWorker(ctx, info, subject, message)
