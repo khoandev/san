@@ -333,7 +333,6 @@ func updateSettingsFile(scope Scope, mutate func(*Data)) error {
 	return nil
 }
 
-// UpdateSelfLearnAt persists the L1 self-learning config at the requested
 // ModelRoleName normalizes and validates a role name for modelRoles. Names are
 // one namespace, not two spellings of one namespace, so the returned name is
 // lowercase; a name that cannot be a role is an error the caller shows inline
