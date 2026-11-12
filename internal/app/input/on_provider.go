@@ -151,6 +151,7 @@ type ProviderSelector struct {
 	width  int
 	height int
 	store  *llm.Store
+	cwd    string
 
 	// Tab
 	activeTab providerTab

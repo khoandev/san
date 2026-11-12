@@ -559,6 +559,7 @@ func (c *SlashCommandController) handleModelCommand(ctx context.Context, _ strin
 	// The Roles tab reads and writes live settings, so the surface is rebound on
 	// every open — settings may have been reloaded since the last one.
 	c.env.Input.Provider.Selector.SetRoleSource(c.roleSource())
+	c.env.Input.Provider.Selector.cwd = c.env.Cwd
 	cmd, err := c.env.Input.Provider.Selector.Enter(ctx, c.env.Width, c.env.Height)
 	if err != nil {
 		return "", nil, err
