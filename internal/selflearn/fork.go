@@ -26,8 +26,12 @@ const forkDeadline = 5 * time.Minute
 // skill actions this pass may take are read from Skills.Perms() — the prompt is
 // tailored to them and the manager enforces them at dispatch.
 type ForkConfig struct {
-	Client      func(msgs []core.Message) (*ai.Client, error)
-	CallOptions func() []ai.Option
+	Client func(msgs []core.Message) (*ai.Client, error)
+	// PrepareMessages adapts one inference's input without changing the
+	// snapshot. A review reads a whole session, so it is the one call that
+	// most needs stale tool output trimmed.
+	PrepareMessages func([]core.Message) []core.Message
+	CallOptions     func() []ai.Option
 	// ShapeInference settles the wire shape of one inference for the vendor
 	// that reads it; nil sends the prompt and roster unchanged.
 	ShapeInference func(system string, tools []ai.Schema) (string, []ai.Schema)
@@ -72,15 +76,16 @@ func RunReview(ctx context.Context, fc ForkConfig, snapshot []core.Message) (str
 	tools := core.NewTools(newSkillManageTool(fc.Skills))
 
 	ag := core.NewAgent(core.Config{
-		Client:         fc.Client,
-		CallOptions:    fc.CallOptions,
-		ShapeInference: fc.ShapeInference,
-		System:         sys,
-		Tools:          tools,
-		Gate:           tool.Permission(allowOnly(tools)),
-		MaxSteps:       forkMaxSteps,
-		OutboxBuf:      -1, // no outbox: this fork is headless, driven via ThinkAct
-		OnEvent:        fc.OnEvent,
+		Client:          fc.Client,
+		PrepareMessages: fc.PrepareMessages,
+		CallOptions:     fc.CallOptions,
+		ShapeInference:  fc.ShapeInference,
+		System:          sys,
+		Tools:           tools,
+		Gate:            tool.Permission(allowOnly(tools)),
+		MaxSteps:        forkMaxSteps,
+		OutboxBuf:       -1, // no outbox: this fork is headless, driven via ThinkAct
+		OnEvent:         fc.OnEvent,
 	})
 
 	// Trim trailing user-role messages (user-typed turns and tool results, both

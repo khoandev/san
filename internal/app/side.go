@@ -53,7 +53,10 @@ func (m *model) newSideRequest(label, prompt string) sideRequest {
 
 // complete sends the request. A tool call in the reply is never run.
 func (r sideRequest) complete(ctx context.Context) (llm.CompletionResponse, error) {
-	msgs := r.client.RequestMessages(withSidePrompt(r.chain, r.prompt))
+	// PrepareRequest, not RequestMessages: a side question is answered from the
+	// same prefix the main turn sends, so a stale result travels as the same
+	// preview here — the prompt cache hits, and the question costs a fraction.
+	msgs := r.client.PrepareRequest(withSidePrompt(r.chain, r.prompt))
 	resp, err := r.client.Complete(ctx, r.system, msgs, r.schemas, 0)
 	if err == nil {
 		log.Logger().Debug("side request answered", zap.String("label", r.label), zap.Int("input", resp.Usage.Input), zap.Int("cache_read", resp.Usage.CacheRead), zap.Int("cache_write", resp.Usage.CacheWrite), zap.Int("output", resp.Usage.Output))

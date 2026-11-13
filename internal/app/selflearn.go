@@ -189,14 +189,15 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 		client.SetSessionID(forkSessionID)
 		client.SetWorkingDir(func() string { return m.env.CWD })
 		fc := selflearn.ForkConfig{
-			Client:         client.TurnClient,
-			CallOptions:    client.CallOptions,
-			ShapeInference: client.ShapeInference,
-			System:         sys,
-			CWD:            m.env.CWD,
-			Skills:         skillMgr,
-			Strategy:       cfg.Strategy,
-			OnEvent:        forkOnEvent,
+			Client:          client.TurnClient,
+			PrepareMessages: client.PrepareRequest,
+			CallOptions:     client.CallOptions,
+			ShapeInference:  client.ShapeInference,
+			System:          sys,
+			CWD:             m.env.CWD,
+			Skills:          skillMgr,
+			Strategy:        cfg.Strategy,
+			OnEvent:         forkOnEvent,
 		}
 		llmSummary, runErr := selflearn.RunReview(reviewCtx, fc, snapshot)
 		// Re-check live AFTER the RunReview return. This is the macro
