@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/task"
 	"github.com/genai-io/san/internal/todo"
 )
@@ -80,6 +81,52 @@ func BenchmarkFrameRender(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
+		m.viewString()
+	}
+}
+
+// streamingFrameModel is the frame the person waits on: a long reply arriving
+// chunk by chunk, redrawn on every token batch, with the blocks that already
+// completed already handed to scrollback (see FlushStreamingBlocks). Only the
+// block still being written stays live, which is what the app actually draws.
+func streamingFrameModel(b testing.TB, settled, tail string) (*model, *core.ChatMessage) {
+	b.Helper()
+	m := benchmarkFrameModel(b, 40, 3)
+	m.conv.Stream.Active = true
+	m.conv.Stream.StartedAt = time.Now()
+	m.conv.Stream.Inferring = true
+	m.conv.Messages = append(m.conv.Messages, core.ChatMessage{
+		ID: "stream-1", Role: core.ChatAssistant, Content: settled + tail, ContentCommittedLen: len(settled),
+	})
+	m.conv.Stream.MessageID = "stream-1"
+	return m, &m.conv.Messages[len(m.conv.Messages)-1]
+}
+
+// BenchmarkFrameRenderStreamingReply grows the trailing paragraph by a word per
+// frame, the shape a streamed answer has. A frame that re-wraps the settled part
+// of the block pays for it here.
+func BenchmarkFrameRenderStreamingReply(b *testing.B) {
+	settled := strings.Repeat("A paragraph of the answer that keeps arriving, with `code` in it.\n\n", 60)
+	m, row := streamingFrameModel(b, settled, "The final paragraph that keeps arriving, word by word, until it ends.")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		row.Content += " more"
+		m.viewString()
+	}
+}
+
+// BenchmarkFrameRenderStreamingLongBlock is the same frame while a long fenced
+// block streams: the tail is one block with hundreds of rows, and it stays live
+// until the model closes the fence.
+func BenchmarkFrameRenderStreamingLongBlock(b *testing.B) {
+	settled := strings.Repeat("A paragraph of the answer that keeps arriving.\n\n", 40)
+	tail := "```go\n" + strings.Repeat("func handler(w http.ResponseWriter, r *http.Request) error {\n", 320)
+	m, row := streamingFrameModel(b, settled, tail)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		row.Content += "x"
 		m.viewString()
 	}
 }

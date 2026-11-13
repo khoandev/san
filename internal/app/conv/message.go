@@ -413,8 +413,8 @@ func RenderAssistantMessage(params AssistantParams) string {
 
 	if row := params.waitingRow(); row != "" {
 		sb.WriteString(row + "\n")
-	} else if content := formatAssistantContent(params); content != "" {
-		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, aiIcon, content) + "\n")
+	} else if content := formatAssistantContent(params, aiIcon); content != "" {
+		sb.WriteString(content + "\n")
 	}
 
 	if interrupted {
@@ -424,8 +424,11 @@ func RenderAssistantMessage(params AssistantParams) string {
 	return sb.String()
 }
 
-// formatAssistantContent formats the assistant message content based on streaming state.
-func formatAssistantContent(params AssistantParams) string {
+// formatAssistantContent formats the assistant message content based on streaming
+// state. The returned block already carries gutter, the "• " lead or its blank
+// continuation: the plain streaming tail joins its own rows, everything else is
+// joined here. Returning "" means the message draws no content row at all.
+func formatAssistantContent(params AssistantParams, gutter string) string {
 	if params.StreamActive && params.IsLast && len(params.ToolCalls) == 0 {
 		if params.Content == "" {
 			if params.SuppressWaitingRow {
@@ -434,23 +437,31 @@ func formatAssistantContent(params AssistantParams) string {
 			}
 			// Nothing new to draw (the gap right after a block commits): a lone
 			// space keeps the row, so the tail does not jump between blocks.
-			return " "
+			return gutter + " "
 		}
 		// Plain-wrap the streaming tail so its \n-line count matches the height
 		// calc; reserve streamWrapReserve cols (gutter + last-column slack).
 		wrapWidth := max(params.Width-streamWrapReserve, minWrapWidth)
-		return lipgloss.NewStyle().Width(wrapWidth).Render(params.Content)
+		if params.MDRenderer != nil {
+			// The tail grows token by token: re-wrap only the line that changed,
+			// and join the gutter without measuring rows that were measured when
+			// they were produced.
+			if joined, ok := params.MDRenderer.RenderPlainTail(params.Content, gutter, wrapWidth); ok {
+				return joined
+			}
+		}
+		return lipgloss.JoinHorizontal(lipgloss.Top, gutter, lipgloss.NewStyle().Width(wrapWidth).Render(params.Content))
 	}
 
 	if params.Content == "" {
 		return ""
 	}
 
+	body := params.Content
 	if params.MDRenderer != nil {
-		return renderMarkdownContent(params.MDRenderer, params.Content)
+		body = renderMarkdownContent(params.MDRenderer, params.Content)
 	}
-
-	return params.Content
+	return lipgloss.JoinHorizontal(lipgloss.Top, gutter, body)
 }
 
 // renderMarkdownContent renders content through the markdown renderer, dropping

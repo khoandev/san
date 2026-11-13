@@ -69,6 +69,8 @@ type MDRenderer struct {
 	// agentChild caches the narrower renderer for subagent/task bodies. Reuse
 	// preserves its render cache across repaints; rebuild on resize or theme change.
 	agentChild *MDRenderer
+	// tail memoizes the plain streaming tail's wrap; see RenderPlainTail.
+	tail plainTail
 }
 
 // mdCacheMax bounds the render cache. The live working set (the active tail's
