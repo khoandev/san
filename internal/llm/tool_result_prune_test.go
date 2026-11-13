@@ -86,6 +86,12 @@ func TestPruneStaleToolResultsShrinksTheRequestNotTheConversation(t *testing.T) 
 	if want := (len(messages) - 1) / 2; results != want {
 		t.Fatalf("pruning changed the block count: %d results, want %d", results, want)
 	}
+	// Nothing in the request may write through to the conversation it copied,
+	// so a mutation on the sent side leaves the stored result alone.
+	sent[2].Content[0].ToolResult.Content[0].Text = "rewritten"
+	if messages[2].Content[0].ToolResult.Text() == "rewritten" {
+		t.Fatal("the request aliases a stored result's content")
+	}
 }
 
 func TestPruneStaleToolResultsIsIdempotent(t *testing.T) {
