@@ -69,13 +69,15 @@ const sampleCatalog = "Available predefined agents:\n\n" +
 // cannot creep back into a wall of prose.
 func TestAgentSchemaTeachesTiersAndStaysLean(t *testing.T) {
 	// The prose without a catalog is what this package owns, so it carries the
-	// tighter bound; the catalog is the registry's to size.
-	if base := len(agentSchema("").Description); base > 950 {
-		t.Errorf("catalog-free description = %d chars, want <= 950", base)
+	// tighter bound; the catalog is the registry's to size. The bounds carry the
+	// retry-safety sentence merged from upstream, which is prose this package
+	// owns, and nothing more.
+	if base := len(agentSchema("").Description); base > 970 {
+		t.Errorf("catalog-free description = %d chars, want <= 970", base)
 	}
 	full := agentSchema(sampleCatalog).Description
-	if len(full) > 1800 {
-		t.Errorf("description with a four-entry catalog = %d chars, want <= 1800", len(full))
+	if len(full) > 1870 {
+		t.Errorf("description with a four-entry catalog = %d chars, want <= 1870", len(full))
 	}
 	for _, want := range []string{
 		"- explore [read-only, @fast, fast]",

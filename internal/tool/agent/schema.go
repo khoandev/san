@@ -78,7 +78,7 @@ func agentSchema(agentCatalog string) core.ToolSchema {
 	sb.WriteString("- standard: the goal, the paths involved, and the definition of done.\n")
 	sb.WriteString("- deep: the goal, exact files, constraints, acceptance criteria, risks.\n\n")
 	sb.WriteString("Brief with only task-local context: goal, paths, constraints, known findings, the validation plan. Report a failed tool and its reason instead of retrying a denied command.\n\n")
-	sb.WriteString("Launch independent tasks concurrently: foreground when you need the result to proceed, background when you can continue useful work. Do not duplicate delegated work, and verify the result before reporting it. SendMessage to the returned Task ID continues the same session, model and tier.")
+	sb.WriteString("Launch independent tasks concurrently: foreground when you need the result to proceed, background when you can continue useful work. Do not duplicate delegated work, and verify the result before reporting it. SendMessage to the returned Task ID continues the same session, model and tier. Check uncertain side effects before retrying failed work.")
 
 	return core.ToolSchema{
 		Name:        "Agent",

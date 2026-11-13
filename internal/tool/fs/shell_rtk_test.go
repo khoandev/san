@@ -73,7 +73,11 @@ func TestRTKBackgroundTaskKeepsTheModelCommand(t *testing.T) {
 	log := installRTKOnPath(t)
 	cwd := t.TempDir()
 
-	result := tool.executeBackground(context.Background(), "git status", "check status", cwd, 5*time.Second, task.LifetimeJob)
+	selected, err := tool.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tool.executeBackground(context.Background(), selected, "git status", "check status", cwd, 5*time.Second, task.LifetimeJob)
 	if !result.Success {
 		t.Fatalf("executeBackground() failed: %s", result.Error)
 	}
@@ -104,7 +108,11 @@ func TestRTKServiceCommandIsNotRewritten(t *testing.T) {
 	tool := bashTool(t)
 	log := installRTKOnPath(t)
 
-	result := tool.executeBackground(context.Background(), "rtk echo service-raw", "dev server", t.TempDir(), 0, task.LifetimeService)
+	selected, err := tool.resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tool.executeBackground(context.Background(), selected, "rtk echo service-raw", "dev server", t.TempDir(), 0, task.LifetimeService)
 	if !result.Success {
 		t.Fatalf("executeBackground() failed: %s", result.Error)
 	}
