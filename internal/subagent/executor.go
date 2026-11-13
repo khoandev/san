@@ -841,18 +841,19 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 	llmClient.SetSessionID(e.parentSessionID)
 	llmClient.SetWorkingDir(run.currentCwd)
 	ag = core.NewAgent(core.Config{
-		Client:         llmClient.TurnClient,
-		CallOptions:    llmClient.CallOptions,
-		ShapeInference: llmClient.ShapeInference,
-		ContextBudget:  llmClient.ContextBudget,
-		System:         sys,
-		Tools:          tools,
-		Gate:           gate,
-		CompactFunc:    subagentCompactFunc(llmClient, run.originalPrompt),
-		MaxSteps:       rc.maxSteps,
-		OutboxBuf:      -1,
-		OnEvent:        onEvent,
-		ResultFilter:   e.resultFilter(run),
+		Client:          llmClient.TurnClient,
+		PrepareMessages: llmClient.PrepareRequest,
+		CallOptions:     llmClient.CallOptions,
+		ShapeInference:  llmClient.ShapeInference,
+		ContextBudget:   llmClient.ContextBudget,
+		System:          sys,
+		Tools:           tools,
+		Gate:            gate,
+		CompactFunc:     subagentCompactFunc(llmClient, run.originalPrompt),
+		MaxSteps:        rc.maxSteps,
+		OutboxBuf:       -1,
+		OnEvent:         onEvent,
+		ResultFilter:    e.resultFilter(run),
 	})
 
 	return ag, cleanup, nil

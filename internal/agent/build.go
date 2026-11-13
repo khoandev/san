@@ -262,7 +262,7 @@ func buildAgentWithOutbox(p BuildParams, outboxBuf int) (core.Agent, *Permission
 	ag = core.NewAgent(core.Config{
 		ID:              "main",
 		Client:          client.TurnClient,
-		PrepareMessages: client.RequestMessages,
+		PrepareMessages: client.PrepareRequest, // stale tool results shrink here, in the request only
 		CallOptions:     client.CallOptions,
 		ShapeInference:  client.ShapeInference,
 		ContextBudget:   client.ContextBudget,
