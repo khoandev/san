@@ -36,6 +36,42 @@ func hasAction(actions []string, want string) bool {
 	return false
 }
 
+// The caller decides what the first Execute new plan carries: fast verify opens
+// the panel on compact, while an explicit choice made with "c" survives a
+// reopen instead of being reset by the caller's default.
+func TestPlanPanelDefaultsTheExecuteContext(t *testing.T) {
+	ready := panelPlan("plan-1", "Split auth", "read", "move")
+	ready.Status = plan.StatusPendingApproval
+	state := plan.State{Mode: plan.ModePlan, Plans: []plan.Plan{ready}, ActiveID: ready.ID}
+
+	p := NewPlanPanel()
+	p.Enter(state, 100, 40, PlanContextCompact)
+	if got := p.Context(); got != PlanContextCompact {
+		t.Fatalf("first Execute new plan carries %q, want compact", got)
+	}
+
+	p.HandleKeypress(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	if got := p.Context(); got != PlanContextFresh {
+		t.Fatalf("c should step compact to fresh, got %q", got)
+	}
+	p.Enter(state, 100, 40, PlanContextCompact)
+	if got := p.Context(); got != PlanContextFresh {
+		t.Fatalf("reopening reset the person's choice to %q", got)
+	}
+
+	// No default, or an empty one, keeps the legacy opening: the planning
+	// conversation carries over.
+	plain := NewPlanPanel()
+	plain.Enter(state, 100, 40)
+	if got := plain.Context(); got != PlanContextKeep {
+		t.Fatalf("without a default the panel opened on %q, want keep", got)
+	}
+	plain.Enter(state, 100, 40, "")
+	if got := plain.Context(); got != PlanContextKeep {
+		t.Fatalf("an empty default moved the panel to %q", got)
+	}
+}
+
 // A ready plan offers Execute new plan without any further command, and the
 // panel renders the plan, its steps and the buttons.
 func TestPlanPanelShowsReadyPlan(t *testing.T) {

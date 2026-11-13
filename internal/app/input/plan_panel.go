@@ -119,8 +119,12 @@ func NewPlanPanel() PlanPanel {
 	return PlanPanel{editor: newChromelessTextarea()}
 }
 
-// Enter opens the panel on a snapshot of the session's plan state.
-func (p *PlanPanel) Enter(state plan.State, width, height int) {
+// Enter opens the panel on a snapshot of the session's plan state. An optional
+// default context decides what the first Execute new plan carries: the caller
+// passes compact when fast verify is on, because carrying the planning
+// exploration into every step is the cost that policy exists to cut. The choice
+// then sticks, so a later Enter never overrides what the person picked.
+func (p *PlanPanel) Enter(state plan.State, width, height int, defaults ...PlanContext) {
 	p.state = state.Clone()
 	p.active = true
 	p.editing = false
@@ -128,6 +132,9 @@ func (p *PlanPanel) Enter(state plan.State, width, height int) {
 	p.cursor = 0
 	if p.context == "" {
 		p.context = PlanContextKeep
+		if len(defaults) > 0 && defaults[0] != "" {
+			p.context = defaults[0]
+		}
 	}
 	p.Resize(width, height)
 	p.invalidate()

@@ -178,9 +178,28 @@ type Data struct {
 	Advisor AdvisorSettings `json:"advisor,omitzero"`
 	// Agents tunes how delegations are routed (JSON key "agents").
 	Agents AgentsSettings `json:"agents,omitzero"`
+	// Plan tunes how an approved plan executes its steps (JSON key "plan").
+	Plan PlanSettings `json:"plan,omitzero"`
 	// LastOperationMode is the user-wide mode restored when starting a new session.
 	LastOperationMode string `json:"lastOperationMode,omitempty"`
 }
+
+// PlanSettings tunes how an approved plan runs its steps (JSON key "plan").
+type PlanSettings struct {
+	// FastVerify scopes a step's verification to the packages it touched and
+	// leaves the full suite to the plan's last step (JSON key
+	// "plan.fastVerify"). Opt-out: nil/absent means on; false restores the
+	// "prove every criterion on every step" contract. Read via
+	// Settings.PlanFastVerify; only internal/plan decides what it renders.
+	FastVerify *bool `json:"fastVerify,omitempty"`
+}
+
+// FastVerifyOn reports whether plan steps verify narrowly. Unset counts as on.
+func (p PlanSettings) FastVerifyOn() bool { return p.FastVerify == nil || *p.FastVerify }
+
+// IsZero reports whether the block configures nothing, so settings.json omits
+// an empty "plan" object.
+func (p PlanSettings) IsZero() bool { return p.FastVerify == nil }
 
 // AgentsSettings tunes how the Agent tool picks a worker, and which model role
 // a built-in agent runs on.
@@ -1066,6 +1085,7 @@ func (s *Data) Clone() *Data {
 	dst.AutoMemory = clonePtr(s.AutoMemory)
 	dst.Agents.AutoTier = clonePtr(s.Agents.AutoTier)
 	dst.Agents.Roles = maps.Clone(s.Agents.Roles) // nil stays nil: omitempty
+	dst.Plan.FastVerify = clonePtr(s.Plan.FastVerify)
 	dst.ContextBar = clonePtr(s.ContextBar)
 	dst.GitBar = clonePtr(s.GitBar)
 	dst.SkillCommands = clonePtr(s.SkillCommands)

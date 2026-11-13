@@ -104,6 +104,15 @@ func (s *Settings) AutoTier() bool {
 	return s.data == nil || s.data.Agents.AutoTierOn()
 }
 
+// PlanFastVerify reports whether an approved plan verifies narrowly: each step
+// runs only the tests of the packages it touched, and the full suite belongs to
+// the plan's last step. Opt-out: on unless "plan.fastVerify" is false.
+func (s *Settings) PlanFastVerify() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data == nil || s.data.Plan.FastVerifyOn()
+}
+
 // ShowSkillCommands reports whether skills are listed in the "/" command menu.
 // Opt-out: listed unless the user sets "skillCommands": false. Hiding is a menu
 // preference only — a skill still runs when its "/<skill>" is typed.

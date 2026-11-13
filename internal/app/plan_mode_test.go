@@ -137,6 +137,47 @@ func TestPlanCommandWithPromptStartsPlanning(t *testing.T) {
 	}
 }
 
+// Fast verify reaches the executor two ways: the step prompt carries the
+// policy, and the panel opens on the compact context, since carrying the
+// planning exploration into every step is the cost the policy exists to cut.
+func TestFastVerifyReachesTheStepPromptAndThePanel(t *testing.T) {
+	off := false
+	for _, tc := range []struct {
+		name    string
+		setting *setting.Settings
+		fast    bool
+		context input.PlanContext
+	}{
+		{"default", nil, true, input.PlanContextCompact},
+		{"opted out", setting.New(&setting.Data{Plan: setting.PlanSettings{FastVerify: &off}}), false, input.PlanContextKeep},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newPlanModel(t)
+			m.services.Setting = tc.setting
+			if got := m.planStepOptions().FastVerify; got != tc.fast {
+				t.Fatalf("step options fast verify = %v, want %v", got, tc.fast)
+			}
+			if got := m.planReadyContext(); got != tc.context {
+				t.Fatalf("ready context = %q, want %q", got, tc.context)
+			}
+
+			block := "```plan\n" + `{
+  "title": "Split auth",
+  "goal": "one package owns credentials",
+  "steps": [{"title": "read the code"}, {"title": "move files"}]
+}` + "\n```"
+			m.enterPlanMode()
+			m.onPlanTurn(core.Result{Content: block, StopReason: core.StopEndTurn})
+			if !m.userInput.Plan.IsActive() {
+				t.Fatal("the Execution Panel did not open")
+			}
+			if got := m.userInput.Plan.Context(); got != tc.context {
+				t.Fatalf("the panel opened on %q, want %q", got, tc.context)
+			}
+		})
+	}
+}
+
 // The Plan Mode contract is prompt state, not message content: offered while
 // planning, withdrawn when the session leaves the mode.
 func TestPlanModeRulesRideOnTheSystemPrompt(t *testing.T) {

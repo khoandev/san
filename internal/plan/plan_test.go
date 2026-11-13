@@ -491,9 +491,36 @@ func TestPlanModeRulesDocumentThePlanBlock(t *testing.T) {
 	}
 }
 
+// TestPlanModeRulesStayWithinBudget keeps the contract cheap. It rides on the
+// system prompt of every planning request, so a paragraph added here is paid
+// on every cache miss; the budget is a ceiling, not a target.
+func TestPlanModeRulesStayWithinBudget(t *testing.T) {
+	const budget = 2300
+	n := len(PlanModeRules)
+	t.Logf("PlanModeRules is %d bytes (budget %d)", n, budget)
+	if n > budget {
+		t.Fatalf("PlanModeRules is %d bytes, over the %d-byte budget: trim before adding", n, budget)
+	}
+}
+
+// TestPlanModeRulesCarryTheVerificationLadder pins the two habits fast verify
+// depends on: a step's verification is scoped to what it touched, with the full
+// suite left to the last step, and the executor keeps no second todo list.
+func TestPlanModeRulesCarryTheVerificationLadder(t *testing.T) {
+	for _, want := range []string{
+		"narrowest command that proves",
+		"full suite",
+		"create or update tasks yourself",
+	} {
+		if !strings.Contains(PlanModeRules, want) {
+			t.Errorf("the contract should state %q", want)
+		}
+	}
+}
+
 func TestStepPromptNamesOnlyTheCurrentStep(t *testing.T) {
 	p := draftPlan(t)
-	got := StepPrompt(p, p.Steps[1], 1)
+	got := StepPrompt(p, p.Steps[1], 1, StepOptions{})
 	if !strings.Contains(got, "Wire /plan") {
 		t.Fatal("step objective missing")
 	}
@@ -502,6 +529,54 @@ func TestStepPromptNamesOnlyTheCurrentStep(t *testing.T) {
 	}
 	if !strings.Contains(got, "Execute ONLY the current step") {
 		t.Fatal("one-step rule missing")
+	}
+	if !strings.Contains(got, "Verify the result against every criterion above") {
+		t.Fatal("with the policy off a step still proves every criterion")
+	}
+}
+
+// Fast verify moves the full suite to the last step: a middle step proves
+// itself with the narrowest command and is told not to run the full suite, the
+// last step spends the one full run, and the opt-out restores per-step proof of
+// every criterion.
+func TestStepPromptScopesVerificationToTheStep(t *testing.T) {
+	p := draftPlan(t)
+	fast := StepOptions{FastVerify: true}
+
+	mid := StepPrompt(p, p.Steps[0], 0, fast)
+	if !strings.Contains(mid, "narrowest command that proves") {
+		t.Fatalf("a middle step should verify narrowly: %q", mid)
+	}
+	if !strings.Contains(mid, "do not run the full suite or integration tests") {
+		t.Fatalf("a middle step should forbid the full run: %q", mid)
+	}
+	if strings.Contains(mid, "This is the last step") {
+		t.Fatalf("a middle step should not claim the last-step budget: %q", mid)
+	}
+
+	last := StepPrompt(p, p.Steps[1], 1, fast)
+	if !strings.Contains(last, "full suite") || !strings.Contains(last, "./tests/integration/...") {
+		t.Fatalf("the last step should run the full suite: %q", last)
+	}
+	if strings.Contains(last, "narrowest command that proves") {
+		t.Fatalf("the last step should not fall back to a narrow command: %q", last)
+	}
+
+	off := StepPrompt(p, p.Steps[1], 1, StepOptions{})
+	if strings.Contains(off, "narrowest command that proves") {
+		t.Fatalf("opting out should not scope verification: %q", off)
+	}
+}
+
+// The harness already draws the plan's steps as the todo strip, so a step must
+// never open a second list beside it.
+func TestStepPromptForbidsASecondTodoList(t *testing.T) {
+	p := draftPlan(t)
+	for _, opts := range []StepOptions{{}, {FastVerify: true}} {
+		got := StepPrompt(p, p.Steps[0], 0, opts)
+		if !strings.Contains(got, "do not create or update tasks") {
+			t.Errorf("StepOptions%+v should forbid a second todo list: %q", opts, got)
+		}
 	}
 }
 

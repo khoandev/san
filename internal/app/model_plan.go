@@ -120,6 +120,23 @@ func (m *model) planModeRules() string {
 	return plan.PlanModeRules
 }
 
+// planStepOptions is the policy one approved step runs under. A model built
+// without a settings service follows the default: on.
+func (m *model) planStepOptions() plan.StepOptions {
+	return plan.StepOptions{FastVerify: m.services.Setting == nil || m.services.Setting.PlanFastVerify()}
+}
+
+// planReadyContext is the context an Execute new plan starts on. Fast verify
+// exists to spend less on a plan run, and the planning exploration is the
+// largest thing a run could carry, so it defaults to summarizing that
+// conversation; keep and fresh stay one keypress away.
+func (m *model) planReadyContext() input.PlanContext {
+	if m.planStepOptions().FastVerify {
+		return input.PlanContextCompact
+	}
+	return input.PlanContextKeep
+}
+
 // syncPlanModePrompt puts the Plan Mode contract on the live system prompt, or
 // takes it off. It rides on the prompt rather than on each user turn: a session
 // that plans for ten turns sent the rules ten times, paid for them in every
@@ -261,7 +278,7 @@ func (m *model) planNextStep() tea.Cmd {
 
 	chat := m.conv.Append(core.ChatMessage{
 		Role:           core.ChatUser,
-		Content:        plan.StepPrompt(active, step, index),
+		Content:        plan.StepPrompt(active, step, index, m.planStepOptions()),
 		DisplayContent: plan.StepDisplay(active, step, index),
 	})
 	message, _ := chat.ToMessage()
@@ -526,7 +543,7 @@ func (m *model) showPlanPanel() {
 			return
 		}
 	}
-	m.userInput.Plan.Enter(m.plan.Snapshot(), m.env.Width, m.env.Height)
+	m.userInput.Plan.Enter(m.plan.Snapshot(), m.env.Width, m.env.Height, m.planReadyContext())
 }
 
 func (m *model) refreshPlanPanel() {
