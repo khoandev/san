@@ -10,6 +10,9 @@ import (
 // nativeZshReviewReason fences automatic grants made by the Bash parser. It is
 // deliberately not a zsh parser: native expansions need human review, even when
 // mvdan accepts their text as Bash (notably code-bearing glob qualifiers).
+//
+// Fish needs no equivalent: it is not bash-compatible at all, so shellSpeaksBash
+// keeps every fish command away from the parser instead of reasoning about it.
 func nativeZshReviewReason(cmd string) string {
 	shell, err := proc.DefaultShell()
 	if err != nil {

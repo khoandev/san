@@ -92,6 +92,7 @@ func TestShellLabels(t *testing.T) {
 	}{
 		{Shell{Kind: ShellBash, Path: "bash"}, "bash"},
 		{Shell{Kind: ShellZsh, Path: "zsh"}, "zsh"},
+		{Shell{Kind: ShellFish, Path: "fish"}, "fish"},
 		{Shell{Kind: ShellPowerShell, Path: "pwsh.exe"}, "pwsh"},
 		{Shell{Kind: ShellPowerShell, Path: "powershell.exe"}, "PS"},
 		{Shell{Kind: ShellBash}, ""},
@@ -109,7 +110,8 @@ func TestResolveShellOverride(t *testing.T) {
 	dir := t.TempDir()
 	pwsh := filepath.Join(dir, "pwsh.exe")
 	zsh := filepath.Join(dir, "zsh")
-	for _, f := range []string{pwsh, zsh} {
+	fish := filepath.Join(dir, "fish")
+	for _, f := range []string{pwsh, zsh, fish} {
 		if err := os.WriteFile(f, nil, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -124,6 +126,14 @@ func TestResolveShellOverride(t *testing.T) {
 		}
 	} else if err != nil || got.Kind != ShellZsh {
 		t.Errorf("resolveShell(%q) = %+v, %v", zsh, got, err)
+	}
+	got, err = resolveShell(fish)
+	if runtime.GOOS == "windows" {
+		if err == nil {
+			t.Error("native fish was accepted on Windows")
+		}
+	} else if err != nil || got.Kind != ShellFish {
+		t.Errorf("resolveShell(%q) = %+v, %v", fish, got, err)
 	}
 	if _, err := resolveShell(filepath.Join(dir, "missing")); err == nil {
 		t.Error("a SAN_SHELL naming no file was accepted")

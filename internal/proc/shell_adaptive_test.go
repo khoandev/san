@@ -45,14 +45,19 @@ func TestAdaptiveShellSelection(t *testing.T) {
 		{"uppercase zsh override", "ZSH", fish, "linux", ShellZsh, zsh, false, false},
 		{"uppercase pwsh override", "PWSH", "", "windows", ShellPowerShell, pwsh, false, false},
 		{"zsh override", "zsh", fish, "linux", ShellZsh, zsh, false, false},
-		{"fish fallback", "", fish, "linux", ShellBash, bash, true, false},
+		{"fish preference", "", fish, "darwin", ShellFish, fish, false, false},
+		{"fish override", "fish", zsh, "linux", ShellFish, fish, false, false},
+		{"uppercase fish override", "FISH", bash, "linux", ShellFish, fish, false, false},
 		{"missing fallback", "", missing, "linux", ShellBash, bash, true, false},
 		{"powershell preference unsupported", "", pwsh, "linux", ShellBash, bash, true, false},
-		{"invalid override", fish, zsh, "linux", "", "", false, true},
+		{"unsupported preference", "", "tcsh", "linux", ShellBash, bash, true, false},
+		{"invalid override", "tcsh", zsh, "linux", "", "", false, true},
 		{"missing override", missing, zsh, "linux", "", "", false, true},
 		{"windows ignores SHELL", "", zsh, "windows", ShellPowerShell, pwsh, false, false},
 		{"windows explicit zsh", zsh, "", "windows", "", "", false, true},
 		{"windows named zsh", "ZSH", "", "windows", "", "", false, true},
+		{"windows explicit fish", fish, "", "windows", "", "", false, true},
+		{"windows named fish", "FISH", "", "windows", "", "", false, true},
 		{"powershell selection", "powershell", "", "windows", ShellPowerShell, pwsh, false, false},
 		{"explicit powershell path", ps, "", "linux", ShellPowerShell, ps, false, false},
 	}
@@ -104,5 +109,14 @@ func TestZshKeepsBashIdentity(t *testing.T) {
 	shell := Shell{Kind: ShellZsh, Path: "/bin/zsh"}
 	if shell.String() != "zsh" || shell.Kind.ToolName() != "Bash" {
 		t.Fatalf("zsh labels: %s, %s", shell.String(), shell.Kind.ToolName())
+	}
+}
+
+// Fish is not bash, but the model's tool and every stored rule keep the name
+// the permission machinery was built around.
+func TestFishKeepsBashIdentity(t *testing.T) {
+	shell := Shell{Kind: ShellFish, Path: "/usr/local/bin/fish"}
+	if shell.String() != "fish" || shell.Label() != "fish" || shell.Kind.ToolName() != "Bash" {
+		t.Fatalf("fish labels: %s, %s, %s", shell.String(), shell.Label(), shell.Kind.ToolName())
 	}
 }

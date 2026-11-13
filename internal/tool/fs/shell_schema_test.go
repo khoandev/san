@@ -23,6 +23,7 @@ func TestShellDirectoryHelp(t *testing.T) {
 	for _, shell := range []proc.Shell{
 		{Kind: proc.ShellBash, Path: "bash"},
 		{Kind: proc.ShellZsh, Path: "zsh"},
+		{Kind: proc.ShellFish, Path: "fish"},
 		{Kind: proc.ShellPowerShell, Path: "pwsh"},
 		{Kind: proc.ShellPowerShell, Path: "powershell"},
 	} {
@@ -43,6 +44,38 @@ func TestShellDirectoryHelp(t *testing.T) {
 	}
 }
 
+// Fish speaks another language, and nothing auto-approves it, so its schema
+// must not inherit the bash description's heredoc and read-only claims.
+func TestFishSchemaDescribesFish(t *testing.T) {
+	schema := (&ShellTool{shell: proc.Shell{Kind: proc.ShellFish, Path: "fish"}}).Schema()
+	if schema.Name != "Bash" {
+		t.Fatalf("tool name = %q, want Bash", schema.Name)
+	}
+	for _, want := range []string{
+		"Executes a fish command",
+		"Uses fish syntax, not bash",
+		"set -gx NAME value",
+		"fish --no-config -c",
+		"$status, not $?",
+		"No heredocs",
+		"Every command requires confirmation",
+		"Tool/rule name stays Bash",
+	} {
+		if !strings.Contains(schema.Description, want) {
+			t.Errorf("fish description lacks %q:\n%s", want, schema.Description)
+		}
+	}
+	for _, unwanted := range []string{
+		"use non-interactive flags or heredocs",
+		"may run without approval",
+		"zsh -f",
+	} {
+		if strings.Contains(schema.Description, unwanted) {
+			t.Errorf("fish description still says %q:\n%s", unwanted, schema.Description)
+		}
+	}
+}
+
 // Inspect what reaches a provider, not just the source schema. Optional fields
 // must stay nullable even when a strict endpoint requires callers to fill them.
 func TestShellSchemaSentToProviders(t *testing.T) {
@@ -54,7 +87,7 @@ func TestShellSchemaSentToProviders(t *testing.T) {
 		{"chat", chat.New, "data: {\"id\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"},
 		{"responses", responses.New, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"test\",\"status\":\"completed\",\"output\":[]}}\n\n"},
 	} {
-		for _, shell := range []proc.Shell{{Kind: proc.ShellBash, Path: "bash"}, {Kind: proc.ShellZsh, Path: "zsh"}, {Kind: proc.ShellPowerShell, Path: "pwsh"}} {
+		for _, shell := range []proc.Shell{{Kind: proc.ShellBash, Path: "bash"}, {Kind: proc.ShellZsh, Path: "zsh"}, {Kind: proc.ShellFish, Path: "fish"}, {Kind: proc.ShellPowerShell, Path: "pwsh"}} {
 			t.Run(protocol.name+"/"+string(shell.Kind), func(t *testing.T) {
 				captured := make(chan map[string]any, 1)
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

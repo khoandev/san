@@ -27,11 +27,20 @@ func TestShellFallbackWarning(t *testing.T) {
 	}
 	type shellCase struct {
 		preference, want string
-		warning          bool
+		reason           string // expected fallback diagnostic; "" means silence
 	}
-	cases := []shellCase{{bash, "bash", false}, {"/not-installed/fish", "bash", true}}
+	cases := []shellCase{
+		{bash, "bash", ""},
+		{"/usr/bin/tcsh", "bash", "is unsupported; falling back to bash"},
+		// Fish is a shell san speaks, so a missing one is unavailable rather
+		// than unsupported — a distinction the diagnostic must keep.
+		{"/not-installed/fish", "bash", "is unavailable"},
+	}
 	if zsh, err := exec.LookPath("zsh"); err == nil {
-		cases = append(cases, shellCase{zsh, "zsh", false})
+		cases = append(cases, shellCase{zsh, "zsh", ""})
+	}
+	if fish, err := exec.LookPath("fish"); err == nil {
+		cases = append(cases, shellCase{fish, "fish", ""})
 	}
 	for _, tc := range cases {
 		t.Run(tc.preference, func(t *testing.T) {
@@ -48,8 +57,15 @@ func TestShellFallbackWarning(t *testing.T) {
 			if err != nil || !strings.HasPrefix(string(out), tc.want) {
 				t.Fatalf("selected shell = %q, %v (%s)", out, err, stderr.String())
 			}
-			if got := stderr.String(); tc.warning != strings.Contains(got, "falling back to bash") {
-				t.Fatalf("fallback diagnostic = %q", got)
+			got := stderr.String()
+			if tc.reason == "" {
+				if got != "" {
+					t.Fatalf("unexpected fallback diagnostic = %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.reason) {
+				t.Fatalf("fallback diagnostic = %q, want %q", got, tc.reason)
 			}
 		})
 	}

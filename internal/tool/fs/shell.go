@@ -140,7 +140,7 @@ func (t *ShellTool) ExecuteApproved(ctx context.Context, params map[string]any, 
 	defer cleanup()
 
 	// Execute command
-	cmd := shellCommand(ctx, shell, trackedCommand, shellEnv(ctx))
+	cmd := shellCommand(ctx, shell, trackedCommand, shellEnv(ctx), trackedFile)
 	cmd.Dir = cwd
 	if trackedFile != "" {
 		cmd.Env = append(cmd.Env, cwdFileEnvVar+"="+trackedFile)
@@ -347,7 +347,7 @@ func (t *ShellTool) executeBackground(ctx context.Context, shell proc.Shell, com
 	// Create command. Only the process gets the rtk rewrite: the task registry
 	// and the "Command:" line below keep the command the model wrote, so a
 	// background row still reads as the tool the model called.
-	cmd := shellCommand(taskCtx, shell, rtkCommand(ctx, shell, cwd, lifetime, command), shellEnv(ctx))
+	cmd := shellCommand(taskCtx, shell, rtkCommand(ctx, shell, cwd, lifetime, command), shellEnv(ctx), "")
 	cmd.Dir = cwd
 
 	// Start the child in its own session: detached from the controlling
@@ -497,8 +497,9 @@ func diagnoseShellStart(cmd *exec.Cmd, err error) error {
 }
 
 // prepareCwdTracking wraps command so that, however it exits, the directory
-// it ended in is written to a temp file San reads back. PowerShell's wrapping
-// already does this (powerShellScript), so its command is left as it is.
+// it ended in is written to a temp file San reads back. PowerShell and fish
+// record it themselves (powerShellScript and the fish -C hook), so their
+// command is left exactly as the model wrote it.
 func prepareCwdTracking(shell proc.Shell, command string) (string, string, func()) {
 	tmp, err := os.CreateTemp("", "san-cwd-*")
 	if err != nil {
@@ -509,12 +510,17 @@ func prepareCwdTracking(shell proc.Shell, command string) (string, string, func(
 	cleanup := func() {
 		_ = os.Remove(tmp.Name())
 	}
-	if shell.Kind == proc.ShellPowerShell {
+	if shell.Kind == proc.ShellPowerShell || shell.Kind == proc.ShellFish {
 		return command, tmp.Name(), cleanup
 	}
 	wrapped := "trap '" + pwdCommand() + " > \"$" + cwdFileEnvVar + "\"' EXIT\n" + command
 	return wrapped, tmp.Name(), cleanup
 }
+
+// fishCwdHook is fish's answer to bash's `trap ... EXIT`: fish has no trap, but
+// a fish_exit handler runs however the shell ends. -C installs it before the
+// model's script, so that script stays byte-for-byte the one that was approved.
+const fishCwdHook = `function __san_record_cwd --on-event fish_exit; pwd > "$` + cwdFileEnvVar + `"; end`
 
 // pwdCommand prints the working directory as the host spells it. Git Bash's
 // plain pwd answers "/c/Users/..."; -W gives the Windows path San can use.
@@ -525,12 +531,25 @@ func pwdCommand() string {
 	return "pwd"
 }
 
-// shellCommand is the process that runs script under shell, in env.
-func shellCommand(ctx context.Context, shell proc.Shell, script string, env []string) *exec.Cmd {
+// shellCommand is the process that runs script under shell, in env. cwdFile
+// names the file the shell records its final directory in; only fish needs it
+// here, because its recording hook is installed through -C rather than by
+// editing the script the model wrote.
+func shellCommand(ctx context.Context, shell proc.Shell, script string, env []string, cwdFile string) *exec.Cmd {
 	if shell.Kind == proc.ShellPowerShell {
 		args, scriptEnv := powerShellArgs(powerShellScript(script))
 		cmd := exec.CommandContext(ctx, shell.Path, args...)
 		cmd.Env = append(env, scriptEnv...)
+		return cmd
+	}
+	if shell.Kind == proc.ShellFish {
+		args := []string{"--no-config"}
+		if cwdFile != "" {
+			args = append(args, "-C", fishCwdHook)
+		}
+		args = append(args, "-c", script)
+		cmd := exec.CommandContext(ctx, shell.Path, args...)
+		cmd.Env = env
 		return cmd
 	}
 	args := []string{"-c", script}

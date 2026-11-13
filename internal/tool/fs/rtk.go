@@ -100,10 +100,11 @@ func rewriteShellCommand(ctx context.Context, cwd, command string) string {
 // rtkCommand is the command the shell runs: command with rtk's rewrite applied
 // where rtk can filter it.
 //
-// PowerShell has no rtk coverage, and a background service is left raw — rtk
+// PowerShell and fish have no rtk coverage: a rewrite comes back as bash-form
+// text that neither interpreter can run. A background service is left raw — rtk
 // would put a process between san and a daemon san has to signal and stop.
 func rtkCommand(ctx context.Context, shell proc.Shell, cwd string, lifetime task.Lifetime, command string) string {
-	if shell.Kind == proc.ShellPowerShell || lifetime == task.LifetimeService {
+	if shell.Kind == proc.ShellPowerShell || shell.Kind == proc.ShellFish || lifetime == task.LifetimeService {
 		return command
 	}
 	return rewriteShellCommand(ctx, cwd, command)

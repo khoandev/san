@@ -17,10 +17,13 @@ type ShellKind string
 const (
 	ShellBash       ShellKind = "bash"
 	ShellZsh        ShellKind = "zsh"
+	ShellFish       ShellKind = "fish"
 	ShellPowerShell ShellKind = "powershell"
 )
 
-// ToolName preserves Bash identifiers for both Unix interpreters.
+// ToolName preserves Bash identifiers for every Unix interpreter: zsh and
+// fish speak other languages, but their rules must keep matching the tool the
+// model was given, exactly as they did under bash.
 func (k ShellKind) ToolName() string {
 	if k == ShellPowerShell {
 		return "PowerShell"
@@ -54,7 +57,7 @@ func (s Shell) Label() string {
 		return ""
 	}
 	switch s.Kind {
-	case ShellBash, ShellZsh:
+	case ShellBash, ShellZsh, ShellFish:
 		return string(s.Kind)
 	case ShellPowerShell:
 		if strings.HasPrefix(strings.ToLower(filepath.Base(s.Path)), "pwsh") {
@@ -90,7 +93,7 @@ func resolveShellForPlatform(override, preference, goos string) (Shell, error) {
 	var reason string
 	if goos != "windows" && preference != "" {
 		kind, ok := shellKind(preference)
-		if ok && (kind == ShellBash || kind == ShellZsh) {
+		if ok && (kind == ShellBash || kind == ShellZsh || kind == ShellFish) {
 			if shell, err := resolveShellValue(preference, goos); err == nil {
 				return shell, nil
 			} else {
@@ -119,6 +122,8 @@ func shellKind(value string) (ShellKind, bool) {
 		return ShellBash, true
 	case "zsh":
 		return ShellZsh, true
+	case "fish":
+		return ShellFish, true
 	case "powershell", "pwsh":
 		return ShellPowerShell, true
 	}
@@ -130,8 +135,8 @@ func resolveShellValue(value, goos string) (Shell, error) {
 	if !ok {
 		return Shell{}, fmt.Errorf("unsupported shell %q", value)
 	}
-	if kind == ShellZsh && goos == "windows" {
-		return Shell{}, fmt.Errorf("zsh is unsupported on Windows")
+	if (kind == ShellZsh || kind == ShellFish) && goos == "windows" {
+		return Shell{}, fmt.Errorf("%s is unsupported on Windows", kind)
 	}
 	var path string
 	var err error
@@ -144,6 +149,8 @@ func resolveShellValue(value, goos string) (Shell, error) {
 		}
 	case "zsh":
 		path, err = exec.LookPath("zsh")
+	case "fish":
+		path, err = exec.LookPath("fish")
 	case "powershell", "pwsh":
 		for _, name := range []string{"pwsh", "powershell"} {
 			path, err = exec.LookPath(name)

@@ -39,6 +39,11 @@ func ExactAllowRules(toolName string, args map[string]any) []string {
 	switch toolName {
 	case "Bash":
 		cmd, _ := args["command"].(string)
+		// "Always allow" saves bash-shaped rules; under fish they would never
+		// match again, so the option stays absent instead of lying.
+		if !shellSpeaksBash() {
+			return nil
+		}
 		if nativeZshReviewReason(cmd) != "" {
 			return nil
 		}

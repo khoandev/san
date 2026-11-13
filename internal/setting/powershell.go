@@ -64,11 +64,12 @@ func commandName(word string) string {
 }
 
 // IsReadOnlyShellCommand classifies a shell tool's command in that shell's
-// own syntax.
+// own syntax. A fish command has no classification: the Bash parser does not
+// speak fish, so nothing it answers could be trusted as a read-only grant.
 func IsReadOnlyShellCommand(toolName, cmd string) bool {
 	switch toolName {
 	case "Bash":
-		return IsReadOnlyBashCommand(cmd)
+		return shellSpeaksBash() && IsReadOnlyBashCommand(cmd)
 	case "PowerShell":
 		return IsReadOnlyPowerShellCommand(cmd)
 	}

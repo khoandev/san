@@ -121,6 +121,8 @@ func (t *ShellTool) SchemaWithDirectoryHelp(help string) core.ToolSchema {
 	description := fmt.Sprintf(unixShellDescription, shell, help)
 	if name == tool.ToolPowerShell {
 		description = fmt.Sprintf(powerShellDescription, shell, help)
+	} else if shell.Kind == proc.ShellFish {
+		description = fmt.Sprintf(fishShellDescription, shell, help)
 	} else if shell.Kind == proc.ShellZsh {
 		description += "\n\nUses zsh -f (no user startup files) and inherited environment. Complex/native expansions require human confirmation. Tool/rule name stays Bash."
 	}
@@ -142,6 +144,19 @@ const unixShellDescription = `Executes a %s command and returns its output.
 - Starts in the session cwd; do not prepend cd to it. %s; other shell state does not persist.
 - Use for discovery (rg/find/ls); bound large output with head/wc. Use Read/Edit/Write for file contents.
 - No TTY or interactive stdin: use non-interactive flags or heredocs. Read-only commands may run without approval.
+- Background processes detach; results include the process-group ID and stop commands.`
+
+// fishShellDescription is not a variation on unixShellDescription: fish has no
+// heredocs and no automatic read-only grants, so both of those lines would be
+// wrong. Every command here is reviewed by a person.
+const fishShellDescription = `Executes a %s command and returns its output.
+
+- Uses fish syntax, not bash: "set -gx NAME value" exports a variable (there is no "NAME=value command"); command substitution is (command); the last status is $status, not $?.
+- Starts in the session cwd; do not prepend cd to it. %s; other shell state does not persist.
+- Runs fish --no-config -c, so config.fish aliases and functions are not loaded; the inherited environment is.
+- No heredocs: feed text with printf ... | command. No set -e or set -u ("set -e" erases a variable). Loops are "for x in ...; ...; end".
+- Use for discovery (rg/find/ls); bound large output with head/wc. Use Read/Edit/Write for file contents.
+- No TTY or interactive stdin: use non-interactive flags. Every command requires confirmation. Tool/rule name stays Bash.
 - Background processes detach; results include the process-group ID and stop commands.`
 
 const powerShellDescription = `Executes a %s command and returns its output.

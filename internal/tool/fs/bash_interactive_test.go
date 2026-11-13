@@ -204,7 +204,10 @@ func TestBashExecuteApproved_usesBashPromptResponderFromContext(t *testing.T) {
 	ctx := coretool.ContextWithBashPromptResponderProvider(context.Background(), func(context.Context) coretool.BashPromptResponder {
 		return r
 	})
-	result := (&ShellTool{}).ExecuteApproved(ctx, map[string]any{
+	// The subject is the responder wiring, not the host's default interpreter,
+	// so pin the bash this script is written in: under SHELL=fish the zero value
+	// would run it under an interpreter that has no `read -r`.
+	result := bashTool(t).ExecuteApproved(ctx, map[string]any{
 		"command":    `printf 'Continue? [y/N] '; read -r a; echo "answer=$a"`,
 		"timeout_ms": 2000,
 	}, t.TempDir())

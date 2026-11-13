@@ -20,7 +20,7 @@ func TestShellLabelExecutionMetadata(t *testing.T) {
 	for _, makeTool := range []struct {
 		name string
 		tool func(*testing.T) *ShellTool
-	}{{"bash", bashTool}, {"zsh", zshTool}} {
+	}{{"bash", bashTool}, {"zsh", zshTool}, {"fish", fishTool}} {
 		t.Run(makeTool.name, func(t *testing.T) {
 			sh := makeTool.tool(t)
 			cwd := t.TempDir()

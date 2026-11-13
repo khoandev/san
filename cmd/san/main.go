@@ -13,6 +13,7 @@ import (
 
 	"github.com/genai-io/san/internal/app"
 	"github.com/genai-io/san/internal/log"
+	"github.com/genai-io/san/internal/proc"
 	"github.com/genai-io/san/internal/setting"
 )
 
@@ -61,6 +62,13 @@ func init() {
 
 func main() {
 	defer func() { _ = log.Sync() }()
+
+	// The permission layer classifies shell commands with san's bash parser.
+	// Record the interpreter actually resolved so a fish shell is never granted
+	// by a parse it cannot honour; tests and libraries keep the bash default.
+	if shell, err := proc.DefaultShell(); err == nil {
+		setting.SetActiveShellKind(shell.Kind)
+	}
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

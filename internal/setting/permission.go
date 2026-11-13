@@ -627,6 +627,13 @@ func MatchAllowList(toolName string, args map[string]any, patterns []string) (st
 		return "", false
 	}
 	if toolName == "Bash" {
+		// A stored Bash(...) rule names bash syntax; under fish it would be
+		// matched by a parser that cannot read the command, so it grants
+		// nothing. Even a bare allow rule stops applying: every fish command is
+		// reviewed.
+		if !shellSpeaksBash() {
+			return "", false
+		}
 		if i := slices.IndexFunc(patterns, isBareShellRule); i >= 0 {
 			return patterns[i], true
 		}
