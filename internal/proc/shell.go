@@ -52,13 +52,19 @@ func (s Shell) String() string {
 }
 
 // Label is the compact execution title; String retains prompt version details.
+// The Unix shells are capitalised so a row reads "Fish(ls)" next to the "Bash"
+// tool name the model was given, not like a path to the interpreter.
 func (s Shell) Label() string {
 	if s.Path == "" {
 		return ""
 	}
 	switch s.Kind {
-	case ShellBash, ShellZsh, ShellFish:
-		return string(s.Kind)
+	case ShellBash:
+		return "Bash"
+	case ShellZsh:
+		return "Zsh"
+	case ShellFish:
+		return "Fish"
 	case ShellPowerShell:
 		if strings.HasPrefix(strings.ToLower(filepath.Base(s.Path)), "pwsh") {
 			return "pwsh"

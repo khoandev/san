@@ -18,14 +18,15 @@ import (
 
 func TestShellLabelExecutionMetadata(t *testing.T) {
 	for _, makeTool := range []struct {
-		name string
-		tool func(*testing.T) *ShellTool
-	}{{"bash", bashTool}, {"zsh", zshTool}, {"fish", fishTool}} {
+		name  string
+		label string
+		tool  func(*testing.T) *ShellTool
+	}{{"bash", "Bash", bashTool}, {"zsh", "Zsh", zshTool}, {"fish", "Fish", fishTool}} {
 		t.Run(makeTool.name, func(t *testing.T) {
 			sh := makeTool.tool(t)
 			cwd := t.TempDir()
 			request, err := sh.PreparePermission(context.Background(), map[string]any{"command": "true"}, cwd)
-			if err != nil || request.BashMeta.ShellLabel != makeTool.name || request.ToolName != tool.ToolBash {
+			if err != nil || request.BashMeta.ShellLabel != makeTool.label || request.ToolName != tool.ToolBash {
 				t.Fatalf("permission=%+v err=%v", request, err)
 			}
 			for _, tc := range []struct {
@@ -44,7 +45,7 @@ func TestShellLabelExecutionMetadata(t *testing.T) {
 					defer func() { manager.Cancel(); manager.Join() }()
 					result := sh.ExecuteApproved(task.WithManager(context.Background(), manager), tc.params, cwd)
 					details, ok := result.Details.(toolresult.BashDetails)
-					if result.Success != tc.success || !ok || details.ShellLabel != makeTool.name || result.Metadata.Title != tool.ToolBash {
+					if result.Success != tc.success || !ok || details.ShellLabel != makeTool.label || result.Metadata.Title != tool.ToolBash {
 						t.Fatalf("result=%+v details=%+v", result, details)
 					}
 				})
@@ -53,7 +54,7 @@ func TestShellLabelExecutionMetadata(t *testing.T) {
 			for _, mode := range []string{shellForeground, shellBackgroundJob} {
 				result := missing.ExecuteApproved(context.Background(), map[string]any{"command": "true", "execution_mode": mode}, cwd)
 				details, ok := result.Details.(toolresult.BashDetails)
-				if result.Success || !ok || details.ShellLabel != makeTool.name || details.Error == "" {
+				if result.Success || !ok || details.ShellLabel != makeTool.label || details.Error == "" {
 					t.Fatalf("start failure=%+v details=%+v", result, details)
 				}
 			}
@@ -113,7 +114,7 @@ func testShellLabelSDKPartial(t *testing.T, command string, rows int) {
 		switch e := event.(type) {
 		case sdkagent.ToolUpdate:
 			details, ok := e.Partial.Details.(toolresult.BashDetails)
-			if !ok || details.ShellLabel != "zsh" {
+			if !ok || details.ShellLabel != "Zsh" {
 				t.Fatalf("partial=%+v", e.Partial)
 			}
 			updates++
@@ -121,7 +122,7 @@ func testShellLabelSDKPartial(t *testing.T, command string, rows int) {
 			if e.Err != nil {
 				t.Fatal(e.Err)
 			}
-			if details := e.Result.Details.(toolresult.BashDetails); details.ShellLabel != "zsh" || details.LineCount != rows {
+			if details := e.Result.Details.(toolresult.BashDetails); details.ShellLabel != "Zsh" || details.LineCount != rows {
 				t.Fatalf("final=%+v", details)
 			}
 		}

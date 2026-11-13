@@ -113,10 +113,11 @@ func TestZshKeepsBashIdentity(t *testing.T) {
 }
 
 // Fish is not bash, but the model's tool and every stored rule keep the name
-// the permission machinery was built around.
+// the permission machinery was built around. Only the display label is Fish's
+// own, capitalised so a row reads like the "Bash" title the tool still carries.
 func TestFishKeepsBashIdentity(t *testing.T) {
 	shell := Shell{Kind: ShellFish, Path: "/usr/local/bin/fish"}
-	if shell.String() != "fish" || shell.Label() != "fish" || shell.Kind.ToolName() != "Bash" {
+	if shell.String() != "fish" || shell.Label() != "Fish" || shell.Kind.ToolName() != "Bash" {
 		t.Fatalf("fish labels: %s, %s, %s", shell.String(), shell.Label(), shell.Kind.ToolName())
 	}
 }

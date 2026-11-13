@@ -17,8 +17,9 @@ var activeShellKind atomic.Value // proc.ShellKind
 func SetActiveShellKind(kind proc.ShellKind) { activeShellKind.Store(kind) }
 
 // shellSpeaksBash reports whether san's bash parser may classify a command this
-// shell will run. Fish is not bash-compatible at all, so it never may: a fish
-// command is never an automatic grant and never matches a stored Bash(...) rule.
+// shell will run without a language check first. Fish never may: it has its own
+// gate (IsReadOnlyFishCommand), and its commands never match a stored Bash(...)
+// rule.
 func shellSpeaksBash() bool {
 	kind, _ := activeShellKind.Load().(proc.ShellKind)
 	return kind != proc.ShellFish

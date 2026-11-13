@@ -90,9 +90,9 @@ func TestShellLabels(t *testing.T) {
 		shell Shell
 		want  string
 	}{
-		{Shell{Kind: ShellBash, Path: "bash"}, "bash"},
-		{Shell{Kind: ShellZsh, Path: "zsh"}, "zsh"},
-		{Shell{Kind: ShellFish, Path: "fish"}, "fish"},
+		{Shell{Kind: ShellBash, Path: "bash"}, "Bash"},
+		{Shell{Kind: ShellZsh, Path: "zsh"}, "Zsh"},
+		{Shell{Kind: ShellFish, Path: "fish"}, "Fish"},
 		{Shell{Kind: ShellPowerShell, Path: "pwsh.exe"}, "pwsh"},
 		{Shell{Kind: ShellPowerShell, Path: "powershell.exe"}, "PS"},
 		{Shell{Kind: ShellBash}, ""},

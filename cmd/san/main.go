@@ -64,8 +64,8 @@ func main() {
 	defer func() { _ = log.Sync() }()
 
 	// The permission layer classifies shell commands with san's bash parser.
-	// Record the interpreter actually resolved so a fish shell is never granted
-	// by a parse it cannot honour; tests and libraries keep the bash default.
+	// Record the interpreter actually resolved so fish runs its own gate for the
+	// redirections bash cannot read; tests and libraries keep the bash default.
 	if shell, err := proc.DefaultShell(); err == nil {
 		setting.SetActiveShellKind(shell.Kind)
 	}
