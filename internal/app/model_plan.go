@@ -10,7 +10,6 @@ package app
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,10 +18,10 @@ import (
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/core"
+	"github.com/genai-io/san/internal/core/system"
 	"github.com/genai-io/san/internal/log"
 	"github.com/genai-io/san/internal/plan"
 	agenttool "github.com/genai-io/san/internal/tool/agent"
-	"github.com/genai-io/sdk-go/pkg/ai"
 )
 
 // planCommand backs /plan, the single Plan Mode entry point.
@@ -44,7 +43,7 @@ func (m *model) planCommand(prompt string) (string, tea.Cmd) {
 	m.enterPlanMode()
 	chat := m.conv.Append(core.ChatMessage{Role: core.ChatUser, Content: prompt, DisplayContent: prompt})
 	message, _ := chat.ToMessage()
-	return "", tea.Batch(append(m.CommitMessages(), m.SubmitToAgent(planRequest(message)))...)
+	return "", tea.Batch(append(m.CommitMessages(), m.SubmitToAgent(message))...)
 }
 
 // enterPlanMode switches the session to Plan Mode: the store records the mode,
@@ -57,6 +56,7 @@ func (m *model) enterPlanMode() {
 	m.persistPlan()
 	m.syncPlanModelDisplay()
 	m.warnPlanModelFallback()
+	m.syncPlanModePrompt()
 	m.syncPlanModelRuntime()
 }
 
@@ -71,6 +71,7 @@ func (m *model) leavePlanMode() {
 	m.syncPlanTodos()
 	m.persistPlan()
 	m.syncPlanModelDisplay()
+	m.syncPlanModePrompt()
 	m.syncPlanModelRuntime()
 }
 
@@ -110,28 +111,29 @@ func (m *model) persistPlan() {
 	}
 }
 
-// applyPlanModeRules wraps ordinary user turns while Plan Mode is on, so every
-// request carries the read-only rules and the ```plan protocol.
-func (m *model) applyPlanModeRules(message core.Message) core.Message {
-	if m.plan.Mode() != plan.ModePlan {
-		return message
+// planModeRules is the Plan Mode contract the main agent's system prompt
+// carries, or "" when planning is off.
+func (m *model) planModeRules() string {
+	if m.plan == nil || m.plan.Mode() != plan.ModePlan {
+		return ""
 	}
-	return planRequest(message)
+	return plan.PlanModeRules
 }
 
-// planRequest wraps a user turn in the Plan Mode protocol. The rules ride on
-// the message, not the system prompt, so they survive a persona override and a
-// compaction, and the host's tool gate backstops them either way.
-func planRequest(message core.Message) core.Message {
-	content := slices.Clone(message.Content)
-	for i := range content {
-		if content[i].Type != ai.BlockText {
-			continue
-		}
-		content[i].Text = plan.PlanRequest(content[i].Text)
+// syncPlanModePrompt puts the Plan Mode contract on the live system prompt, or
+// takes it off. It rides on the prompt rather than on each user turn: a session
+// that plans for ten turns sent the rules ten times, paid for them in every
+// later request that carried those turns as history, and kept a copy of each in
+// the transcript a resume replays. The prompt says it once, at the front of the
+// cache, and the section survives a persona swap that replaces the rules part.
+//
+// The host's tool gate still backstops the contract: this is how the model
+// learns the posture, not what enforces it.
+func (m *model) syncPlanModePrompt() {
+	if m.services.Agent == nil {
+		return
 	}
-	message.Content = content
-	return message
+	system.SetPlanModeRules(m.services.Agent.System(), m.planModeRules())
 }
 
 // onPlanTurn interprets the turn that just ended. It returns a command that

@@ -5,9 +5,11 @@ import (
 	"strings"
 )
 
-// PlanModeRules is appended to every user request while Plan Mode is active.
-// The behavior rules are duplicated here (rather than only in a system
-// prompt) so they survive persona overrides, compaction, and provider swaps.
+// PlanModeRules is the Plan Mode contract. It rides on the system prompt as its
+// own section, so a turn costs it once instead of carrying it, and the turns
+// after that inherit it through the cached prompt rather than through the
+// history. Its own section is what keeps it alive across a persona swap, which
+// replaces the rest of the rules part wholesale.
 const PlanModeRules = `You are in PLAN MODE. This mode is read-only.
 
 Rules:
@@ -76,15 +78,6 @@ Rules:
 - When new information changes the plan, reply with one fenced plan-update
   block containing only the changed fields (title, goal, inScope, outOfScope,
   constraints, risks, openQuestions, decisions, steps).`
-
-// PlanRequest wraps a user request with the Plan Mode protocol.
-func PlanRequest(request string) string {
-	request = strings.TrimSpace(request)
-	if request == "" {
-		return "<plan-mode>\n" + PlanModeRules + "\n</plan-mode>"
-	}
-	return "<plan-mode>\n" + PlanModeRules + "\n\nUser request:\n" + request + "\n</plan-mode>"
-}
 
 // StepPrompt is the instruction for one approved step. It deliberately names
 // only that step: the executor advances one verified step at a time, never a

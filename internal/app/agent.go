@@ -757,6 +757,11 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 	m.agentEvolveCaps = m.selfLearnCapabilities()
 	m.agentDisabledToolsSignature = m.disabledToolsSignature()
 	m.agentPlanModel = m.planModelSignature()
+	// A freshly built prompt knows nothing of the mode the session is in, so a
+	// rebuild while planning (a plan-role model change, a /tool toggle, a
+	// resume) would hand the agent a prompt that permits writes. Reinstate it
+	// here: this is the one place every runtime passes through.
+	m.syncPlanModePrompt()
 	if m.services.Reminder.Prepared() && params.AutoMemory != m.agentAutoMemory {
 		// The index reminder was prepared once, naming the old stores.
 		m.services.Reminder.RequeueSystemReminders()

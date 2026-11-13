@@ -9,6 +9,7 @@ import (
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/kit"
 	"github.com/genai-io/san/internal/core"
+	"github.com/genai-io/san/internal/core/system"
 	"github.com/genai-io/san/internal/mcp"
 	"github.com/genai-io/san/internal/reminder"
 	"github.com/genai-io/sdk-go/pkg/ai"
@@ -84,7 +85,12 @@ func (m *model) contextUsage() conv.ContextUsage {
 func (m *model) addUnstartedAgentUsage(usage *conv.ContextUsage) {
 	params := m.promptParams()
 
-	usage.SystemPrompt = ai.EstimateTokens(params.System().Prompt())
+	sys := params.System()
+	// The mode the session is in is prompt state the params do not describe, so
+	// a fresh session in Plan Mode would otherwise report a prompt short by the
+	// whole contract.
+	system.SetPlanModeRules(sys, m.planModeRules())
+	usage.SystemPrompt = ai.EstimateTokens(sys.Prompt())
 	for _, schema := range params.Schemas() {
 		usage.Tools += ai.EstimateTokens(toolSchemaWire(schema))
 	}

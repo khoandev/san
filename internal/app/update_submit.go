@@ -126,9 +126,9 @@ func (m *model) dispatchSubmission(raw string) tea.Cmd {
 	msg = m.conv.Append(msg)
 	m.userInput.Reset()
 	message, _ := msg.ToMessage()
-	// Plan Mode rides on the request itself: the read-only rules and the
-	// ```plan protocol must reach the model even behind a persona override.
-	return m.SubmitToAgent(m.applyPlanModeRules(message))
+	// The turn goes out as the person wrote it. Plan Mode's contract lives on
+	// the system prompt (see syncPlanModePrompt), not on every request.
+	return m.SubmitToAgent(message)
 }
 
 // isSlashCommand excludes leading image paths, which also start with "/".

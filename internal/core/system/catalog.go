@@ -157,6 +157,36 @@ func rulesSection(override string) core.Section {
 	}
 }
 
+// planModeSection carries the Plan Mode contract while Plan Mode is on.
+//
+// It is its own section rather than part of the rules part on purpose: a persona
+// swap replaces identity, behavior and rules wholesale (see SwapPersona), and
+// the contract has to outlive that — an agent that forgets it mid-plan starts
+// editing in a read-only session. It sits at the rules slot and is registered
+// after that part, so it renders directly under the rules it narrows.
+func planModeSection(rules string) core.Section {
+	return core.Section{
+		Slot: core.SlotRules, Name: "plan-mode", Source: core.Injected,
+		Render: func() string { return wrap("plan-mode", nil, rules) },
+	}
+}
+
+// SetPlanModeRules installs the Plan Mode contract on a live main-agent system,
+// or drops it when rules is empty (Plan Mode off). The text comes from the
+// caller because the contract belongs to internal/plan and this package cannot
+// import it; the caller also decides what "off" means for its own mode store.
+func SetPlanModeRules(sys core.System, rules string) {
+	if sys == nil {
+		return
+	}
+	const caller = "command:plan"
+	if strings.TrimSpace(rules) == "" {
+		sys.Drop("plan-mode", caller)
+		return
+	}
+	sys.Use(planModeSection(rules), caller)
+}
+
 // memorySection tells the main agent how to keep its auto memory. The prompt
 // says both stores exist, so they are created here.
 func memorySection(s MemoryStores) core.Section {

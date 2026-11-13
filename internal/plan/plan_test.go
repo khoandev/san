@@ -482,13 +482,12 @@ func TestPlanNormalizeKeepsCursorOnUnfinishedStep(t *testing.T) {
 	}
 }
 
-func TestPlanRequestCarriesRulesAndPrompt(t *testing.T) {
-	got := PlanRequest("refactor session state")
-	if !strings.Contains(got, "PLAN MODE") || !strings.Contains(got, "refactor session state") {
-		t.Fatalf("plan request = %q", got)
+func TestPlanModeRulesDocumentThePlanBlock(t *testing.T) {
+	if !strings.Contains(PlanModeRules, "PLAN MODE") {
+		t.Fatal("the contract must name the mode")
 	}
-	if !strings.Contains(got, "```plan") {
-		t.Fatal("prompt must document the plan block")
+	if !strings.Contains(PlanModeRules, "```plan") {
+		t.Fatal("the contract must document the plan block")
 	}
 }
 

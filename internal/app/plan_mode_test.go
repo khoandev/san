@@ -9,6 +9,7 @@ import (
 	"github.com/genai-io/san/internal/agent"
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/core"
+	"github.com/genai-io/san/internal/core/system"
 	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/reminder"
 	"github.com/genai-io/san/internal/session"
@@ -128,28 +129,37 @@ func TestPlanCommandWithPromptStartsPlanning(t *testing.T) {
 	if m.pendingMessages.Len() == 0 {
 		t.Fatal("no message was submitted to the agent")
 	}
-	sent := m.pendingMessages.First().Text()
-	if !strings.Contains(sent, "<plan-mode>") || !strings.Contains(sent, "split the auth package") {
-		t.Fatalf("submitted request is not wrapped in the plan protocol: %q", sent)
+	// The turn reaches the model as the person wrote it. The read-only contract
+	// rides on the system prompt, where it is paid for once rather than per
+	// turn and is not replayed by every later request that carries the turn.
+	if sent := m.pendingMessages.First().Text(); sent != "split the auth package" {
+		t.Fatalf("submitted request carries more than the prompt: %q", sent)
 	}
 }
 
-// Ordinary turns in Plan Mode carry the read-only rules; turns outside it do
-// not. The wrap is invisible in the conversation.
-func TestPlanModeWrapsUserTurns(t *testing.T) {
+// The Plan Mode contract is prompt state, not message content: offered while
+// planning, withdrawn when the session leaves the mode.
+func TestPlanModeRulesRideOnTheSystemPrompt(t *testing.T) {
 	m := newPlanModel(t)
-	message := core.UserMessage("implement it", nil)
+	sys := system.Build(core.ScopeMain)
+	m.services.Agent = &agent.Runtime{}
 
-	if got := m.applyPlanModeRules(message).Text(); got != "implement it" {
-		t.Fatalf("chat-mode turn was rewritten: %q", got)
-	}
 	m.enterPlanMode()
-	got := m.applyPlanModeRules(message).Text()
-	if !strings.HasPrefix(got, "<plan-mode>") || !strings.Contains(got, plan.PlanModeRules) {
-		t.Fatalf("plan-mode turn missing the protocol: %q", got)
+	if got := m.planModeRules(); got != plan.PlanModeRules {
+		t.Fatalf("plan mode offers no rules to the prompt: %q", got)
 	}
-	if message.Text() != "implement it" {
-		t.Fatal("the wrap mutated the caller's message")
+	system.SetPlanModeRules(sys, m.planModeRules())
+	if !strings.Contains(sys.Prompt(), plan.PlanModeRules) {
+		t.Fatal("Plan Mode rules are missing from the system prompt")
+	}
+
+	m.leavePlanMode()
+	system.SetPlanModeRules(sys, m.planModeRules())
+	if strings.Contains(sys.Prompt(), "PLAN MODE") {
+		t.Fatal("leaving Plan Mode left the contract on the prompt")
+	}
+	if got := m.planModeRules(); got != "" {
+		t.Fatalf("chat mode still offers rules: %q", got)
 	}
 }
 
