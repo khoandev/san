@@ -29,12 +29,11 @@ func benchmarkFrameModel(b testing.TB, height int, workers int) *model {
 	return m
 }
 
-// flushVisibleOverflow runs on every Update. Answering "did a settled row fall
-// off the frame" used to mean rendering the bottom block and the active content
-// a second time; it now wraps the retained rows first and skips that render
-// when they fit above the shortest bottom the frame can draw. These numbers are
-// the guard on both branches (the overflow branch is benchmarked in
-// model_scrollback_overflow_test.go).
+// flushVisibleOverflow runs on every Update, and to answer "did a settled row
+// fall off the frame" it renders the bottom block and the active content a
+// second time. No row-count gate can replace that render (see its doc comment),
+// so these numbers are the standing cost of the duplicate frame; the branch
+// that does hand rows over is benchmarked in model_scrollback_overflow_test.go.
 func BenchmarkFlushVisibleOverflowIdle(b *testing.B) {
 	m := benchmarkFrameModel(b, 40, 3)
 	m.flush.visible = scrollbackPhysicalLines(strings.Repeat("more settled rows\n", 20), 100)

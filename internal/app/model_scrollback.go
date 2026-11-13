@@ -342,30 +342,22 @@ func (m *model) queueScrollbackPrint(content string, frameRows int) tea.Cmd {
 	return m.flushVisibleOverflow()
 }
 
-// minimalFrameBottomRows is the fewest rows the block anchored under the chat
-// rows can occupy. It is what lets flushVisibleOverflow answer "nothing can
-// overflow" without rendering that block: the docked modal branch is the
-// shortest (two blank rows above the modal's first), and every other branch
-// carries the composer's five.
-const minimalFrameBottomRows = 3
-
 // Layout changes must hand settled rows to history before the view crops them.
+//
+// Update calls this on every message, so measuring the overflow costs a second
+// full frame — the bottom block and the active content, rendered for their row
+// counts alone. There is no cheaper gate to put in front of it: keep is
+// max(0, Height-bottom-active), so a bottom block and an active tail that
+// together fill the screen leave no room at all and hand every retained row to
+// history, however few there are. "The retained rows look short enough"
+// therefore proves nothing about the frame they have to fit in.
 func (m *model) flushVisibleOverflow() tea.Cmd {
 	if !m.env.Ready || m.env.Height <= 0 || len(m.flush.visible) == 0 || m.flush.resizedFrom > 0 {
 		return nil
 	}
-	rows := wrapScrollbackLines(m.flush.visible, m.env.Width)
-	// Update calls this on every message, and measuring the overflow renders
-	// the bottom block and the active content — a second full frame, paid for
-	// one row count. keep never exceeds Height-minimalFrameBottomRows, so rows
-	// that fit above even the shortest bottom cannot overflow: skip the frame
-	// that would only have proven it. The render is then paid on the frames
-	// that can genuinely hand rows to history.
-	if len(rows) <= m.env.Height-minimalFrameBottomRows {
-		return nil
-	}
 	bottom, params := m.frameBottom()
 	keep := max(0, m.env.Height-rowCount(bottom)-rowCount(conv.RenderActiveContent(params)))
+	rows := wrapScrollbackLines(m.flush.visible, m.env.Width)
 	overflow := len(rows) - keep
 	if overflow <= 0 {
 		return nil
