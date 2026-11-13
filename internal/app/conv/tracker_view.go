@@ -26,8 +26,8 @@ type TrackerListParams struct {
 	Width        int
 	// Frame advances the active row's breath. Zero draws the mark still, which
 	// is what a caller that renders once (a print, a test) wants.
-	Frame int
-	Blockers     func(itemID string) []string
+	Frame    int
+	Blockers func(itemID string) []string
 	// CompletionShown keeps a terminal worker visible until its notice is shown.
 	// Nil treats completions as already announced.
 	CompletionShown func(taskID string) bool
@@ -42,9 +42,12 @@ type TrackerListParams struct {
 	// the status palette.
 	AgentColors map[string]string
 	// WorkerStatus provides display-only live activity and output-log health.
-	// It answers with a Brief rather than a TaskInfo: this runs twice per
-	// visible row on every frame, and a status read copies the worker's whole
-	// retained output (up to 512 KiB) to print one line of it.
+	// It answers with a Brief rather than a TaskInfo on purpose: this runs
+	// twice per visible row on every frame, and a TaskInfo carries the
+	// worker's retained output (up to 512 KiB) that a row never draws. The
+	// compiler elides that copy today because the value does not escape, but
+	// that is an inlining decision rather than a promise; asking for a Brief
+	// makes the cheap read structural instead of incidental.
 	AwaitingApproval map[string]bool
 	WorkerStatus     func(taskID string) task.Brief
 

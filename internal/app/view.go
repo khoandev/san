@@ -457,8 +457,8 @@ func (m *model) renderTrackerList() string {
 		running = m.services.Task.ListRunning()
 		liveWorkflowIDs := make(map[string]bool)
 		for _, bg := range running {
-			// BriefOf, not GetStatus: this frame path needs two fields and a
-			// status read would copy the worker's retained output.
+			// BriefOf, not GetStatus: this frame path reads two fields, and a
+			// TaskInfo would carry the worker's retained output alongside them.
 			if info := task.BriefOf(bg); info.AgentName == "workflow" && info.LiveView != "" {
 				liveWorkflowIDs[info.ID] = true
 			}
@@ -724,8 +724,9 @@ func (m model) renderQueuePreview() string {
 func (m model) messageRenderParams() conv.RenderContext {
 	var activeAgentIDs []string
 	if m.services.Task != nil {
-		// Brief, not GetStatus: this runs several times per frame, and a status
-		// read copies each task's retained output.
+		// Brief, not GetStatus: this runs several times per frame to decide
+		// which workers are live, and a TaskInfo would carry each task's
+		// retained output with it.
 		for _, brief := range m.services.Task.ListBriefs() {
 			if brief.Type != task.TaskTypeAgent {
 				continue

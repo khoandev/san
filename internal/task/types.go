@@ -29,9 +29,11 @@ const (
 // Brief is the display slice of a task: identity, lifecycle, and the activity a
 // tracker row names — everything a renderer reads, and none of the output.
 //
-// GetStatus copies up to the retained output (512 KiB per task) and clones the
-// attempt rows; a renderer runs several times per frame, so anything that only
-// draws a task must ask for a Brief instead.
+// A TaskInfo carries the retained output (up to 512 KiB per task) and a copy of
+// the attempt rows. A renderer runs several times per frame, so anything that
+// only draws a task asks for a Brief: today's compiler elides the unused output
+// copy as long as nothing retains it, and a Brief keeps a renderer from
+// depending on that.
 type Brief struct {
 	ID              string
 	ParentSessionID string
