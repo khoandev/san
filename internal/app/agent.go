@@ -224,6 +224,7 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		return bridge.Ask(ctx, tool.AgentInteractionSource{}, req)
 	}
 	params.ToolActivity = bridge.SendForToolCall
+	promptOwner, promptSessionID := params.Recording, rec.ID()
 	params.BashPromptResponder = func(ctx context.Context) tool.BashPromptResponder {
 		// Interactive answering is opt-in via the Bash steer, read live (via
 		// the synchronized snapshot — this runs on the agent goroutine) so a
@@ -232,7 +233,7 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		if !m.autopilotEngaged() || !m.liveAutopilotConfig().Steers.BashPrompt {
 			return nil
 		}
-		return bashPromptResponder{model: m, bridge: bridge}
+		return bashPromptResponder{model: m, bridge: bridge, recording: promptOwner, sessionID: promptSessionID}
 	}
 
 	if m.memoryRecall == nil {
@@ -801,6 +802,13 @@ func (m *model) sendToAgent(p pendingMessage) tea.Cmd {
 	return m.sendPendingMessages()
 }
 
+func (m *model) discardPendingMessages() {
+	if err := m.pendingMessages.Discard(); err != nil {
+		log.Logger().Error("discard pending input recording", zap.Error(err))
+		m.conv.AddNotice("Pending input could not be recorded: " + err.Error())
+	}
+}
+
 func (m *model) sendPendingMessages() tea.Cmd {
 	if !m.pendingMessages.CanDeliver(false) {
 		return nil
@@ -815,7 +823,7 @@ func (m *model) sendPendingMessages() tea.Cmd {
 		m.services.Agent.SetPluginRoot(m.pendingPluginRoot)
 		m.pendingPluginRoot = ""
 	}
-	if err := m.pendingMessages.Deliver(m.services.Agent.Send, m.attachPendingReminders, m.startMemoryRecall); err != nil {
+	if err := m.pendingMessages.Deliver(m.services.Agent.SendInput, m.attachPendingReminders, m.startMemoryRecall); err != nil {
 		return func() tea.Msg { return agentSendFailedMsg{err: err} }
 	}
 	if !m.conv.Stream.Active {
@@ -834,34 +842,41 @@ type memoryRecall struct {
 
 // startMemoryRecall starts picking the memories a message sent to the agent
 // needs, replacing a pick for an earlier one. The message does not wait.
-func (m *model) startMemoryRecall(query string) {
+func (m *model) startMemoryRecall(query string) error {
 	if m.memoryRecall == nil || strings.TrimSpace(query) == "" || conv.IsAgentEnvelope(query) || m.agentAutoMemory.Off() {
-		return
+		return nil
+	}
+	if m.services.Recording != nil && m.services.Session != nil {
+		return &llm.RecordingError{Err: fmt.Errorf("memory recall cannot use legacy and typed recording together")}
+	}
+	if err := m.memoryRecall.current.Load().Stop(); err != nil {
+		return err
 	}
 	if !m.services.Reminder.Prepared() || m.memoryRecall.surfaced == nil {
-		m.memoryRecall.surfaced = map[string]bool{} // a new conversation has seen none
+		m.memoryRecall.surfaced = map[string]bool{}
 	}
 	// The pick is deliberately not a role: it runs at the model's lowest rung
 	// beside the turn, and the plan routes only smol work (judges, hooks, the
 	// self-learning review) through modelRoles.
 	info := m.sessionModelInfo()
-	r := agent.Recaller{Provider: m.env.LLMProvider, Model: info.ModelID, Effort: agent.LowestEffort(m.env.LLMProvider, m.llmStore(), info)}
-	m.memoryRecall.current.Swap(r.Start(m.agentAutoMemory, query, maps.Clone(m.memoryRecall.surfaced))).Stop()
+	r := agent.Recaller{Provider: m.env.LLMProvider, Model: info.ModelID, Effort: agent.LowestEffort(m.env.LLMProvider, m.llmStore(), info), Recording: m.services.Recording}
+	m.memoryRecall.current.Store(r.Start(m.agentAutoMemory, query, maps.Clone(m.memoryRecall.surfaced)))
+	return nil
 }
 
 // endMemoryRecall drops the turn's pick and returns what it attached, which
 // later picks in this conversation skip.
-func (m *model) endMemoryRecall() []string {
+func (m *model) endMemoryRecall() ([]string, error) {
 	if m.memoryRecall == nil {
-		return nil
+		return nil, nil
 	}
 	pick := m.memoryRecall.current.Swap(nil)
-	pick.Stop()
+	err := pick.Stop()
 	recalled := pick.Attached()
 	for _, path := range recalled {
 		m.memoryRecall.surfaced[path] = true
 	}
-	return recalled
+	return recalled, err
 }
 
 // attachPendingReminders drains the reminder queue and appends any pending
@@ -914,6 +929,7 @@ func (m *model) wireReminderProviders() {
 const agentStopTimeout = 2 * time.Second
 
 func (m *model) StopAgentRuntime() error {
+	m.cancelAutopilot()
 	m.cancelManualCompaction()
 	m.pendingStopHook = nil
 	ctx, cancel := context.WithTimeout(context.Background(), agentStopTimeout)
@@ -924,11 +940,13 @@ func (m *model) StopAgentRuntime() error {
 	}
 	m.teardownSelfLearn()
 	m.teardownAdvisor()
-	return nil
+	_, err := m.endMemoryRecall()
+	return err
 }
 
 // ResetAgentRuntime stops the agent and clears its conversation and UI state.
 func (m *model) ResetAgentRuntime() error {
+	m.cancelAutopilot()
 	m.cancelManualCompaction()
 	m.pendingStopHook = nil
 	ctx, cancel := context.WithTimeout(context.Background(), agentStopTimeout)
@@ -949,6 +967,7 @@ func (m *model) ResetAgentRuntime() error {
 	// so an in-flight fork unblocks immediately instead of holding tokens /
 	// HTTP for up to forkDeadline.
 	m.teardownSelfLearn()
+	_, err := m.endMemoryRecall()
 	// The advisor belongs to the conversation that is going away: cancel its
 	// context and drop its review history, so nothing from the old session is
 	// published or persisted into the new one. The cursor goes with it — the
@@ -964,7 +983,7 @@ func (m *model) ResetAgentRuntime() error {
 	if m.services.Setting != nil {
 		m.env.Advisor = m.services.Setting.Advisor()
 	}
-	return nil
+	return err
 }
 
 // ============================================================

@@ -207,11 +207,12 @@ type TaskInfo struct {
 	ExitCode int
 
 	// Agent-specific fields
-	AgentName      string
-	PermissionMode string // Effective launch-time mode for ordinary subagent tasks.
-	AgentSessionID string
-	Model          string // Model the launch resolved to, as its lease reported it.
-	StepCount      int
-	TokenUsage     int
-	LiveView       string // Current display for a running structured task, if any.
+	AgentName        string
+	PermissionMode   string // Effective launch-time mode for ordinary subagent tasks.
+	SourceMessageSeq uint64
+	AgentSessionID   string
+	Model            string // Model the launch resolved to, as its lease reported it.
+	StepCount        int
+	TokenUsage       int
+	LiveView         string // Current display for a running structured task, if any.
 }

@@ -146,7 +146,8 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 	m.evolveRequestedThisTurn = false
 	// Reads and recalls are already shown at their tool steps. Only memory
 	// changes get a turn-end summary, and a read-only turn adds no empty notice.
-	entries := m.conv.TurnMemory(m.turnOpenedBy, m.endMemoryRecall())
+	recalled, recallErr := m.endMemoryRecall()
+	entries := m.conv.TurnMemory(m.turnOpenedBy, recalled)
 	m.turnOpenedBy = ""
 	if line := memoryLine(entries, m.env.Width); line != "" {
 		// Here, not via notifyMain: the line belongs above anything this turn
@@ -155,6 +156,13 @@ func (m *model) OnTurnEnd(result core.Result) tea.Cmd {
 	}
 	log.Logger().Sugar().Debugf("OnTurnEnd: starting queueLen=%d", m.userInput.Queue.Len())
 	commitCmds := m.CommitMessages()
+	if recallErr != nil {
+		finalizationErr = recallErr
+		m.pauseMission()
+		m.conv.AddNotice("Memory recall could not be recorded: " + recallErr.Error())
+		commitCmds = append(commitCmds, m.CommitMessages()...)
+		return tea.Batch(append(commitCmds, m.ListenForAgentEvents())...)
+	}
 
 	// Plan Mode reads this turn's final text: a ```plan block becomes the draft
 	// the Execution Panel shows, a ```plan-step block settles the running step.
