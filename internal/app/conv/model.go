@@ -20,6 +20,9 @@ type Model struct {
 	identities *agentIdentityState
 	ConversationModel
 	OutputModel
+	// Retry is the provider failure a retry can still fix, shown while the
+	// wait for that retry runs. Persisted history never holds it.
+	Retry RetryWait
 }
 
 func NewModel(width int) Model {

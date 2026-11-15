@@ -273,6 +273,24 @@ func (s *Runtime) SendInput(input PendingInput) error {
 	return nil
 }
 
+// Retry asks the active agent for one more exchange over the conversation as it
+// stands: nothing is sent, so the question already there is answered again. It
+// is what a provider failure that ended a turn leaves to the caller — a
+// stopped run is refused, because the caller has to rebuild it first.
+func (s *Runtime) Retry() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	run := s.run
+	if run == nil {
+		return ErrRuntimeInactive
+	}
+	if run.stopped {
+		return ErrRuntimeStopped
+	}
+	run.agent.Retry()
+	return nil
+}
+
 // Compact transfers a precomputed result to the live mailbox. False with no
 // error means there is no runtime; an error leaves ownership with the caller.
 func (s *Runtime) Compact(result core.Compaction) (bool, error) {

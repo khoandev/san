@@ -54,8 +54,9 @@ type Model struct {
 	//	              itself is always the embedded .Selector field.
 	//
 	// Approval is the odd one out: a permission confirm dialog, not a picker.
-	Approval ApprovalModel
-	Secret   SecretPromptModel
+	Approval  ApprovalModel
+	Secret    SecretPromptModel
+	RateLimit RateLimitModel // a provider failure that ended the turn
 
 	// Self-contained selectors.
 	Agent      AgentSelector
@@ -141,6 +142,7 @@ func New(cwd string, width int, matchFunc suggest.Matcher, deps SelectorDeps) Mo
 
 		Approval:  NewApproval(),
 		Secret:    NewSecretPrompt(),
+		RateLimit: NewRateLimit(),
 		Agent:     NewAgentSelector(deps.AgentRegistry),
 		Persona:   NewPersonaSelector(deps.PersonaRegistry, deps.Setting),
 		Search:    NewSearchSelector(deps.Setting),

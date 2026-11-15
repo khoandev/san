@@ -4,13 +4,27 @@ package kit
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/genai-io/san/internal/secret"
 )
+
+// WaitText is a wait as the shortest honest count: whole seconds, then
+// minutes, always rounded up so a wait is never reported as over before it is.
+// One formatter for every surface that speaks about a wait, so the banner and
+// the dialog that follows it cannot disagree on the number.
+func WaitText(d time.Duration) string {
+	secs := int((d + time.Second - 1) / time.Second)
+	if secs < 60 {
+		return strconv.Itoa(secs) + "s"
+	}
+	return fmt.Sprintf("%dm%02ds", secs/60, secs%60)
+}
 
 func FuzzyMatch(str, pattern string) bool {
 	pi := 0

@@ -51,6 +51,14 @@ type Agent interface {
 	// goroutine; under Run it also wakes an idle agent.
 	Append(msg Message)
 
+	// Retry asks for one more exchange over the conversation as it stands,
+	// adding no message: the next turn answers what is already there again.
+	// It is what a provider failure that ended a turn leaves to the caller —
+	// the question is still in the conversation, only the answer is missing.
+	// Safe from any goroutine; never blocks, and does nothing when the
+	// conversation is empty.
+	Retry()
+
 	// Compact admits a precomputed result without blocking. On false the caller
 	// retains ownership; on true Run finishes or closes it, including on shutdown.
 	Compact(Compaction) bool

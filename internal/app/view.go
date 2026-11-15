@@ -118,12 +118,13 @@ func (m *model) renderDockedModalView(ov overlayPanel, separator, trackerView st
 // isDockedModal reports whether the active overlay docks above the input area
 // — rendered between separators with the task tracker still visible — rather
 // than taking over the full screen like the slash-command pickers do. The
-// Question, Approval, and secret-item modals dock, and so does the Execution
-// Panel while it is reviewing a plan; its editor takes the full screen,
-// because that is where the plan's text is actually read and rewritten.
+// Question, Approval, secret-item, and provider-failure modals dock, and so
+// does the Execution Panel while it is reviewing a plan; its editor takes the
+// full screen, because that is where the plan's text is actually read and
+// rewritten.
 func isDockedModal(ov overlayPanel) bool {
 	switch ov := ov.(type) {
-	case *conv.QuestionPrompt, *input.ApprovalModel, *input.SecretPromptModel:
+	case *conv.QuestionPrompt, *input.ApprovalModel, *input.SecretPromptModel, *input.RateLimitModel:
 		return true
 	case *input.PlanPanel:
 		return ov.Docked()
@@ -366,6 +367,13 @@ func (m model) renderChatIndicators(trackerView, bottom string) string {
 		// (often flushed to scrollback via tea.Println) and the tracker
 		// block that anchors the bottom of the active view.
 		parts = append(parts, "\n"+strings.TrimSuffix(trackerView, "\n"))
+	}
+
+	if retry := m.conv.Retry.Line(m.env.Width, time.Now()); retry != "" {
+		// The provider failed an attempt it will repeat: the row says so, with
+		// the wait it asked for, instead of leaving the silence to read as a
+		// hang. It clears itself when the next attempt starts.
+		parts = append(parts, "", retry, "")
 	}
 
 	if !m.conv.Compact.Active {

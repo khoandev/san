@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +72,7 @@ type controlledAgent struct {
 	release       chan struct{}
 	ignoreContext bool
 	messages      []core.Message
+	retries       atomic.Int64
 }
 
 func newControlledAgent(ignoreContext bool) *controlledAgent {
@@ -92,6 +94,7 @@ func (a *controlledAgent) Outbox() <-chan core.Event                      { retu
 func (a *controlledAgent) Messages() []core.Message                       { return a.messages }
 func (a *controlledAgent) SetMessages(messages []core.Message)            { a.messages = messages }
 func (a *controlledAgent) Append(m core.Message)                          { a.appended <- m }
+func (a *controlledAgent) Retry()                                         { a.retries.Add(1) }
 func (a *controlledAgent) ThinkAct(context.Context) (*core.Result, error) { return nil, nil }
 func (a *controlledAgent) Compact(c core.Compaction) bool {
 	select {

@@ -71,6 +71,11 @@ type agent struct {
 	// already asked not to run.
 	interruptPending atomic.Bool
 
+	// retryRequested asks for one exchange over the conversation as it is,
+	// with nothing appended. It is never stale the way a wake is: the flag is
+	// what waitForInput reads, and one exchange swaps it back off.
+	retryRequested atomic.Bool
+
 	// appended counts every Append, and appendedAtInterrupt is that count
 	// when the user last interrupted. Messages up to it wait for the next one
 	// rather than restarting the agent; any message after it starts a turn
@@ -102,6 +107,23 @@ func (a *agent) SetMessages(msgs []Message) {
 func (a *agent) Append(msg Message) {
 	a.inner.AddMessages(msg)
 	a.appended.Add(1)
+	select {
+	case a.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Retry asks for one more exchange over the conversation as it stands: nothing
+// is appended, so the next turn answers what is already there. A provider
+// failure that ended a turn leaves exactly that — the question in the
+// conversation, the answer missing. Safe from any goroutine and never blocks.
+func (a *agent) Retry() {
+	// Nothing to answer: an empty conversation would spend an inference on no
+	// question at all.
+	if len(a.inner.Messages()) == 0 {
+		return
+	}
+	a.retryRequested.Store(true)
 	select {
 	case a.wake <- struct{}{}:
 	default:
@@ -179,9 +201,19 @@ func (a *agent) Run(ctx context.Context) (runErr error) {
 		}
 		a.turnMu.Unlock()
 
+		// A queued message and a retry are one exchange: the message is
+		// answered, and keeping the retry latched would spend a second turn
+		// on it afterwards.
+		if a.inner.Pending() > 0 {
+			a.retryRequested.Store(false)
+		}
+
 		// An exchange ends only with nothing queued, so another is owed only
-		// for a message that arrived after it had ended.
-		for a.inner.Pending() > 0 {
+		// for a message that arrived after it had ended — or for a retry,
+		// which asks for one exchange over the conversation as it stands. The
+		// swap is what makes the retry one exchange and not a loop: it is read
+		// once, and the next iteration needs a new request.
+		for a.inner.Pending() > 0 || a.retryRequested.Swap(false) {
 			glog.Logger().Sugar().Debugf("agent.Run: starting ThinkAct")
 			result, err, interrupted := a.runOneTurn(ctx)
 			if interrupted {
@@ -290,13 +322,19 @@ var errStopped = errors.New("stopped")
 // and the caller wants the model to continue in the next turn.
 const TruncatedResumePrompt = "Your response was truncated due to output token limits. Resume directly from where you left off. Do not repeat any content."
 
-// waitForInput blocks until a queued message is owed an exchange. Signals are
-// handled on the way: SigCompact compacts in place without starting a turn, so
-// a manual /compact while idle spends no inference on the lone summary.
+// waitForInput blocks until a queued message — or a retry — is owed an
+// exchange. Signals are handled on the way: SigCompact compacts in place
+// without starting a turn, so a manual /compact while idle spends no inference
+// on the lone summary.
 func (a *agent) waitForInput(ctx context.Context) error {
 	for {
 		select {
 		case <-a.wake:
+			// A retry is owed with nothing queued: the conversation as it
+			// stands is the input.
+			if a.retryRequested.Load() {
+				return nil
+			}
 			// A wake for a message an exchange already took, or one the
 			// user interrupted, is stale.
 			if a.inner.Pending() > 0 && a.appended.Load() > a.appendedAtInterrupt.Load() {

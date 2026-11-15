@@ -233,6 +233,13 @@ func (m *model) OnAgentStop(err error) tea.Cmd {
 		m.conv.AddNotice(stopErr.Error())
 		return tea.Batch(append(commitCmds, m.CommitMessages()...)...)
 	}
+	if failed {
+		// A failure a retry can still fix gets the dialog: the provider's own
+		// wait, and the choice between closing the turn and running it again.
+		// It declines while the copilot drives — that path recovers below,
+		// without a hand to press a button.
+		m.openRetryDialog(err)
+	}
 	// An unattended run must survive a failed turn: schedule the copilot to look
 	// at the failure and decide whether the mission can resume. No-op outside
 	// AutoPilot, and it still hands back when the error needs a human.

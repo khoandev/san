@@ -71,6 +71,7 @@ func (m *model) overlayPanels() []overlayPanel {
 		m.conv.Modal.Question, // docked modals (rendered between separators)
 		&m.userInput.Approval,
 		&m.userInput.Secret,
+		&m.userInput.RateLimit,
 		&m.userInput.Provider.Selector, // fullscreen slash-command pickers
 		&m.userInput.Tool,
 		&m.userInput.Skill.Selector,
@@ -644,6 +645,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handlePermGateDecision(permissionDecision{
 			Approved: msg.Approved, AllowAll: msg.AllowAll, Persist: msg.Persist, Request: msg.Request,
 		})
+	case input.RateLimitChoiceMsg:
+		return m, m.handleRateLimitChoice(msg)
 	case stopHookResultMsg:
 		return m, m.handleStopHookResult(msg)
 	case mainNoticeMsg:
