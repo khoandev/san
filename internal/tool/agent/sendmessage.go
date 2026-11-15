@@ -118,16 +118,29 @@ func (t *SendMessageTool) execute(ctx context.Context, params map[string]any) to
 	}
 
 	sessionID := task.SessionIDFromContext(ctx)
+	sourceSession, sourceSeq := tool.MessageSourceFromContext(ctx)
 	var delivered error
 	if from == broker.Main {
-		delivered = DeliverToRunning(task.Default(), to, sessionID, subject, message)
+		delivered = DeliverToRunning(task.Default(), Delivery{
+			TaskID:        to,
+			ParentSession: sessionID,
+			SourceSession: sourceSession,
+			SourceSeq:     sourceSeq,
+			Subject:       subject,
+			Message:       message,
+		})
 	} else {
 		// A peer sender addresses an agent id, not only "main", so it keeps the
 		// direct broker path; the shared helper speaks for the main conversation.
 		display := brokerSubject(from, subject)
 		if !broker.Send(broker.Message{
-			SessionID: sessionID, From: from, To: to, Subject: display,
-			Content: wrapAgentMessage(from, display, message),
+			SourceSession: sourceSession,
+			SourceSeq:     sourceSeq,
+			SessionID:     sessionID,
+			From:          from,
+			To:            to,
+			Subject:       display,
+			Content:       wrapAgentMessage(from, display, message),
 		}) {
 			delivered = fmt.Errorf("worker %q is starting up or its inbox is momentarily full", to)
 		}
@@ -289,7 +302,9 @@ func (t *SendMessageTool) continueWorker(ctx context.Context, info task.TaskInfo
 	if err := ctx.Err(); err != nil {
 		return fail(err.Error())
 	}
+	sourceSession, sourceSeq := tool.MessageSourceFromContext(ctx)
 	next, err := t.executor.RunBackground(tool.AgentExecRequest{
+		SourceSession: sourceSession, SourceSeq: sourceSeq,
 		ResumeTaskID: info.ID, ResumeAttempt: info.Attempt, Prompt: wrapAgentMessage(broker.Main, subject, message),
 		ParentToolCallID: core.ToolCallIDFromContext(ctx), Background: true,
 	})

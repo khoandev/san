@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/genai-io/san/internal/llm"
-	"github.com/genai-io/san/internal/transcript"
+	"github.com/genai-io/san/internal/session"
+	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/sdk-go/pkg/acp"
 	"github.com/genai-io/sdk-go/pkg/acp/protocol"
 )
@@ -69,20 +69,18 @@ func (h *acpHost) setConfig(ctx context.Context, request protocol.SetSessionConf
 		if err := s.runtime.Stop(ctx); err != nil {
 			return protocol.SetSessionConfigOptionResponse{}, err
 		}
-		if err := s.nativeSession.Session.Append(ctx, transcript.Record{Type: transcript.SessionStatePatched, State: &transcript.StatePatch{Model: new(id)}}); err != nil {
+		if err := s.nativeSession.Session.Append(ctx, session.Event{Payload: session.SessionUpdatePayload{Config: &session.ConfigPatch{Model: session.SetField(id)}}}); err != nil {
 			return protocol.SetSessionConfigOptionResponse{}, err
 		}
 		s.runtimeBuildParams.ModelID = id
-		var hookRoles llm.RoleBindings
-		if s.permissions != nil && s.permissions.settings != nil {
-			hookRoles = llm.BindingsOf(s.permissions.settings.ModelRoles, s.permissions.settings.ModelRoleEfforts)
+		// The hook role survives a model switch: hooks keep completing on the
+		// fast role and stay recorded against this session.
+		var hookSettings *setting.Data
+		if s.permissions != nil {
+			hookSettings = s.permissions.settings
 		}
-		var hookStore *llm.Store
-		if conn := llm.Default(); conn != nil {
-			hookStore = conn.Store()
-		}
-		hookProvider, hookModel, hookEffort := resolveRoleModelOver(hookRoles, hookStore, llm.RoleFast, s.runtimeBuildParams.Provider, id)
-		s.hooks.SetLLMCompleter(buildHookCompleter(hookProvider, hookModel, hookEffort), hookModel)
+		hookProvider, hookModel, hookEffort := hookModelFor(hookSettings, s.runtimeBuildParams.Provider, id)
+		bindSessionHooksOn(s.hooks, hookProvider, s.nativeSession.Session, hookModel, hookEffort)
 	}
 	return protocol.SetSessionConfigOptionResponse{ConfigOptions: s.configOptions()}, nil
 }

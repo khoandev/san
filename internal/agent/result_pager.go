@@ -17,7 +17,7 @@ import (
 // through the same function: a worker's window is paid for the same way its
 // parent's is.
 type ResultPager struct {
-	Store     *session.LegacyStore
+	Store     *session.Store
 	SessionID string
 }
 

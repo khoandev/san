@@ -780,13 +780,16 @@ func RenderToolCalls(params ToolCallsParams) string {
 				sb.WriteString("\n")
 			}
 			agent := parseAgentInput(tc.Input)
+			heading := agent
 			color := agentColor(configuredAgentColor(agent, params.AgentColors))
 			identity, identified := params.AgentIdentities[tc.ID]
 			if identified {
-				agent.Name = AgentDisplayName(identity, params.AgentIdentities)
+				heading.Description = agentDescription(identity.Name, heading.Description)
+				heading.Prompt = agentDescription(identity.Name, heading.Prompt)
+				heading.Name = AgentDisplayName(identity, params.AgentIdentities)
 				color = agentIdentityColor(identity, params.AgentColors)
 			}
-			label := formatAgentLabel(agent)
+			label := formatAgentLabel(heading)
 			_, hasResult := params.ResultMap[tc.ID]
 			rowWidth := params.Width
 			detail := ""
@@ -815,7 +818,7 @@ func RenderToolCalls(params ToolCallsParams) string {
 			if to, body := sendMessageParts(tc.Input); tc.Name == tool.ToolSendMessage && to != "" {
 				sb.WriteString(renderAgentMessageLine(kit.CurrentSymbols.LiveDot, "To", to, body, params.Width, params.AgentIdentities, params.AgentColors, params.MemberColors) + "\n")
 			} else if hasResult {
-				sb.WriteString(appendRowDetail(renderAgentColoredLine(label, rowWidth, kit.CurrentSymbols.LiveDot, color)+"\n", detail))
+				sb.WriteString(appendRowDetail(renderAgentHeading(label, rowWidth, kit.CurrentSymbols.LiveDot, color)+"\n", detail))
 			} else {
 				// The live dot breathes off the frame counter; on the call a
 				// permission prompt is asking about that would advertise a
@@ -828,7 +831,7 @@ func RenderToolCalls(params ToolCallsParams) string {
 						icon = kit.LiveDot(params.Frame)
 					}
 				}
-				sb.WriteString(appendRowDetail(renderAgentColoredLine(label, rowWidth, icon, color)+"\n", detail))
+				sb.WriteString(appendRowDetail(renderAgentHeading(label, rowWidth, icon, color)+"\n", detail))
 			}
 			if params.ToolCallsExpanded && !hasResult && tc.Name != tool.ToolSendMessage {
 				sb.WriteString(formatAgentDefinition(agent, params.Width))

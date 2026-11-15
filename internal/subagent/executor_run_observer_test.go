@@ -19,7 +19,9 @@ func TestRunObserverReportsFinishedRuns(t *testing.T) {
 		steps int
 	}
 	var got []report
+	store, parent := continuationSessions(t, "parent")
 	executor := NewExecutor(continuationProvider{aitest.New(aitest.Says("answer"), aitest.Says("answer"), aitest.Says("answer"))}, t.TempDir(), "aitest", nil)
+	bindContinuationSessions(t, executor, store, parent)
 	executor.SetRunObserver(func(name string, steps int) {
 		got = append(got, report{name: name, steps: steps})
 	})
@@ -60,7 +62,9 @@ func TestRunObserverReportsFinishedRuns(t *testing.T) {
 // flight.
 func TestRunObserverCanBeCleared(t *testing.T) {
 	fired := false
+	store, parent := continuationSessions(t, "parent")
 	executor := NewExecutor(continuationProvider{aitest.New(aitest.Says("answer"), aitest.Says("answer"), aitest.Says("answer"))}, t.TempDir(), "aitest", nil)
+	bindContinuationSessions(t, executor, store, parent)
 	executor.SetRunObserver(func(string, int) { fired = true })
 	executor.SetRunObserver(nil)
 

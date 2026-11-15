@@ -100,8 +100,9 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 	// (the same *atomic.Bool).
 	live := &atomic.Bool{}
 	live.Store(true)
-	parentSessionID := m.sessionID()
+	parentSession := m.services.Session
 	sessionStore := m.services.SessionStore
+	runtime, cwd := m.services.Agent, m.env.CWD
 
 	// The review is short, bounded, and repeated every turn, so it is the
 	// cheapest work the app does: it follows the fast role when the user bound
@@ -134,10 +135,10 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 		// not flash "evolving → evolved" on a session the user just killed.
 		// Active() guards the macro window; the per-phase live.Load() checks
 		// below catch a teardown that lands AFTER Active() returned true.
-		if !m.services.Agent.Active() {
+		if !runtime.Active() {
 			return
 		}
-		sys := m.services.Agent.System()
+		sys := runtime.System()
 		if sys == nil {
 			return
 		}
@@ -150,7 +151,7 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 		// this pass (create on a skill-free turn, update/delete on a skill-use
 		// turn), so the reviewer can't take an action that wasn't triggered. All
 		// actions remain agent-created only.
-		skillMgr := selflearn.NewSkillManager(m.env.CWD, skillPerms)
+		skillMgr := selflearn.NewSkillManager(cwd, skillPerms)
 		skillMgr.SetWriteObserver(func(action, skillName, note string) {
 			recordAction(skillVerb(action), skillName, note)
 		})
@@ -159,7 +160,7 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 		m.publishSelfLearnStarted()
 
 		client := llm.NewClient(reviewProvider, reviewModel, params.MaxTokens)
-		// The rung follows the model that answers: the effort bound to the smol
+		// The rung follows the model that answers: the effort bound to the fast
 		// role when it supplied a model of its own — already validated against it,
 		// so a rung that model lacks never leaks here — and otherwise the
 		// session's own selection, which is the rung the session model defines.
@@ -168,36 +169,42 @@ func (m *model) wireSelfLearn(params agent.BuildParams) {
 			effort = params.ThinkingEffort
 		}
 		client.SetThinkingEffort(effort)
-		// Sidechain writer: each L1 fork gets its OWN session ID
-		// (formatted "<parent>.selflearn-review.<unix>") so
-		// `san --resume <fork-id>` replays exactly that review's LLM
-		// calls in isolation. The recap row surfaces this fork ID.
-		var forkOnEvent func(core.Event)
-		var forkSessionID string
-		rec, err := sessionStore.Create(session.LegacyCreateOptions{AgentID: "selflearn-review", Provider: reviewProvider.Name(), Model: reviewModel, MaxTokens: params.MaxTokens, ParentSessionID: parentSessionID, Sidechain: true})
+		// Each review owns an independent native writer and records only work it
+		// actually executes; the inherited snapshot is input, not replayed events.
+		if sessionStore == nil {
+			log.Logger().Warn("self-learning requires session persistence")
+			return
+		}
+		var parent *session.ParentLink
+		if parentSession != nil {
+			if err := parentSession.Err(); err != nil {
+				log.Logger().Warn("self-learning parent is unavailable", zap.Error(err))
+				return
+			}
+			parent = &session.ParentLink{Session: parentSession.ID()}
+		}
+		providerName, modelName := reviewProvider.Name(), reviewModel
+		reviewOwner, err := sessionStore.Create(reviewCtx, session.CreateOptions{AgentID: "selflearn-review", InitialCWD: cwd, Parent: parent, Config: &session.EventConfig{Provider: &providerName, Model: &modelName}})
 		if err != nil {
 			log.Logger().Warn("could not open self-learning session", zap.Error(err))
 			return
 		}
-		defer func() { _ = rec.Close() }()
-		if rec != nil {
-			forkOnEvent = rec.RecordEvent
-			forkSessionID = rec.ID()
-		}
+		defer func() { _ = reviewOwner.Close() }()
+		forkSessionID := reviewOwner.ID()
 		// The fork is its own conversation, so it carries its own session id —
 		// a vendor that gates on the session token sees one per review.
 		client.SetSessionID(forkSessionID)
-		client.SetWorkingDir(func() string { return m.env.CWD })
+		client.SetWorkingDir(func() string { return cwd })
 		fc := selflearn.ForkConfig{
 			Client:          client.TurnClient,
 			PrepareMessages: client.PrepareRequest,
 			CallOptions:     client.CallOptions,
 			ShapeInference:  client.ShapeInference,
 			System:          sys,
-			CWD:             m.env.CWD,
+			CWD:             cwd,
 			Skills:          skillMgr,
 			Strategy:        cfg.Strategy,
-			OnEvent:         forkOnEvent,
+			Recording:       reviewOwner,
 		}
 		llmSummary, runErr := selflearn.RunReview(reviewCtx, fc, snapshot)
 		// Re-check live AFTER the RunReview return. This is the macro

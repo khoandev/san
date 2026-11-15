@@ -25,6 +25,7 @@ import (
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/core/system"
 	"github.com/genai-io/san/internal/group"
+	"github.com/genai-io/san/internal/hook"
 	"github.com/genai-io/san/internal/interaction"
 	"github.com/genai-io/san/internal/llm"
 	"github.com/genai-io/san/internal/log"
@@ -32,11 +33,11 @@ import (
 	"github.com/genai-io/san/internal/persona"
 	"github.com/genai-io/san/internal/plan"
 	"github.com/genai-io/san/internal/reminder"
+	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/subagent"
 	"github.com/genai-io/san/internal/tool"
 	"github.com/genai-io/san/internal/tool/perm"
-	"github.com/genai-io/san/internal/transcript"
 )
 
 // ============================================================
@@ -126,39 +127,6 @@ func (m *model) promptParams() agent.BuildParams {
 	}
 }
 
-// syncMCPTools replaces the mcp__* tools in the running agent's registry with
-// what the servers now advertise. A server that loads tools lazily, or gates
-// them behind a login, changes its list while connected, and the registry is
-// what the loop reads at every step — so the next step sees the change without
-// the agent being rebuilt.
-//
-// It runs on the MCP session's own goroutine, which is why it touches only
-// services: core.Tools locks, and so do Session.Tools and DisabledTools.
-func (m *model) syncMCPTools() {
-	tools := m.services.Agent.Tools()
-	if tools == nil {
-		return // no agent yet — whatever it is built with will be current
-	}
-	disabled := m.services.Setting.DisabledTools()
-
-	live := make(map[string]bool)
-	for _, t := range mcp.AsCoreTools(m.services.MCP.ToolSchemas(), m.services.MCP) {
-		name := t.Schema().Name
-		// The /tool panel's disable applies to MCP tools here for the same
-		// reason agent.BuildParams applies it when the agent is built.
-		if disabled[name] {
-			continue
-		}
-		live[name] = true
-		tools.Add(t, "mcp:"+name)
-	}
-	for _, schema := range tools.Schemas() {
-		if mcp.IsMCPTool(schema.Name) && !live[schema.Name] {
-			tools.Remove(schema.Name, "mcp:"+schema.Name)
-		}
-	}
-}
-
 func (m *model) buildAgentParams() (agent.BuildParams, error) {
 	if m.services.Setting == nil || m.env.SessionPermissions == nil {
 		return agent.BuildParams{}, fmt.Errorf("main-session runtime requires a permission policy")
@@ -172,6 +140,7 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 	// model; without one, the session's choice is validated on the plan model.
 	modelInfo, provider, modelID := m.env.CurrentModel, m.env.LLMProvider, m.env.GetModelID()
 	effort := m.env.EffectiveThinkingEffort()
+	maxTokens := m.sessionMaxOutput()
 	if target, ok := m.planModelTarget(); ok {
 		modelInfo = m.roleModelInfo(target)
 		provider, modelID = target.Provider, target.ModelID
@@ -179,9 +148,10 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		if effort == "" {
 			effort = llm.ResolveThinkingEffortForModel(target.Provider, m.services.LLM.Store(), modelInfo, m.env.ThinkingEffort)
 		}
+		// The session's own cap belongs to its own model, so a plan turn takes
+		// the cap the plan model resolves from the catalog.
+		maxTokens = kit.GetMaxOutput(m.services.LLM.Store(), modelInfo, setting.DefaultMaxTokens)
 	}
-
-	maxTokens := kit.GetMaxOutput(m.services.LLM.Store(), modelInfo, setting.DefaultMaxTokens)
 	rec, err := m.openCurrentSession()
 	if err != nil {
 		return params, err
@@ -191,9 +161,9 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		return params, err
 	}
 	for _, n := range m.earlyNotices {
-		_ = rec.Append(context.Background(), transcript.Record{Type: transcript.NoticeAdded,
-			Notice: &transcript.NoticeRecord{Text: n.Content, Agent: n.AgentNotice,
-				AfterMessageID: conv.MemoryRecallNoticeAnchor(n.Content)}})
+		if err := rec.Append(context.Background(), session.Event{Payload: session.AnnotationAddPayload{Text: n.Content, ByAgent: n.AgentNotice}}); err != nil {
+			return params, err
+		}
 	}
 	m.earlyNotices = nil
 
@@ -213,6 +183,7 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 	)
 
 	params.Provider = provider
+	params.Recording = rec
 	params.ModelID = modelID
 	params.MaxTokens = maxTokens
 	params.ThinkingEffort = effort
@@ -244,18 +215,21 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 	// Bind extension audits here, where the application owns their lifecycle.
 	// Session validation and agent construction never rebind shared services.
 	params.SessionID = rec.ID()
-	params.OnEvent = rec.RecordEvent
+	providerName := ""
+	if params.Provider != nil {
+		providerName = params.Provider.Name()
+	}
+	recorder := session.NewRecorder(rec, providerName)
 	if hooks := m.services.Hook; hooks != nil {
-		hooks.SetSession(rec.ID(), rec.TranscriptPath())
-		hooks.SetAuditCallback(rec.RecordHookAudit)
+		hooks.SetSession(rec.ID(), rec.Path())
+		bindSessionHooks(hooks, params.Provider, rec, params.ModelID)
 		params.HookEngine = hooks
 	}
 	if skills := m.services.Skill; skills != nil {
-		skills.SetStateChangeObserver(rec.RecordSkillStateChange)
+		skills.SetStateChangeObserver(recorder.RecordSkillStateChange)
 	}
 	policy := agent.PermissionPolicy{
 		Settings: m.services.Setting, Session: m.env.SessionPermissions, AutoMemory: params.AutoMemory,
-		Audit: func(record transcript.Record) { _ = rec.Append(context.Background(), record) },
 	}
 	params.PermissionRules = policy.Decide
 	params.CanApproveByHook = policy.CanApproveByHook
@@ -267,7 +241,7 @@ func (m *model) buildAgentParams() (agent.BuildParams, error) {
 		return policy.Judge(ctx, name, args, reason, agent.JudgeSnapshot{
 			Engaged: m.autopilotEngaged(), Enabled: rt.cfg.Steers.PermissionOn(),
 			CWD: rt.cwd, UnderGit: rt.underGit, Mission: rt.cfg.ActiveMission(),
-			Judge: rt.judge.Permission, Observe: m.recordDecision,
+			Judge: rt.judge.Permission, Observe: m.recordDecision, Recording: rec,
 		})
 	}
 	params.ResultFilter = agent.WithRecall(
@@ -719,11 +693,11 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 		// The toolset and the model are fixed at agent-build time. If the
 		// enabled Evolve capabilities, the disabled-tool set or the model Plan
 		// Mode runs on drifted since the build (a /evolve save, a /tool toggle,
-		// a plan-role assignment, an external settings edit), stop the stale
-		// session and fall through to rebuild with the current one — the single
-		// choke point every turn passes through, so all drift sources are
-		// covered uniformly.
-		if m.selfLearnCapabilities() == m.agentEvolveCaps &&
+		// a plan-role assignment, an external settings edit), or an extension
+		// reload is pending, stop the stale session and fall through to rebuild
+		// with the current one — the single choke point every turn passes
+		// through, so all drift sources are covered uniformly.
+		if !m.agentReloadPending && m.selfLearnCapabilities() == m.agentEvolveCaps &&
 			m.disabledToolsSignature() == m.agentDisabledToolsSignature &&
 			m.autoMemory() == m.agentAutoMemory &&
 			m.planModelSignature() == m.agentPlanModel {
@@ -737,6 +711,9 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 		}
 	}
 
+	if _, err := m.openCurrentSession(); err != nil {
+		return nil, err
+	}
 	// Rebuild the subagent executor alongside the main agent so it inherits the
 	// same effective disabled-tool snapshot after settings/persona drift.
 	m.ReconfigureAgentTool()
@@ -747,13 +724,20 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 	if w := m.services.Session; w != nil && w.Err() != nil {
 		return nil, w.Err()
 	}
-	coreMessages := m.services.Agent.Messages()
-
-	m.cancelManualCompaction()
-	if err := m.services.Agent.Start(params, coreMessages); err != nil {
+	if err := m.cancelManualCompaction(); err != nil {
+		return nil, err
+	}
+	projection := m.services.Session.Snapshot()
+	if len(projection.ActiveMessages())+len(projection.Instructions())+len(projection.Tools())+len(projection.Skills()) > 0 {
+		_, err = m.services.Agent.Resume(params)
+	} else {
+		err = m.services.Agent.Start(params, nil)
+	}
+	if err != nil {
 		return nil, err
 	}
 	m.agentSession = m.services.Session
+	m.agentReloadPending = false
 	// Record what the toolset was built with, for the drift check above.
 	m.agentEvolveCaps = m.selfLearnCapabilities()
 	m.agentDisabledToolsSignature = m.disabledToolsSignature()
@@ -794,6 +778,9 @@ func (m *model) ensureAgentRuntime() (tea.Cmd, error) {
 // message needs no round trip.
 type agentSendFailedMsg struct{ err error }
 
+// Defer rebuild until OnTurnEnd acknowledges its consumer receipt.
+type pendingInputReadyMsg struct{ outbox <-chan core.Event }
+
 type pendingMessage = agent.PendingInput
 
 func (m *model) sendToAgent(p pendingMessage) tea.Cmd {
@@ -810,11 +797,15 @@ func (m *model) discardPendingMessages() {
 }
 
 func (m *model) sendPendingMessages() tea.Cmd {
-	if !m.pendingMessages.CanDeliver(false) {
+	if !m.pendingMessages.CanDeliver(false) || m.pendingMessages.Len() == 0 {
 		return nil
 	}
 	if !m.services.Agent.Active() {
 		return nil
+	}
+	if !m.conv.Stream.Active && m.agentReloadPending {
+		outbox := m.services.Agent.Outbox()
+		return func() tea.Msg { return pendingInputReadyMsg{outbox: outbox} }
 	}
 	if !m.conv.Stream.Active && m.pendingMessages.Len() > 0 {
 		m.turnOpenedBy = m.pendingMessages.First().ID
@@ -846,9 +837,6 @@ func (m *model) startMemoryRecall(query string) error {
 	if m.memoryRecall == nil || strings.TrimSpace(query) == "" || conv.IsAgentEnvelope(query) || m.agentAutoMemory.Off() {
 		return nil
 	}
-	if m.services.Recording != nil && m.services.Session != nil {
-		return &llm.RecordingError{Err: fmt.Errorf("memory recall cannot use legacy and typed recording together")}
-	}
 	if err := m.memoryRecall.current.Load().Stop(); err != nil {
 		return err
 	}
@@ -856,10 +844,10 @@ func (m *model) startMemoryRecall(query string) error {
 		m.memoryRecall.surfaced = map[string]bool{}
 	}
 	// The pick is deliberately not a role: it runs at the model's lowest rung
-	// beside the turn, and the plan routes only smol work (judges, hooks, the
+	// beside the turn, and the plan routes only small work (judges, hooks, the
 	// self-learning review) through modelRoles.
 	info := m.sessionModelInfo()
-	r := agent.Recaller{Provider: m.env.LLMProvider, Model: info.ModelID, Effort: agent.LowestEffort(m.env.LLMProvider, m.llmStore(), info), Recording: m.services.Recording}
+	r := agent.Recaller{Provider: m.env.LLMProvider, Model: info.ModelID, Effort: agent.LowestEffort(m.env.LLMProvider, m.llmStore(), info), Recording: m.services.Session}
 	m.memoryRecall.current.Store(r.Start(m.agentAutoMemory, query, maps.Clone(m.memoryRecall.surfaced)))
 	return nil
 }
@@ -930,7 +918,9 @@ const agentStopTimeout = 2 * time.Second
 
 func (m *model) StopAgentRuntime() error {
 	m.cancelAutopilot()
-	m.cancelManualCompaction()
+	if err := m.cancelManualCompaction(); err != nil {
+		return err
+	}
 	m.pendingStopHook = nil
 	ctx, cancel := context.WithTimeout(context.Background(), agentStopTimeout)
 	defer cancel()
@@ -947,7 +937,9 @@ func (m *model) StopAgentRuntime() error {
 // ResetAgentRuntime stops the agent and clears its conversation and UI state.
 func (m *model) ResetAgentRuntime() error {
 	m.cancelAutopilot()
-	m.cancelManualCompaction()
+	if err := m.cancelManualCompaction(); err != nil {
+		return err
+	}
 	m.pendingStopHook = nil
 	ctx, cancel := context.WithTimeout(context.Background(), agentStopTimeout)
 	defer cancel()
@@ -1045,7 +1037,7 @@ func (m *model) preparePermissionRequest(req *agent.PermGateRequest) (*perm.Perm
 }
 
 func (m *model) ReconfigureAgentTool() {
-	if m.env.LLMProvider == nil {
+	if m.env.LLMProvider == nil || m.services.Session == nil {
 		return
 	}
 	m.ensureMemoryContextLoaded()
@@ -1076,9 +1068,34 @@ func (m *model) ReconfigureAgentTool() {
 	executor.SetParentPermissionMode(func() subagent.PermissionMode {
 		return parentPosture(perms)
 	})
-	if m.services.SessionStore != nil && m.sessionID() != "" {
-		executor.SetSessionStore(m.services.SessionStore, m.sessionID())
+	if err := executor.SetSessions(m.services.SessionStore, m.services.Session); err != nil {
+		m.conv.AddNotice("Cannot configure agents: " + err.Error())
+		return
 	}
+	settings, bridge, memory := m.services.Setting, m.conv.AgentToUI, m.autoMemory()
+	executor.ConfigureOwner(m.services.Task, m.services.Subagent, func(child *session.Session, _ bool, source tool.AgentInteractionSource) tool.Resolver {
+		return newWorkerResolver(settings, perms, memory, bridge, child, source)
+	}, nil)
+	parentHooks := m.services.Hook
+	executor.SetChildHooks(func(owner *session.Session, provider llm.Provider, model string) (hook.Handler, func(llm.Provider, string), func()) {
+		projection := owner.Snapshot()
+		cwd := projection.Identity().InitialCWD
+		if value := projection.State().ExecutionCWD; value != nil {
+			cwd = *value
+		}
+		child := parentHooks.ForSession(owner.ID(), cwd, owner.Path())
+		bind := func(provider llm.Provider, model string) {
+			bindSessionHooks(child, provider, owner, model)
+		}
+		bind(provider, model)
+		return child, bind, child.Shutdown
+	})
+	files := m.env.FileCache
+	executor.SetPostTool(func(handler hook.Handler, result core.ToolResult, effect any) error {
+		engine, _ := handler.(*hook.Engine)
+		agent.PostTool(result, effect, engine, agent.WorkspaceCallbacks{TouchFile: files.Touch})
+		return nil
+	})
 	executor.SetProjectInstructions(m.env.CachedProjectInstructions)
 	executor.SetSkillsDirectory(m.services.Skill.PromptSection())
 	executor.SetMCPDependencies(m.services.MCP)
@@ -1115,7 +1132,7 @@ func (m *model) ReconfigureAgentTool() {
 // ============================================================
 
 func (m *model) buildLLMClient() *llm.Client {
-	c := llm.NewClient(m.env.LLMProvider, m.env.GetModelID(), kit.GetMaxOutput(m.services.LLM.Store(), m.env.CurrentModel, setting.DefaultMaxTokens))
+	c := llm.NewClient(m.env.LLMProvider, m.env.GetModelID(), m.sessionMaxOutput())
 	c.SetThinkingEffort(m.env.EffectiveThinkingEffort())
 	// Which conversation this client answers for, and where. The session is the
 	// writer's, so the identity a vendor sees survives a resume; it is absent

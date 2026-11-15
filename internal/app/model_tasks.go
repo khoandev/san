@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"html"
@@ -13,7 +14,6 @@ import (
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"
 	"github.com/genai-io/san/internal/core"
-	"github.com/genai-io/san/internal/session"
 	"github.com/genai-io/san/internal/task"
 	"github.com/genai-io/san/internal/todo"
 	agenttool "github.com/genai-io/san/internal/tool/agent"
@@ -316,7 +316,7 @@ func (m *model) openTaskTranscript(msg input.TaskTranscriptMsg) tea.Cmd {
 	m.userInput.Transcript.Enter("Task "+msg.TaskID+" · Loading…", nil, m.env.Width, m.env.Height)
 	generation, sessionID := m.userInput.Transcript.Generation(), msg.SessionID
 	return func() tea.Msg {
-		history, err := store.Read(sessionID, session.LegacyReadOptions{FullHistory: true})
+		history, err := store.Read(context.Background(), sessionID)
 		if err != nil {
 			return taskTranscriptLoadedMsg{generation: generation, taskID: msg.TaskID, err: err}
 		}
@@ -362,7 +362,11 @@ func (m *model) steerViewedTask(msg input.TaskSteerMsg) tea.Cmd {
 		m.resumeTaskViewer()
 		return nil
 	}
-	if err := agenttool.DeliverToRunning(m.services.Task, msg.TaskID, m.sessionID(), "", msg.Message); err != nil {
+	if err := agenttool.DeliverToRunning(m.services.Task, agenttool.Delivery{
+		TaskID:        msg.TaskID,
+		ParentSession: m.sessionID(),
+		Message:       msg.Message,
+	}); err != nil {
 		m.conv.AddNotice("Could not message task " + msg.TaskID + ": " + err.Error())
 		m.resumeTaskViewer()
 		return nil

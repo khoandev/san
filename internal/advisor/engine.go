@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	sdkagent "github.com/genai-io/sdk-go/pkg/agent"
 	"github.com/genai-io/sdk-go/pkg/ai"
 
 	"github.com/genai-io/san/internal/core"
@@ -60,6 +61,12 @@ type EngineConfig struct {
 	CWD string
 	// OnEvent observes the fork's lifecycle events, for a sidechain writer.
 	OnEvent func(core.Event)
+	// InferenceAdmission, ToolAdmission and OutputAdmission persist the fork's
+	// before-effect boundaries. A caller that opened a sidechain session installs
+	// all three with OnEvent; a caller without one leaves them nil.
+	InferenceAdmission func(context.Context, sdkagent.InferenceAdmission) error
+	ToolAdmission      func(context.Context, sdkagent.ToolAdmission) error
+	OutputAdmission    func(context.Context, sdkagent.OutputAdmission) error
 }
 
 // Engine runs one review. It holds no state: every run is a fresh fork with its
@@ -121,10 +128,13 @@ func (e *Engine) Advise(ctx context.Context, transcript string) (note string, st
 		Tools:          tools,
 		// Static allowlist, no interactive resolver: a review must never prompt
 		// the TUI from its background goroutine.
-		Gate:      tool.Permission(readOnlyGate(tools)),
-		MaxSteps:  defaultMaxSteps,
-		OutboxBuf: -1, // headless fork, driven through ThinkAct
-		OnEvent:   e.cfg.OnEvent,
+		Gate:               tool.Permission(readOnlyGate(tools)),
+		MaxSteps:           defaultMaxSteps,
+		OutboxBuf:          -1, // headless fork, driven through ThinkAct
+		OnEvent:            e.cfg.OnEvent,
+		InferenceAdmission: e.cfg.InferenceAdmission,
+		ToolAdmission:      e.cfg.ToolAdmission,
+		OutputAdmission:    e.cfg.OutputAdmission,
 	})
 	ag.Append(core.UserMessage(reviewPrompt(transcript), nil))
 

@@ -17,20 +17,28 @@ import (
 // turn, so an oversized read must be paged exactly as the main agent's is —
 // otherwise the worker pays for the same 100 KB at every following step.
 func TestWorkerToolResultsArePagedThroughTheChildSession(t *testing.T) {
-	dir := t.TempDir()
-	store, err := session.NewLegacyStoreWithDir(dir)
+	home, dir := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	store, err := session.OpenStore(context.Background(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	child, err := store.Create(session.LegacyCreateOptions{AgentID: "subagent", Model: "fake", Cwd: dir, ParentSessionID: "parent"})
+	t.Cleanup(func() { _ = store.Close() })
+	child, err := store.Create(context.Background(), session.CreateOptions{
+		AgentID:    "subagent",
+		InitialCWD: dir,
+		Config:     &session.EventConfig{Model: new("fake"), Mode: new("normal")},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = child.Close() })
 
 	executor := NewExecutor(nil, dir, "fake", nil)
-	executor.SetSessionStore(store, "parent")
-	filter := executor.resultFilter(&preparedRun{native: child})
+	if err := executor.SetSessions(store, nil); err != nil {
+		t.Fatal(err)
+	}
+	filter := executor.resultFilter(&preparedRun{store: store, recording: child})
 	if filter == nil {
 		t.Fatal("a live child session was left unfiltered")
 	}
@@ -50,7 +58,7 @@ func TestWorkerToolResultsArePagedThroughTheChildSession(t *testing.T) {
 	if !strings.Contains(page, "persisted") {
 		t.Errorf("the worker was not told the rest exists: %q", page[max(0, len(page)-120):])
 	}
-	if persisted := findBlob(t, dir, child.ID(), "tc-1"); persisted != full {
+	if persisted := findBlob(t, home, child.ID(), "tc-1"); persisted != full {
 		t.Error("the page points at a blob that was not written whole")
 	}
 }
@@ -66,13 +74,13 @@ func TestWorkerWithoutAChildSessionLeavesResultsAlone(t *testing.T) {
 
 func findBlob(t *testing.T, root, sessionID, callID string) string {
 	t.Helper()
-	want := filepath.Join("blobs", "tool-result", sessionID, callID)
+	want := filepath.Join("sessions", sessionID, "blobs", "tool-result", callID)
 	var found string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || found != "" {
 			return err
 		}
-		if rel, relErr := filepath.Rel(root, path); relErr == nil && rel == want {
+		if rel, relErr := filepath.Rel(root, path); relErr == nil && strings.HasSuffix(filepath.ToSlash(rel), want) {
 			found = path
 		}
 		return nil

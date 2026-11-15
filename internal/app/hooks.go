@@ -50,9 +50,8 @@ func (m *model) executeStartupHooks(ctx context.Context) hook.HookOutcome {
 
 // pendingStopHook identifies the pending decision and its session/runtime.
 type pendingStopHook struct {
-	session   *session.LegacySession
-	recording *session.Session
-	outbox    <-chan core.Event
+	session *session.Session
+	outbox  <-chan core.Event
 }
 
 type stopHookResultMsg struct {
@@ -64,7 +63,7 @@ type stopHookResultMsg struct {
 }
 
 func (m *model) fireIdleHooksCmd(result core.Result) tea.Cmd {
-	pending := &pendingStopHook{session: m.services.Session, recording: m.services.Recording, outbox: m.AgentOutbox()}
+	pending := &pendingStopHook{session: m.services.Session, outbox: m.AgentOutbox()}
 	m.pendingStopHook = pending
 	check := agent.NewStopCheck(m.services.Hook, core.LastAssistantChatContent(m.conv.Messages))
 	return func() tea.Msg {
@@ -119,7 +118,8 @@ func (m *model) switchProvider(p llm.Provider) {
 // completion is a one-shot utility call, repeated for every event and invisible
 // to the conversation — exactly what a cheap role exists for. An unassigned
 // role, an unconnected vendor or settings that are not wired all leave the
-// session provider and model in charge.
+// session provider and model in charge. The call stays recorded as a side call
+// of the native conversation, so a hook never writes outside the session.
 func (m *model) wireHookCompleter() {
 	target := m.resolveRole(llm.RoleFast)
 	provider, modelID := target.Provider, target.ModelID
@@ -129,7 +129,7 @@ func (m *model) wireHookCompleter() {
 	if modelID == "" {
 		modelID = m.env.GetModelID()
 	}
-	m.services.Hook.SetLLMCompleter(buildHookCompleter(provider, modelID, m.resolveRoleEffort(target)), modelID)
+	bindSessionHooksOn(m.services.Hook, provider, m.services.Session, modelID, m.resolveRoleEffort(target))
 }
 
 // resolveRoleModelOver answers role's provider, model and effort from a
@@ -211,14 +211,20 @@ func joinSections(parts []string) string {
 }
 
 // buildRecordedHookCompleter builds the hook completion whose call is recorded
-// as a side call of the conversation that owns it.
-func buildRecordedHookCompleter(p llm.Provider, owner *session.Session) hook.RecordedLLMCompleter {
+// as a side call of the conversation that owns it. hookModel and effort are the
+// model and rung the role behind the hook resolved to, so the effort is only
+// sent when the completion really runs on that model: a hook command that names
+// a model of its own gets no rung nobody validated.
+func buildRecordedHookCompleter(p llm.Provider, owner *session.Session, hookModel, effort string) hook.RecordedLLMCompleter {
 	if p == nil {
 		return nil
 	}
 	return func(ctx context.Context, systemPrompt, userMessage, model string) (hook.LLMCompletion, error) {
 		scope := owner.Completion(session.PurposeHook)
 		c := llm.NewClient(p, model, 0)
+		if effort != "" && model == hookModel {
+			c.SetThinkingEffort(effort)
+		}
 		// A recorded hook runs outside any conversation too, but the vendor
 		// that states the working directory in the prompt still needs it.
 		c.SetWorkingDir(func() string {
@@ -239,10 +245,11 @@ func buildRecordedHookCompleter(p llm.Provider, owner *session.Session) hook.Rec
 	}
 }
 
-// buildHookCompleter builds the one-shot completion a hook runs on. hookModel
-// and effort are the model and rung the role behind the hook resolved to, so
-// the effort is only sent when the completion really runs on that model: a
-// hook command that names a model of its own gets no rung nobody validated.
+// buildHookCompleter builds the one-shot completion a hook runs on before a
+// native session owns it: hookModel and effort are the model and rung the role
+// behind the hook resolved to, so the effort is only sent when the completion
+// really runs on that model — a hook command that names a model of its own gets
+// no rung nobody validated.
 func buildHookCompleter(p llm.Provider, hookModel, effort string) hook.LLMCompleter {
 	if p == nil {
 		return nil

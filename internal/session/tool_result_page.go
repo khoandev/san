@@ -24,7 +24,7 @@ const (
 // UTF-8. Persisting the whole content is what makes the page honest; when the
 // write fails the note says the content was not kept, because a preview that
 // silently dropped the rest would read to the model as the whole result.
-func (s *LegacyStore) PageToolResult(sessionID, toolCallID, full string) string {
+func (s *Store) PageToolResult(sessionID, toolCallID, full string) string {
 	if len(full) <= ToolResultOverflowThreshold {
 		return ""
 	}

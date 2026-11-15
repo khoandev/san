@@ -10,27 +10,29 @@ import (
 	"github.com/genai-io/san/internal/broker"
 	"github.com/genai-io/san/internal/core"
 	"github.com/genai-io/san/internal/session"
-	"github.com/genai-io/san/internal/transcript"
 )
 
 // childSession writes a finished worker conversation the way the subagent
 // executor does, and returns its store and id.
-func childSession(t *testing.T, line string) (*session.LegacyStore, string) {
+func childSession(t *testing.T, line string) (*session.Store, string) {
 	t.Helper()
-	store, err := session.NewLegacyStore(t.TempDir())
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := session.OpenStore(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	open, err := store.Create(session.LegacyCreateOptions{
-		AgentID: "subagent", Model: "test-model", Cwd: t.TempDir(), ParentSessionID: "parent",
+	open, err := store.Create(ctx, session.CreateOptions{
+		AgentID:    "subagent",
+		InitialCWD: dir,
+		Config:     &session.EventConfig{Model: new("test-model"), Mode: new("normal")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	message := core.UserMessage(line, nil)
 	message.ID = core.NewMessageID()
-	record := transcript.Record{Type: transcript.ConversationReplaced, Messages: []core.Message{message}}
-	if err := open.Append(context.Background(), record); err != nil {
+	if err := open.Append(ctx, session.Event{Payload: session.MessageAppendPayload{Messages: []core.Message{message}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := open.Close(); err != nil {

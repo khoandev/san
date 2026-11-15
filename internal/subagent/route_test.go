@@ -334,13 +334,15 @@ func TestExplicitTierBeatsTheDefinitionsOwnRung(t *testing.T) {
 // continues the run it was started with, so a new tier on the request cannot
 // move the model underneath it.
 func TestContinuationKeepsItsApprovedRung(t *testing.T) {
-	store, err := session.NewLegacyStoreWithDir(t.TempDir())
+	store, err := session.OpenStore(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	router := &fixtureRouter{decision: RouteDecision{Tier: "deep"}, ok: true}
 	executor := NewExecutor(continuationProvider{aitest.New(aitest.Says("done"))}, t.TempDir(), "aitest", nil)
-	executor.SetSessionStore(store, "parent-tier-test")
+	if err := executor.SetSessions(store, nil); err != nil {
+		t.Fatal(err)
+	}
 	executor.SetParentPermissionMode(func() PermissionMode { return PermissionDefault })
 	executor.SetRoleResolver(func(role string) RoleAssignment {
 		return RoleAssignment{Provider: executor.provider, ModelID: role + "-model", Assigned: true}

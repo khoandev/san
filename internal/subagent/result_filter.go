@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/genai-io/san/internal/core"
-	"github.com/genai-io/san/internal/session"
 	sdkagent "github.com/genai-io/sdk-go/pkg/agent"
 	"github.com/genai-io/sdk-go/pkg/ai"
 )
@@ -18,11 +17,11 @@ import (
 // is left unfiltered: replacing a result there would hand the worker a
 // truncated answer with nowhere to find the rest.
 func (e *Executor) resultFilter(run *preparedRun) core.ResultFilter {
-	store, ok := e.sessionStore.(*session.LegacyStore)
-	if !ok || run.native == nil {
+	store := run.store
+	if store == nil || run.recording == nil {
 		return nil
 	}
-	sessionID := run.native.ID()
+	sessionID := run.recording.ID()
 	return func(_ context.Context, c sdkagent.PostToolContext) (*sdkagent.Result, error) {
 		page := store.PageToolResult(sessionID, c.Call.ID, c.Result.Content.Text())
 		if page == "" {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"github.com/genai-io/san/internal/setting"
 	"github.com/genai-io/san/internal/subagent"
 	"github.com/genai-io/san/internal/tool/perm"
-	"github.com/genai-io/san/internal/transcript"
 )
 
 // TestParentPostureIsReadOnlyInPlanMode pins what a spawned worker inherits:
@@ -207,15 +207,17 @@ func TestPlanModeRulesRideOnTheSystemPrompt(t *testing.T) {
 // The plan is session state: it round-trips through the transcript and comes
 // back complete — mode, plans, step statuses, and the cursor.
 func TestPlanStateSurvivesSessionRoundTrip(t *testing.T) {
+	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := session.NewLegacyStoreWithDir(dir)
+	store, err := session.OpenStore(ctx, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := store.Create(session.LegacyCreateOptions{ID: "sess-1"})
+	opened, err := store.Create(ctx, session.CreateOptions{ID: "sess-1", InitialCWD: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = opened.Close() })
 
 	m := newPlanModel(t)
 	m.services.SessionStore = store
@@ -237,12 +239,15 @@ func TestPlanStateSurvivesSessionRoundTrip(t *testing.T) {
 	}
 	m.persistPlan()
 
-	history, err := store.Read("sess-1", session.LegacyReadOptions{})
+	history, err := store.Read(ctx, "sess-1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	restored := plan.NewStore()
-	restored.Restore(history.Plan)
+	if history.State().Plan == nil {
+		t.Fatal("the session state carries no plan")
+	}
+	restored.Restore(*history.State().Plan)
 	if got := restored.Mode(); got != plan.ModeExecute {
 		t.Fatalf("restored mode = %q, want execute", got)
 	}
@@ -594,14 +599,11 @@ func TestSessionRecordCarriesPlan(t *testing.T) {
 	m.plan.SubmitDraft(testPlan("plan-1", "A plan", "step"))
 
 	record := m.buildSessionRecord()
-	if record == nil || record.State == nil || record.State.Plan == nil {
+	if record == nil || record.State == nil || record.State.Plan.Value == nil {
 		t.Fatal("the session state record does not carry the plan")
 	}
-	if record.State.Plan.ActiveID != "plan-1" {
+	if got := record.State.Plan.Value.ActiveID; got != "plan-1" {
 		t.Fatalf("plan in record = %+v", record.State.Plan)
-	}
-	if record.Type != transcript.SessionStatePatched {
-		t.Fatalf("record type = %q", record.Type)
 	}
 }
 

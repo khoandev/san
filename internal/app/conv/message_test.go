@@ -901,7 +901,7 @@ func TestRenderToolCallsShowsGapForPendingAgent(t *testing.T) {
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	want := "• Agent · Explore · HA code structure"
+	want := kit.CurrentSymbols.LiveDot + " Explore: HA code structure"
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("RenderToolCalls() = %q, want a single visible gap before explicit agent label", rendered)
 	}
@@ -924,7 +924,7 @@ func TestRenderToolCallsPreservesAgentName(t *testing.T) {
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	want := "• Agent · general-purpose · audit git changes"
+	want := kit.CurrentSymbols.LiveDot + " general-purpose: audit git changes"
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("RenderToolCalls() = %q, want named agent label", rendered)
 	}
@@ -962,7 +962,7 @@ func TestRenderToolCallsShowsSingleAgentRuntimeActivity(t *testing.T) {
 	}
 
 	rendered := stripANSI(RenderToolCalls(params))
-	want := "• Agent · Explore · audit git changes before review"
+	want := kit.CurrentSymbols.LiveDot + " Explore: audit git changes before review"
 	if !strings.Contains(rendered, want) {
 		t.Fatalf("RenderToolCalls() = %q, want agent header", rendered)
 	}

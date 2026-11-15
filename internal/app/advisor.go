@@ -19,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"go.uber.org/zap"
 
+	sdkagent "github.com/genai-io/sdk-go/pkg/agent"
 	"github.com/genai-io/sdk-go/pkg/ai"
 
 	"github.com/genai-io/san/internal/advisor"
@@ -385,23 +386,36 @@ func (m *model) runAdvisorTurn(s *advisorSession, transcript string) {
 // that lets the inspector replay it. The returned func releases it.
 func (m *model) advisorEngine(s *advisorSession) (*advisor.Engine, func()) {
 	var onEvent func(core.Event)
+	var inferenceAdmission func(context.Context, sdkagent.InferenceAdmission) error
+	var toolAdmission func(context.Context, sdkagent.ToolAdmission) error
+	var outputAdmission func(context.Context, sdkagent.OutputAdmission) error
 	var forkID string
 	cleanup := func() {}
 	if store := m.services.SessionStore; store != nil {
-		rec, err := store.Create(session.LegacyCreateOptions{
-			AgentID:         advisorAgentID,
-			Provider:        advisorProviderName(s.provider),
-			Model:           s.modelID,
-			MaxTokens:       advisorMaxTokens,
-			Cwd:             s.cwd,
-			ParentSessionID: s.parentSessionID,
-			Sidechain:       true,
-		})
+		provider := advisorProviderName(s.provider)
+		opts := session.CreateOptions{
+			AgentID:    advisorAgentID,
+			InitialCWD: s.cwd,
+			Config: &session.EventConfig{
+				Provider:          new(provider),
+				Model:             new(s.modelID),
+				Mode:              new("normal"),
+				GenerationOptions: &session.GenerationOptions{Version: 1, MaxTokens: new(advisorMaxTokens)},
+			},
+		}
+		if s.parentSessionID != "" {
+			opts.Parent = &session.ParentLink{Session: s.parentSessionID}
+		}
+		rec, err := store.Create(context.Background(), opts)
 		if err != nil {
 			// The review is still worth running without a replayable sidechain.
 			log.Logger().Warn("could not open advisor session", zap.Error(err))
 		} else {
-			onEvent = rec.RecordEvent
+			recorder := session.NewRecorder(rec, provider)
+			onEvent = recorder.RecordEvent
+			inferenceAdmission = recorder.InferenceAdmission
+			toolAdmission = recorder.ToolAdmission
+			outputAdmission = recorder.OutputAdmission
 			forkID = rec.ID()
 			cleanup = func() { _ = rec.Close() }
 		}
@@ -412,14 +426,17 @@ func (m *model) advisorEngine(s *advisorSession) (*advisor.Engine, func()) {
 	client.SetWorkingDir(func() string { return s.cwd })
 
 	return advisor.NewEngine(advisor.EngineConfig{
-		Client:         client.TurnClient,
-		CallOptions:    client.CallOptions,
-		ShapeInference: client.ShapeInference,
-		Tools:          advisor.ReadOnlyTools(s.cwd),
-		Model:          s.modelID,
-		Timeout:        advisor.DefaultTimeout,
-		CWD:            s.cwd,
-		OnEvent:        onEvent,
+		Client:             client.TurnClient,
+		CallOptions:        client.CallOptions,
+		ShapeInference:     client.ShapeInference,
+		Tools:              advisor.ReadOnlyTools(s.cwd),
+		Model:              s.modelID,
+		Timeout:            advisor.DefaultTimeout,
+		CWD:                s.cwd,
+		OnEvent:            onEvent,
+		InferenceAdmission: inferenceAdmission,
+		ToolAdmission:      toolAdmission,
+		OutputAdmission:    outputAdmission,
 	}), cleanup
 }
 
