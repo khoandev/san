@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,10 +57,12 @@ const (
 	// else, so these move with the installed client rather than staying on the
 	// version the port was first written against.
 	opencodeChannel = "latest"
-	opencodeVersion = "2.2.6"
+	opencodeVersion = "2.3.0"
 
-	// opencodeClientName is what the CLI reports as x-opencode-client.
-	opencodeClientName = "cli"
+	// opencodeClientName is what the CLI reports as x-opencode-client, and the
+	// last segment of its User-Agent: 2.3.0 sends the app name, which the
+	// released build leaves at its "opencode" default.
+	opencodeClientName = "opencode"
 
 	// opencodeUserAgent is the full token OpenCode puts on the wire:
 	// opencode/<channel>/<version>/<client>.
@@ -249,7 +252,7 @@ func newUUIDv4() string {
 // ---------------------------------------------------------------------------
 
 // opencodeSessionHeaders is the identity every request to Zen carries, in the
-// four spellings the 2.2.6 CLI sends: the same affinity token answers to
+// four spellings the 2.3.0 CLI sends: the same affinity token answers to
 // x-opencode-session, x-opencode-session-id, x-session-affinity and
 // X-Session-Id, while x-opencode-project names the canonical project root.
 // Traffic that belongs to no conversation still has to carry the header shape,
@@ -343,6 +346,55 @@ func opencodeShapeRequest(modelID, sessionID, cwd string, system *string, tools 
 	}
 	addOpenCodeEnvBlock(system, cwd)
 	addOpenCodeGateTools(tools)
+	addOpenCodeReadPathName(tools)
+}
+
+// addOpenCodeReadPathName spells the Read tool's path argument the way
+// OpenCode's own read tool does.
+//
+// The gate resolves the roster's read tool and refuses the whole request when
+// its path argument is not `filePath` — as a 429 that reads like a spent
+// allowance, not as a schema error. The rename is the wire's only; the tool
+// adapter turns the argument back into `file_path` before anything in San sees
+// it. Every other tool, and a roster without one, is left alone.
+func addOpenCodeReadPathName(tools *[]core.ToolSchema) {
+	if tools == nil {
+		return
+	}
+	for i := range *tools {
+		schema := &(*tools)[i]
+		if schema.Name != "Read" {
+			continue
+		}
+		definition, ok := schema.Definition.(map[string]any)
+		if !ok {
+			continue
+		}
+		properties, _ := definition["properties"].(map[string]any)
+		if properties == nil {
+			continue
+		}
+		path, ok := properties["file_path"]
+		if !ok {
+			continue
+		}
+		delete(properties, "file_path")
+		properties["filePath"] = path
+		switch required := definition["required"].(type) {
+		case []string:
+			for j, name := range required {
+				if name == "file_path" {
+					required[j] = "filePath"
+				}
+			}
+		case []any:
+			for j, name := range required {
+				if name == "file_path" {
+					required[j] = "filePath"
+				}
+			}
+		}
+	}
 }
 
 // addOpenCodeEnvBlock appends the <env> block the gate looks for, unless the
@@ -536,6 +588,16 @@ type opencodeRoundTripper struct {
 	next http.RoundTripper
 }
 
+// opencodeMaxRetryWait caps the Retry-After the free tier advertises.
+//
+// Zen answers a refused free-model call with a Retry-After that runs to the end
+// of the UTC day — tens of thousands of seconds. The agent loop treats that as
+// an instruction and sleeps on it, so one refusal holds the conversation for
+// hours with no error and no dialog to act on. San retries within seconds
+// instead: a burst limit clears in time, and a spent allowance surfaces as the
+// rate-limit banner the user can retry when it resets.
+const opencodeMaxRetryWait = time.Second
+
 func (rt opencodeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	var stripped http.Header
 	for name := range req.Header {
@@ -550,7 +612,18 @@ func (rt opencodeRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 		req = req.Clone(req.Context())
 		req.Header = stripped
 	}
-	return rt.next.RoundTrip(req)
+	resp, err := rt.next.RoundTrip(req)
+	if err != nil || resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+		return resp, err
+	}
+	// The header is per response, so rewriting it here cannot leak into the
+	// shared client.
+	if raw := resp.Header.Get("Retry-After"); raw != "" {
+		if seconds, perr := strconv.Atoi(strings.TrimSpace(raw)); perr != nil || seconds > int(opencodeMaxRetryWait/time.Second) {
+			resp.Header.Set("Retry-After", strconv.Itoa(int(opencodeMaxRetryWait/time.Second)))
+		}
+	}
+	return resp, err
 }
 
 // opencodeClientHello is the ClientHello Bun's fetch sends, in its order: no

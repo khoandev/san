@@ -1354,6 +1354,10 @@ func extractToolArgs(input string) string {
 	if fp, ok := params["file_path"].(string); ok {
 		return fp
 	}
+	// The Zen free tier's schema spells the same argument `filePath`.
+	if fp, ok := params["filePath"].(string); ok {
+		return fp
+	}
 	// An input carrying a payload is an Edit call: it names its file in the
 	// payload header, so the row shows the target instead of the patch.
 	if fp := perm.CallFile("Edit", params); fp != "" {

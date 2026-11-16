@@ -124,6 +124,56 @@ func TestOpenCodeShapeRequestAddsTheEnvBlockAndGateToolsOnce(t *testing.T) {
 	}
 }
 
+// TestOpenCodeShapeRequestRenamesTheReadPath pins the one schema the gate
+// validates: OpenCode's read tool takes `filePath`, and a roster whose read
+// tool says `file_path` is refused as if the allowance were spent.
+func TestOpenCodeShapeRequestRenamesTheReadPath(t *testing.T) {
+	tools := []core.ToolSchema{{
+		Name: "Read",
+		Definition: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"file_path": map[string]any{"type": "string"},
+				"offset":    map[string]any{"type": "integer"},
+			},
+			"required": []string{"file_path"},
+		},
+	}}
+	system := "base"
+	opencodeShapeRequest("big-pickle", "conv-1", "/tmp/project", &system, &tools)
+
+	var read *core.ToolSchema
+	for i := range tools {
+		if tools[i].Name == "Read" {
+			read = &tools[i]
+		}
+	}
+	if read == nil {
+		t.Fatal("the Read tool vanished")
+	}
+	definition, _ := read.Definition.(map[string]any)
+	properties, _ := definition["properties"].(map[string]any)
+	if _, ok := properties["filePath"]; !ok {
+		t.Fatalf("properties = %v, want a filePath argument", properties)
+	}
+	if _, ok := properties["file_path"]; ok {
+		t.Fatalf("the wire still carries file_path: %v", properties)
+	}
+	if _, ok := properties["offset"]; !ok {
+		t.Fatalf("unrelated properties were lost: %v", properties)
+	}
+	required, _ := definition["required"].([]string)
+	if len(required) != 1 || required[0] != "filePath" {
+		t.Fatalf("required = %v, want [filePath]", required)
+	}
+
+	// A second pass — a retried inference — keeps the rename and adds nothing.
+	opencodeShapeRequest("big-pickle", "conv-1", "/tmp/project", &system, &tools)
+	if _, ok := properties["filePath"]; !ok {
+		t.Fatalf("a second shape lost the rename: %v", properties)
+	}
+}
+
 func TestOpenCodeShapeRequestLeavesABilledModelAlone(t *testing.T) {
 	system := "base"
 	tools := []core.ToolSchema{{Name: "Read"}}
@@ -165,7 +215,7 @@ func TestOpenCodeSessionHeadersForAFreeModel(t *testing.T) {
 	if !opencodeSessionPattern.MatchString(session) {
 		t.Errorf("x-opencode-session = %q, want the canonical shape", session)
 	}
-	// The 2.2.6 CLI answers to four spellings of the affinity token, and the
+	// The 2.3.0 CLI answers to four spellings of the affinity token, and the
 	// gate reads the same token from each.
 	for _, name := range []string{"x-opencode-session-id", "x-session-affinity", "X-Session-Id"} {
 		if got := headers[name]; got != session {
@@ -265,6 +315,45 @@ func TestOpenCodeRoundTripperDropsSDKHeaders(t *testing.T) {
 	}
 	if req.Header.Get("X-Stainless-Lang") != "go" {
 		t.Fatal("the caller's request was mutated")
+	}
+}
+
+// TestOpenCodeRetryAfterIsCapped keeps a free-tier refusal from stalling the
+// turn: the gateway's hint runs to the end of the UTC day, and the agent loop
+// would sleep on it instead of retrying or reporting.
+func TestOpenCodeRetryAfterIsCapped(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		header string
+		want   string
+	}{
+		{name: "end-of-day hint", status: http.StatusTooManyRequests, header: "84078", want: "1"},
+		{name: "one second", status: http.StatusTooManyRequests, header: "1", want: "1"},
+		{name: "no hint", status: http.StatusTooManyRequests, header: "", want: ""},
+		{name: "not a refusal", status: http.StatusOK, header: "84078", want: "84078"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := opencodeRoundTripper{next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				header := http.Header{}
+				if tc.header != "" {
+					header.Set("Retry-After", tc.header)
+				}
+				return &http.Response{StatusCode: tc.status, Header: header, Body: io.NopCloser(strings.NewReader(""))}, nil
+			})}
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://opencode.ai/zen/v1/chat/completions", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := rt.RoundTrip(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resp.Header.Get("Retry-After"); got != tc.want {
+				t.Errorf("Retry-After = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -156,6 +156,10 @@ func (a *toolAdapter) Run(ctx context.Context, call ai.ToolCall) (agent.Result, 
 		ctx = a.toolContext(ctx)
 	}
 	input, _ := core.ParseToolInput(call.Input)
+	// OpenCode's free tier reads the Read tool's path argument as `filePath`;
+	// the wire keeps that spelling (see addOpenCodeReadPathName), and the tool,
+	// its permission gate and its preview keep San's.
+	normalizeReadPath(a.inner.Name(), input)
 	if a.permissionCheck != nil {
 		ctx = context.WithValue(ctx, permissionCheckKey{}, a.permissionCheck)
 	}
@@ -266,4 +270,21 @@ func CheckPermission(ctx context.Context, name string, input map[string]any) (bo
 		return false, "continuation requires the parent permission gate"
 	}
 	return check(ctx, name, input)
+}
+
+// normalizeReadPath restores the path argument San's Read tool reads. The Zen
+// free tier's gate requires the wire schema to spell it `filePath` — OpenCode's
+// own name — and refuses the whole request otherwise, so the adapter turns it
+// back before the executor, the permission gate or the preview looks at it.
+func normalizeReadPath(name string, input map[string]any) {
+	if name != "Read" || input == nil {
+		return
+	}
+	path, ok := input["filePath"].(string)
+	if !ok {
+		return
+	}
+	if _, exists := input["file_path"]; !exists {
+		input["file_path"] = path
+	}
 }

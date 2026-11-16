@@ -39,6 +39,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - No edit is required for a settings file: retired role keys in `modelRoles` and `modelRoleEfforts` are folded onto `fast`, `standard` and `deep` when loaded. Replace `model:` values in personal agent files that name a role (`smol`, `task`, `plan`, …) with `@fast`/`@standard`/`@deep`, or leave the field out to inherit the session model; retired names still resolve. Use `mode`, not `permissionMode`, and name only tools san has: `grep`, `find`, `lsp` and `git` are not among them.
 - Agent files that only existed to stand in for a role are unnecessary now: assign the model in `/models` → Roles and delete the file. The old personal files were moved to `~/.san/agents.bak-2026-11-06/` with a note explaining why.
 
+### Fixed
+- OpenCode Zen requests identify as the 2.3.0 client — `opencode/latest/2.3.0/opencode` in the User-Agent and `x-opencode-client` — because 2.3.0 sends the app name, not the retired `cli` spelling the port was written against, and the free-tier gate compares the User-Agent version before it reads the credential.
+- A free-model turn is no longer refused for the shape of its Read tool: the gate resolves the roster's `read` entry and answers a schema whose path argument is `file_path` with `429 FreeUsageLimitError`, the same body it uses for a spent allowance. The shaper now spells it `filePath`, OpenCode's own name, and the tool adapter turns it back into `file_path` before the executor, the permission gate and the preview see it — so a free model fits files again.
+- A refused free-model call no longer holds the conversation for most of a day: Zen answers 429 with a `Retry-After` that runs to the end of the UTC day, and the agent loop honored it as written, so one refusal — a burst limit that clears in seconds included — slept tens of thousands of seconds with no error and no dialog. The Zen transport caps that hint at a second; the loop's own retries then run, and a spent allowance reaches the rate-limit banner instead of a spinner.
+
 ## [v1.25.2] - 2026-11-09
 
 ### Added
