@@ -313,9 +313,12 @@ func (e *Executor) Run(ctx context.Context, req tool.AgentExecRequest) (*AgentRe
 
 	ctx, cancel := context.WithCancel(task.WithSessionID(ctx, run.parentID()))
 	defer cancel()
-	worker := e.taskPool().CreateForegroundAgentTask(generateShortID(), run.cfg.config.Name, req.Description, ctx, cancel)
-	run.req.TaskID = worker.GetID()
-	run.checkpoint = newContinuationState(run, run.parentID(), worker.GetID())
+	run.req.TaskID = generateShortID()
+	run.checkpoint = newContinuationState(run, run.parentID(), run.req.TaskID)
+	if err := e.prepareInbox(ctx, run); err != nil {
+		return nil, err
+	}
+	worker := e.taskPool().CreateForegroundAgentTask(run.req.TaskID, run.cfg.config.Name, req.Description, ctx, cancel)
 	worker.SetLaunchState(run.checkpoint)
 	worker.SetPermissionMode(string(run.cfg.permMode))
 	worker.SetModel(run.cfg.modelID)
@@ -338,6 +341,9 @@ func (e *Executor) Run(ctx context.Context, req tool.AgentExecRequest) (*AgentRe
 
 func (e *Executor) runPrepared(ctx context.Context, run *preparedRun) (out *AgentResult, runErr error) {
 	defer func() {
+		if run.inbox != nil {
+			run.inbox.close()
+		}
 		// Stop hooks may record asynchronously. Drain their owned handler while
 		// the child writer is still live, then release its claim exactly once.
 		if run.stopHooks != nil {
@@ -358,7 +364,7 @@ func (e *Executor) runPrepared(ctx context.Context, run *preparedRun) (out *Agen
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := e.openNative(ctx, run); err != nil {
+	if err := e.openSession(ctx, run); err != nil {
 		return nil, err
 	}
 	if run.hookFactory != nil && !run.hooksBound {
@@ -461,25 +467,30 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 		}
 		run = &preparedRun{hookFactory: e.childHooks, hooks: e.hooks, store: e.store, parent: e.parent, originalPrompt: state.originalPrompt, priorFailure: string(prior.Status) + " " + prior.Error, req: next, cfg: &cfg, cwd: state.cwd, checkpoint: state, startedAt: time.Now(), hookID: "a" + generateShortID()}
 		run.req.TaskID = agentTask.GetID()
-		// Validate and claim native history before changing task state. A broken
-		// checkpoint is a failed continuation request, not another execution
-		// failure that wakes main and invites an unbounded recovery loop.
-		if err = e.openNative(ctx, run); err != nil {
-			cancel()
-			return nil, err
-		}
-		if err = e.acceptContinuationInput(ctx, run); err != nil {
-			state.persistenceErr = err
-			err = errors.Join(err, run.recording.Close())
-			cancel()
-			return nil, err
-		}
-		if _, err = agentTask.BeginAttemptAfter(prior.Attempt, e.parentSessionID, ctx, cancel); err != nil {
+		// Reject stopped, stale or competing starts before touching native input.
+		if _, err = agentTask.BeginAttemptWithSetup(ctx, cancel, prior.Attempt, e.parentSessionID, task.AttemptSetup{
+			Prepare: func() error {
+				if err := e.openSession(ctx, run); err != nil {
+					return err
+				}
+				return e.prepareInbox(ctx, run)
+			},
+			Accept: func() error { return e.acceptContinuationInput(ctx, run) },
+		}); err != nil {
+			if run.inbox != nil {
+				run.inbox.close()
+			}
 			if run.recording != nil {
-				_ = run.recording.Close()
+				if storageErr := run.recording.Err(); storageErr != nil {
+					state.persistenceErr = storageErr
+				}
+				err = errors.Join(err, run.recording.Close())
 			}
 			cancel()
 			return nil, err
+		}
+		if run.inbox != nil {
+			run.inbox.signalCapacity() // Outside the task lock: delivery persists retained mail.
 		}
 	} else {
 		run, err = e.prepareRun(ctx, req)
@@ -491,14 +502,19 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 	identity := run.cfg.config.Name
 
 	if agentTask == nil {
+		run.req.TaskID = generateShortID()
+		run.checkpoint = newContinuationState(run, run.parentID(), run.req.TaskID)
+		if err := e.prepareInbox(ctx, run); err != nil {
+			cancel()
+			return nil, err
+		}
 		agentTask = e.taskPool().CreateAgentTask(
-			generateShortID(),
+			run.req.TaskID,
 			identity,
 			req.Description,
 			ctx,
 			cancel,
 		)
-		run.checkpoint = newContinuationState(run, run.parentID(), agentTask.GetID())
 		agentTask.SetLaunchState(run.checkpoint)
 	}
 	agentTask.SetIdentity(identity, "")
@@ -853,6 +869,10 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 		}
 	}
 
+	cause := "boot"
+	if run.recorder != nil || run.req.ResumeTaskID != "" {
+		cause = "resume"
+	}
 	recorder := session.NewRecorder(run.recording, rc.provider.Name())
 	run.recorder = recorder
 	permissionGate := tool.HookedPermission(run.hooks, childPermission{source: run.interactionSource, child: run.recording, config: rc.config, mode: rc.permMode, parent: e.permissionResolver, background: run.req.Background}, recorder.RecordPermission)
@@ -893,11 +913,6 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 			if text := section.Render(); text != "" {
 				instructions = append(instructions, session.NamedInstruction{Name: section.Name, InstructionSection: session.InstructionSection{Content: text, Slot: int(section.Slot)}})
 			}
-		}
-		cause := "boot"
-		snapshot := run.recording.Snapshot()
-		if len(snapshot.Events()) > 1 {
-			cause = "resume"
 		}
 		if err := recorder.RecordCatalogues(ctx, instructions, tools.Schemas(), nil, cause); err != nil {
 			cleanup()

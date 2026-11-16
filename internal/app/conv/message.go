@@ -313,7 +313,7 @@ func mutedThinkingBody(thinking string, width int, md *MDRenderer) string {
 		// Drop bold markers as the markdown pass does, so a "**Title**" line
 		// doesn't shift when the block settles.
 		wrapWidth := max(width-streamWrapReserve, minWrapWidth)
-		text = lipgloss.NewStyle().Width(wrapWidth).Render(strings.ReplaceAll(thinking, "**", ""))
+		text = renderStreamingText(strings.ReplaceAll(thinking, "**", ""), wrapWidth)
 	}
 	var lines []string
 	for line := range strings.SplitSeq(strings.Trim(text, "\n"), "\n") {
@@ -424,6 +424,16 @@ func RenderAssistantMessage(params AssistantParams) string {
 	return sb.String()
 }
 
+// renderStreamingText keeps live CJK text on the same Unicode line boundaries
+// as settled paragraphs. Expand tabs before measuring their display width.
+func renderStreamingText(content string, width int) string {
+	style := lipgloss.NewStyle()
+	if strings.ContainsFunc(content, paragraphCJK) {
+		content = wrapParagraph(style.Render(content), width)
+	}
+	return style.Width(width).Render(content)
+}
+
 // formatAssistantContent formats the assistant message content based on streaming
 // state. The returned block already carries gutter, the "• " lead or its blank
 // continuation: the plain streaming tail joins its own rows, everything else is
@@ -450,7 +460,7 @@ func formatAssistantContent(params AssistantParams, gutter string) string {
 				return joined
 			}
 		}
-		return lipgloss.JoinHorizontal(lipgloss.Top, gutter, lipgloss.NewStyle().Width(wrapWidth).Render(params.Content))
+		return lipgloss.JoinHorizontal(lipgloss.Top, gutter, renderStreamingText(params.Content, wrapWidth))
 	}
 
 	if params.Content == "" {

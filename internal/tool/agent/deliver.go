@@ -49,7 +49,7 @@ func DeliverToRunning(managed *task.Manager, mail Delivery) error {
 	}
 	from := broker.Main
 	display := brokerSubject(from, mail.Subject)
-	delivered := broker.Send(broker.Message{
+	if err := broker.SendErr(broker.Message{
 		SourceSession: mail.SourceSession,
 		SourceSeq:     mail.SourceSeq,
 		SessionID:     mail.ParentSession,
@@ -57,9 +57,10 @@ func DeliverToRunning(managed *task.Manager, mail Delivery) error {
 		To:            mail.TaskID,
 		Subject:       display,
 		Content:       wrapAgentMessage(from, display, mail.Message),
-	})
-	if !delivered {
-		return fmt.Errorf("worker %q is starting up or its inbox is momentarily full", mail.TaskID)
+	}); err != nil {
+		// The broker's reason stays in the chain: the caller can tell a full
+		// inbox from a missing route or a refusal.
+		return fmt.Errorf("worker %q: %w", mail.TaskID, err)
 	}
 	return nil
 }

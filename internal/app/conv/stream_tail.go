@@ -118,7 +118,7 @@ func (r *MDRenderer) RenderPlainTail(content, gutter string, width int) (string,
 	for rest := content[offset:]; ; {
 		line, after, hasNewline := strings.Cut(rest, "\n")
 		added := 0
-		for row := range strings.SplitSeq(style.Render(line), "\n") {
+		for row := range strings.SplitSeq(renderTailLine(style, line, width), "\n") {
 			t.rows = append(t.rows, row)
 			t.rowWidth = append(t.rowWidth, xansi.StringWidth(row))
 			added++
@@ -159,4 +159,15 @@ func (r *MDRenderer) RenderPlainTail(content, gutter string, width int) (string,
 	t.src = content
 	t.joined, t.joinedGutter, t.joinedOK = sb.String(), gutter, true
 	return t.joined, true
+}
+
+// renderTailLine wraps one source line of the streaming tail. CJK prose breaks
+// on Unicode line boundaries — lipgloss's word wrap treats an unspaced CJK run
+// as one word and moves it wholesale to the next row — while every other text
+// keeps lipgloss's word wrap.
+func renderTailLine(style lipgloss.Style, line string, width int) string {
+	if strings.ContainsFunc(line, paragraphCJK) {
+		return renderStreamingText(line, width)
+	}
+	return style.Render(line)
 }
