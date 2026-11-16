@@ -882,6 +882,7 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 		Gate:            gate,
 		CompactFunc:     subagentCompactFunc(llmClient, run.originalPrompt, run.recording),
 		MaxSteps:        rc.maxSteps,
+		MaxTurnRetries:  core.SilentRetries, // nobody is watching: ride out a transient failure
 		OutboxBuf:       -1,
 		OnEvent:         onEvent,
 		ResultFilter:    e.resultFilter(run),

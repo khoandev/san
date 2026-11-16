@@ -306,6 +306,11 @@ func buildAgentWithOutbox(p BuildParams, outboxBuf int) (core.Agent, *Permission
 		OnEvent:      p.OnEvent,
 		OutboxBuf:    outboxBuf,
 
+		// A watched turn spends no silent replay: a transient provider
+		// failure ends it at once and reaches the person as a dialog, with
+		// the provider's own wait in it.
+		MaxTurnRetries: 0,
+
 		StreamFirstChunkTimeout: p.StreamFirstChunkTimeout,
 		StreamIdleTimeout:       p.StreamIdleTimeout,
 	}

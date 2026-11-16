@@ -281,28 +281,26 @@ func TestRecorderObserverFailureBlocksNextAdmission(t *testing.T) {
 	recorderGolden(t, s, "session.create")
 }
 
-func TestRecorderRetries(t *testing.T) {
+// A transient failure ends the turn on its first failure: the recorder keeps
+// the outcome and its retryability, and nothing replays the call behind the
+// person's back — that is the dialog's work, not the loop's.
+func TestRecorderRecordsTheFailureWithoutReplaying(t *testing.T) {
 	s := createTyped(t, cleanStore(t), CreateOptions{})
 	r := NewRecorder(s, "test")
-	d := aitest.New(aitest.Fails(&ai.Error{Kind: ai.KindNetwork, Message: "stream stalled"}), aitest.Says("done"))
+	d := aitest.Always(aitest.Fails(&ai.Error{Kind: ai.KindNetwork, Message: "stream stalled"}))
 	a := recorderAgent(r, d, nil)
-	if err := recorderRun(t, a); err != nil {
-		t.Fatal(err)
+	if err := recorderRun(t, a); err == nil {
+		t.Fatal("the turn should end on the failure")
 	}
-	recorderGolden(t, s, "session.create", "message.append", "inference.start", "inference.finish", "inference.start", "message.append", "inference.finish")
+	recorderGolden(t, s, "session.create", "message.append", "inference.start", "inference.finish")
 	p := s.Snapshot()
 	events := p.Events()
-	first := events[2].Payload.(*InferenceStartPayload)
-	second := events[4].Payload.(*InferenceStartPayload)
-	if first.TurnID == "" || first.TurnID != second.TurnID {
-		t.Fatal("retry lost turn identity")
-	}
 	finish := events[3].Payload.(*InferenceFinishPayload)
 	if finish.Outcome != OutcomeFailure || finish.Error == nil || !finish.Error.Retryable {
-		t.Fatalf("retry failure: %+v", finish)
+		t.Fatalf("failure outcome: %+v", finish)
 	}
-	if events[3].Source == nil || events[3].Source.Seq != events[2].Seq || events[6].Source == nil || events[6].Source.Seq != events[4].Seq {
-		t.Fatal("retry outcomes not independently correlated")
+	if events[3].Source == nil || events[3].Source.Seq != events[2].Seq {
+		t.Fatal("failure outcome not correlated with its inference")
 	}
 }
 

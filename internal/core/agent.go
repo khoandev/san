@@ -191,7 +191,7 @@ type Config struct {
 	CompactFunc             func(ctx context.Context, msgs []Message) (Compaction, error) // optional: summarize messages for compaction
 	MaxSteps                int                                                           // max LLM inference steps per turn, 0 = unlimited
 	MaxContinuations        int                                                           // how many times a model cut off by the output cap is asked to carry on, 0 = use default (3)
-	MaxTurnRetries          int                                                           // max retries per inference step on transient stream errors, 0 = use default (2)
+	MaxTurnRetries          int                                                           // silent replays the loop may spend on a transient failure, 0 = none
 	StreamFirstChunkTimeout time.Duration                                                 // abort if no first chunk arrives within this long, 0 = use default (5m)
 	StreamIdleTimeout       time.Duration                                                 // abort a stream that goes silent between chunks for this long, 0 = use default (60s)
 	InboxBuf                int                                                           // inbox channel buffer size, default 16
@@ -200,13 +200,18 @@ type Config struct {
 	OnEvent func(Event)
 }
 
-// Deliberately small: ride out a brief blip — overload, a rate limit, a
-// dropped connection — not a sustained outage.
+// Deliberately small: a continuation asks a model cut off by the output cap
+// to carry on, and an unattended run rides out a brief blip. Nothing else.
 const (
-	defaultMaxTurnRetries = 2
 	// Three, because a fourth continuation of the same answer is a prompt
 	// problem rather than a budget one.
 	defaultMaxContinuations = 3
+	// SilentRetries is the replay budget for a run nobody is watching: an
+	// unattended agent rides out a transient failure instead of ending its
+	// turn on it. A watched turn spends none — the failure reaches the
+	// person as a dialog, with the provider's own wait in it, and a silent
+	// replay would only trade that dialog for a wait nobody sees.
+	SilentRetries = 2
 	// Generous, because a reasoning model may think a long time before its
 	// first token. It only catches a connection that hangs at open.
 	defaultFirstChunkTimeout = 5 * time.Minute
@@ -235,9 +240,6 @@ func NewAgent(cfg Config) Agent {
 	}
 	if cfg.OutboxBuf == 0 {
 		cfg.OutboxBuf = 64
-	}
-	if cfg.MaxTurnRetries <= 0 {
-		cfg.MaxTurnRetries = defaultMaxTurnRetries
 	}
 	if cfg.MaxContinuations <= 0 {
 		cfg.MaxContinuations = defaultMaxContinuations
@@ -279,9 +281,10 @@ func NewAgent(cfg Config) Agent {
 	// than construction panicking.
 	inner, err := sdkagent.New(clientFromPreInfer,
 		sdkagent.WithMaxSteps(cfg.MaxSteps),
-		// Two budgets that used to be one. WithRetry replays a call the loop
-		// knows how to replay; WithContinuation asks a model cut off by the
-		// output cap to carry on, in San's own words.
+		// The loop replays nothing unless the caller asks for a budget: a
+		// transient provider failure — a rate limit, an overloaded backend, a
+		// dropped connection — ends the turn on the first failure and reaches
+		// the person as a dialog, with the provider's own wait in it.
 		sdkagent.WithRetry(cfg.MaxTurnRetries, backoffBase),
 		sdkagent.WithContinuation(cfg.MaxContinuations, TruncatedResumePrompt),
 		sdkagent.WithStreamTimeout(cfg.StreamFirstChunkTimeout, cfg.StreamIdleTimeout),

@@ -51,14 +51,14 @@ func failsThenAnswers(err error, n int) *aitest.Driver {
 	return aitest.New(append(turns, aitest.Says("ok"))...)
 }
 
-func newRetryAgent(t *testing.T, d ai.Driver, maxRetries int, timeout time.Duration) *agent {
+func newRetryAgent(t *testing.T, d ai.Driver, retries int, timeout time.Duration) *agent {
 	t.Helper()
 	ag := NewAgent(Config{
 		ID:                      "test",
 		Client:                  testClient(d),
 		System:                  NewSystem(),
 		Tools:                   NewTools(),
-		MaxTurnRetries:          maxRetries,
+		MaxTurnRetries:          retries,
 		StreamFirstChunkTimeout: timeout,
 		StreamIdleTimeout:       timeout,
 	})
@@ -71,22 +71,40 @@ func newRetryAgent(t *testing.T, d ai.Driver, maxRetries int, timeout time.Durat
 	return a
 }
 
-// stalled is what a driver reports when a stream goes quiet: the loop replays
-// what ai.IsRetryable admits, and a network failure is one. The backoff below
-// it is San's only because two retry loops that are not the agent's still
-// need one.
+// stalled is what a driver reports when a stream goes quiet: a network
+// failure, which ai.IsRetryable admits.
 var stalled = &ai.Error{Kind: ai.KindNetwork, Message: "stream stalled"}
 
-func TestThinkActRetriesTransientStreamError(t *testing.T) {
+// The loop replays nothing. A transient failure ends the turn on the first
+// failure and reaches the person as a dialog, with the provider's own wait in
+// it; a silent replay would only trade that dialog for a wait nobody sees.
+func TestThinkActSurfacesTransientStreamErrorImmediately(t *testing.T) {
 	llm := failsThenAnswers(stalled, 2)
-	a := newRetryAgent(t, llm, 2, 0)
+	a := newRetryAgent(t, llm, 0, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	if _, err := a.ThinkAct(ctx); err == nil {
+		t.Fatal("ThinkAct should surface the transient failure")
+	}
+	if llm.Calls() != 1 {
+		t.Fatalf("Infer calls = %d, want 1 (no silent replay)", llm.Calls())
+	}
+}
+
+// An unattended run asks for a replay budget and gets one: the failure rides
+// out instead of ending the turn.
+func TestThinkActReplaysATransientFailureWhenTheBudgetAsks(t *testing.T) {
+	llm := failsThenAnswers(stalled, 2)
+	a := newRetryAgent(t, llm, SilentRetries, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	result, err := a.ThinkAct(ctx)
 	if err != nil {
-		t.Fatalf("ThinkAct returned error after retries: %v", err)
+		t.Fatalf("ThinkAct returned error after the replays: %v", err)
 	}
 	if result.Content != "ok" {
 		t.Fatalf("content = %q, want ok", result.Content)
@@ -96,28 +114,13 @@ func TestThinkActRetriesTransientStreamError(t *testing.T) {
 	}
 }
 
-func TestThinkActSurfacesErrorAfterMaxRetries(t *testing.T) {
-	llm := aitest.Always(aitest.Fails(stalled))
-	a := newRetryAgent(t, llm, 2, 0)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if _, err := a.ThinkAct(ctx); err == nil {
-		t.Fatal("ThinkAct should surface the error after exhausting retries")
-	}
-	if llm.Calls() != 3 { // 1 initial + 2 retries
-		t.Fatalf("Infer calls = %d, want 3", llm.Calls())
-	}
-}
-
 func TestThinkActDoesNotRetryFatalError(t *testing.T) {
 	// A 400 as the driver hands it over — typed, so ai.IsRetryable leaves it
 	// fatal.
 	llm := aitest.Always(aitest.Fails(&ai.Error{
 		Kind: ai.KindInvalidRequest, Status: 400, Message: "bad request",
 	}))
-	a := newRetryAgent(t, llm, 3, 0)
+	a := newRetryAgent(t, llm, 0, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -130,43 +133,41 @@ func TestThinkActDoesNotRetryFatalError(t *testing.T) {
 	}
 }
 
-// The loop's retry budget is spent on the failures the SDK typed as transient.
-// Nothing between the driver and the loop tags them, so streamInfer classifies
-// as the failure leaves the stream — without that, a provider's 429 read as
-// fatal and the turn died on a blip it was built to ride out.
-func TestThinkActRetriesAProviderRateLimit(t *testing.T) {
+// A provider's 429 is the case the dialog was built for: it ends the turn at
+// once, so the wait the provider asked for is the one the dialog shows.
+func TestThinkActSurfacesAProviderRateLimitImmediately(t *testing.T) {
 	llm := failsThenAnswers(&ai.Error{Kind: ai.KindRateLimit, Status: 429, Message: "slow down"}, 2)
-	a := newRetryAgent(t, llm, 2, 0)
+	a := newRetryAgent(t, llm, 0, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	result, err := a.ThinkAct(ctx)
-	if err != nil {
-		t.Fatalf("ThinkAct returned error after retries: %v", err)
+	_, err := a.ThinkAct(ctx)
+	if err == nil {
+		t.Fatal("ThinkAct should surface the rate limit")
 	}
-	if result.Content != "ok" {
-		t.Fatalf("content = %q, want ok", result.Content)
+	if !ai.IsRetryable(err) {
+		t.Fatalf("error = %v, want a retryable one", err)
 	}
-	if llm.Calls() != 3 {
-		t.Fatalf("Infer calls = %d, want 3 (2 rate limits + 1 success)", llm.Calls())
+	if llm.Calls() != 1 {
+		t.Fatalf("Infer calls = %d, want 1 (no silent replay)", llm.Calls())
 	}
 }
 
 // A terminal failure the SDK could not type is a transport failure, which is
 // the one place the stream rule differs from the completed-call rule.
-func TestThinkActRetriesAnOpaqueStreamFailure(t *testing.T) {
+func TestThinkActSurfacesAnOpaqueStreamFailureImmediately(t *testing.T) {
 	llm := failsThenAnswers(&ai.Error{Kind: ai.KindNetwork, Message: "unexpected EOF"}, 1)
-	a := newRetryAgent(t, llm, 2, 0)
+	a := newRetryAgent(t, llm, 0, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if _, err := a.ThinkAct(ctx); err != nil {
-		t.Fatalf("ThinkAct returned error after retries: %v", err)
+	if _, err := a.ThinkAct(ctx); err == nil {
+		t.Fatal("ThinkAct should surface the stream failure")
 	}
-	if llm.Calls() != 2 {
-		t.Fatalf("Infer calls = %d, want 2 (1 failure + 1 success)", llm.Calls())
+	if llm.Calls() != 1 {
+		t.Fatalf("Infer calls = %d, want 1 (no silent replay)", llm.Calls())
 	}
 }
 
@@ -211,18 +212,18 @@ func TestThinkActCompactsOnProviderContextOverflow(t *testing.T) {
 	}
 }
 
-func TestStreamInferIdleTimeoutRetries(t *testing.T) {
+func TestStreamInferIdleTimeoutEndsTheTurn(t *testing.T) {
 	llm := aitest.Always(aitest.Hangs())
-	a := newRetryAgent(t, llm, 1, 40*time.Millisecond)
+	a := newRetryAgent(t, llm, 0, 40*time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if _, err := a.ThinkAct(ctx); err == nil {
-		t.Fatal("ThinkAct should fail once a stalled stream exhausts retries")
+		t.Fatal("ThinkAct should fail once a stalled stream times out")
 	}
-	if llm.Calls() != 2 { // 1 initial + 1 retry, each stalls
-		t.Fatalf("Infer calls = %d, want 2 (idle-timeout retry)", llm.Calls())
+	if llm.Calls() != 1 { // the stalled call is not replayed
+		t.Fatalf("Infer calls = %d, want 1", llm.Calls())
 	}
 }
 
@@ -232,16 +233,16 @@ func TestStreamInferIdleTimeoutRetries(t *testing.T) {
 // so returning only an error silently discards the work. subagent's
 // finalizeResult is the concrete casualty: no Result means the transcript is
 // never written to disk.
-func TestThinkActReturnsResultWhenRetriesAreExhausted(t *testing.T) {
+func TestThinkActReturnsResultWhenTheTurnFails(t *testing.T) {
 	llm := aitest.Always(aitest.Fails(stalled))
-	a := newRetryAgent(t, llm, 2, 0)
+	a := newRetryAgent(t, llm, 0, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	result, err := a.ThinkAct(ctx)
 	if err == nil {
-		t.Fatal("ThinkAct should surface the error after exhausting retries")
+		t.Fatal("ThinkAct should surface the error")
 	}
 	if result == nil {
 		t.Fatal("ThinkAct returned nil Result on a failed turn; the caller cannot persist the run")

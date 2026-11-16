@@ -370,13 +370,6 @@ func (m model) renderChatIndicators(trackerView, bottom string) string {
 		parts = append(parts, "\n"+strings.TrimSuffix(trackerView, "\n"))
 	}
 
-	if retry := m.conv.Retry.Line(m.env.Width, time.Now()); retry != "" {
-		// The provider failed an attempt it will repeat: the row says so, with
-		// the wait it asked for, instead of leaving the silence to read as a
-		// hang. It clears itself when the next attempt starts.
-		parts = append(parts, "", retry, "")
-	}
-
 	if !m.conv.Compact.Active {
 		if compactView := conv.RenderCompactStatus(m.env.Width, m.conv.Spinner.View(), m.conv.Compact); compactView != "" {
 			parts = append(parts, "", compactView, "")

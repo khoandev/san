@@ -85,7 +85,8 @@ func RunReview(ctx context.Context, fc ForkConfig, snapshot []core.Message) (str
 		Tools:           tools,
 		Gate:            tool.Permission(allowOnly(tools)),
 		MaxSteps:        forkMaxSteps,
-		OutboxBuf:       -1, // no outbox: this fork is headless, driven via ThinkAct
+		MaxTurnRetries:  core.SilentRetries, // nobody is watching: ride out a transient failure
+		OutboxBuf:       -1,                 // no outbox: this fork is headless, driven via ThinkAct
 		OnEvent:         fc.OnEvent,
 	}
 	var recorder *session.Recorder

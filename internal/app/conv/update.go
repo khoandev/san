@@ -21,13 +21,6 @@ import (
 // compaction results, and activity updates.
 func Update(rt Runtime, m *Model, msg tea.Msg) (tea.Cmd, bool) {
 	switch msg := msg.(type) {
-	case RetryTickMsg:
-		// The row redraws while it waits; a tick that lands after the row is
-		// gone ends the chain instead of rearming it.
-		if m.Retry.Active() {
-			return retryTick(), true
-		}
-		return nil, true
 	case AgentOutboxMsg:
 		// A rebuild stops one agent and starts the next; whatever the old
 		// outbox still delivers belongs to an agent that is gone, and applying
@@ -73,14 +66,10 @@ func handleAgentEvent(rt Runtime, m *Model, ev core.Event) tea.Cmd {
 	log.Logger().Sugar().Debugf("handleAgentEvent: %T", ev)
 	switch e := ev.(type) {
 	case core.TurnEnded:
-		// Nothing is waiting on a retry once the turn is over, whether it
-		// finished or gave up.
-		m.Retry.Clear()
 		m.Stream.Stop()
 		m.Tool.ClearPending()
 		return rt.OnTurnEnd(e.Result)
 	case core.AgentStopped:
-		m.Retry.Clear()
 		m.Stream.Stop()
 		m.Tool.ClearPending()
 		return rt.OnAgentStop(e.Err)
@@ -106,13 +95,11 @@ func handleAgentEventBatch(rt Runtime, m *Model, events []core.Event, closed boo
 		log.Logger().Sugar().Debugf("handleAgentEventBatch: %T", ev)
 		switch e := ev.(type) {
 		case core.TurnEnded:
-			m.Retry.Clear()
 			m.Stream.Stop()
 			m.Tool.ClearPending()
 			effects = append(effects, rt.OnTurnEnd(e.Result))
 			needsContinue = false
 		case core.AgentStopped:
-			m.Retry.Clear()
 			m.Stream.Stop()
 			m.Tool.ClearPending()
 			effects = append(effects, rt.OnAgentStop(e.Err))
@@ -176,9 +163,6 @@ func applyAgentEvent(rt Runtime, m *Model, ev core.Event) tea.Cmd {
 	case sdkagent.CompactionEnd:
 		return rt.OnCompactEnd(e)
 	case sdkagent.InferenceStart:
-		// The wait the previous attempt's failure announced is over: the
-		// retry it promised is the attempt starting now.
-		m.Retry.Clear()
 		// A retry announces itself by the attempt number, not by an event of
 		// its own: what was drawn for the previous attempt is void, and the
 		// next one re-streams from scratch.
@@ -200,22 +184,10 @@ func applyAgentEvent(rt Runtime, m *Model, ev core.Event) tea.Cmd {
 				// turn warrants a persistent error in the conversation.
 				log.Logger().Sugar().Debugf("Inference attempt %d failed: %v", e.Attempt, e.Err)
 			}
-			// A failure the provider calls transient is announced while its
-			// wait runs, so the silence between attempts is not a hang. Any
-			// other failure clears the row: nothing is coming to replace it.
-			announced := !m.Retry.Active()
-			if !m.Retry.Begin(e.Err, max(1, e.Attempt), time.Now()) {
-				m.Retry.Clear()
-			}
-			cmds := rt.CommitMessages()
-			if announced && m.Retry.Active() {
-				// The row counts its wait down on its own clock, one tick at a
-				// time, so the wait is never a still frame.
-				cmds = append(cmds, retryTick())
-			}
-			return tea.Batch(cmds...)
+			// Nothing is announced here: the failure reaches the person as a
+			// dialog, with the provider's wait in it, and the turn is over.
+			return tea.Batch(rt.CommitMessages()...)
 		}
-		m.Retry.Clear()
 		return applyPostInfer(rt, m, e.Response)
 	case sdkagent.ToolUpdate:
 		if details, ok := e.Partial.Details.(toolresult.AgentDetails); ok {

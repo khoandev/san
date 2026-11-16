@@ -24,11 +24,10 @@ type RateLimitRequest struct {
 // leaves the turn where it stopped.
 type RateLimitChoiceMsg struct{ Restart bool }
 
-// RateLimitModel is the docked dialog a provider failure raises once the SDK has
-// given up retrying: what failed, how long the provider asked to wait, and the
-// two things a person can do about it. It holds the keyboard while it is up —
-// neither answer is the default one, so nothing may be typed past it by
-// accident.
+// RateLimitModel is the docked dialog a provider failure raises: what failed,
+// how long the provider asked to wait, and the two things a person can do
+// about it. It holds the keyboard while it is up — neither answer is the
+// default one, so nothing may be typed past it by accident.
 type RateLimitModel struct {
 	active  bool
 	request RateLimitRequest

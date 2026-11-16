@@ -17,13 +17,11 @@ import (
 )
 
 // rateLimitedTurn is a provider that fails the way one under load does: the
-// SDK's own two replays see an overloaded backend, the call that ends the turn
-// is the 429 with the wait it asks for, and everything after the person clicks
+// call that ends the turn is the 429 with the wait it asks for — nothing
+// replays it behind the person's back — and everything after the person clicks
 // Restart answers.
 func rateLimitedTurn() *aitest.Driver {
 	return aitest.New(
-		aitest.Fails(&ai.Error{Kind: ai.KindOverloaded, Status: 503, Message: "overloaded"}),
-		aitest.Fails(&ai.Error{Kind: ai.KindOverloaded, Status: 503, Message: "overloaded"}),
 		aitest.Fails(&ai.Error{Kind: ai.KindRateLimit, Status: 429, Message: "slow down", RetryAfter: 3 * time.Second}),
 		aitest.Says("the retried turn finished"),
 		aitest.Says("the queued message finished"),
@@ -94,8 +92,10 @@ func TestRateLimitRetryRunsTheFailedTurnAgain(t *testing.T) {
 	m, listen := retryTurnModel(t, acpTestProvider{driver.Client()})
 
 	sent := failedTurn(t, m, driver, listen)
-	if len(sent) == 0 {
-		t.Fatal("the provider was never called")
+	// One call, not three: nothing replays the failure behind the person's
+	// back. The dialog is where the wait belongs.
+	if len(sent) != 1 {
+		t.Fatalf("provider calls before the dialog = %d, want 1", len(sent))
 	}
 	frame := ansi.Strip(m.userInput.RateLimit.Render())
 	for _, want := range []string{"Provider rate limit", "429", "3s"} {

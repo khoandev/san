@@ -6,6 +6,9 @@
 // same turn again on the conversation the session already holds, so nothing is
 // retyped and no second user message is created.
 //
+// Nothing waits behind the dialog: the first failure of that kind ends the
+// turn, so the wait the provider asked for is the one the dialog shows.
+//
 // AutoPilot never sees the dialog: an unattended run recovers through its own
 // backoff (autopilotRecoverCmd), with no hand to press a button.
 package app
