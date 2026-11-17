@@ -24,6 +24,11 @@ const (
 	// rather than failing on its own. Kept distinct from StatusFailed so the
 	// main agent does not treat a deliberate stop as an error to retry.
 	StatusStopped TaskStatus = "stopped"
+	// StatusPaused marks a run that stopped on a retryable provider failure at
+	// a saved checkpoint. It is not a verdict on the work: the task keeps its
+	// session and can be restarted where it stopped, which is why it is kept
+	// apart from StatusFailed.
+	StatusPaused TaskStatus = "paused"
 )
 
 // Brief is the display slice of a task: identity, lifecycle, and the activity a
@@ -215,4 +220,8 @@ type TaskInfo struct {
 	StepCount        int
 	TokenUsage       int
 	LiveView         string // Current display for a running structured task, if any.
+	// Checkpoint is the last safe boundary the run reached, or nil when it
+	// never finished a tool call. A paused task restarts from here, and a
+	// report to the parent names how much work that boundary already holds.
+	Checkpoint *Checkpoint
 }

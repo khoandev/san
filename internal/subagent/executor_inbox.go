@@ -155,15 +155,10 @@ func (e *Executor) prepareInbox(ctx context.Context, run *preparedRun) error {
 }
 
 // run attaches ag, then closes acceptance and drains late input within one
-// execution budget. When handoff approves the failure, the route stays live and
-// later mail waits for the next run on this inbox instead of being rejected.
-func (inbox *runInbox) run(ctx context.Context, ag core.Agent, maxSteps int, handoff func(error) bool) (*core.Result, error) {
-	handedOff := false
-	defer func() {
-		if !handedOff {
-			inbox.close()
-		}
-	}()
+// execution budget. A failure ends the run: the route closes and later mail is
+// refused instead of waiting for an agent that will never attach.
+func (inbox *runInbox) run(ctx context.Context, ag core.Agent, maxSteps int) (*core.Result, error) {
+	defer inbox.close()
 	inbox.mu.Lock()
 	if inbox.closed || ctx.Err() != nil {
 		inbox.mu.Unlock()
@@ -193,7 +188,7 @@ func (inbox *runInbox) run(ctx context.Context, ag core.Agent, maxSteps int, han
 			result.StopReason = core.StopMaxSteps
 		}
 		if err != nil || ctx.Err() != nil || inbox.closed || result == nil || result.StopReason != core.StopEndTurn {
-			handedOff = inbox.finishLocked(err, handoff)
+			inbox.closeLocked()
 			inbox.mu.Unlock()
 			// A canceled exchange settles accepted input into native history without inference.
 			if ag.Pending() > 0 {
@@ -219,18 +214,13 @@ func (inbox *runInbox) run(ctx context.Context, ag core.Agent, maxSteps int, han
 		result, err = next, nextErr
 		inbox.mu.Lock()
 	}
-	handedOff = inbox.finishLocked(err, handoff)
+	inbox.closeLocked()
 	inbox.mu.Unlock()
 	return result, err
 }
 
-// finishLocked ends acceptance for this run unless handoff keeps the inbox for
-// a replacement agent; then new mail queues as pending until it attaches.
-func (inbox *runInbox) finishLocked(err error, handoff func(error) bool) bool {
-	if err != nil && handoff != nil && !inbox.closed && handoff(err) {
-		inbox.agent = nil
-		return true
-	}
+// closeLocked ends acceptance for this run; later mail is refused rather than
+// queued for an agent that will never attach.
+func (inbox *runInbox) closeLocked() {
 	inbox.accepting = false
-	return false
 }

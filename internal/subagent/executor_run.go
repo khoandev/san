@@ -26,14 +26,17 @@ import (
 )
 
 type preparedRun struct {
-	hookFactory       func(*session.Session, llm.Provider, string) (hook.Handler, func(llm.Provider, string), func())
-	rebindHooks       func(llm.Provider, string)
-	stopHooks         func()
-	hooks             hook.Handler
-	hooksBound        bool
-	sourceAfter       uint64 // Accepted prefix before this execution; never cite an older answer.
-	originalPrompt    string
-	toolStarted       bool
+	hookFactory    func(*session.Session, llm.Provider, string) (hook.Handler, func())
+	stopHooks      func()
+	hooks          hook.Handler
+	hooksBound     bool
+	sourceAfter    uint64 // Accepted prefix before this execution; never cite an older answer.
+	originalPrompt string
+	// progress reports a safe boundary — one finished tool call — to whoever
+	// holds the task's checkpoint. Nil when nothing records progress.
+	progress          func(steps int, tool, cwd string)
+	toolSteps         int
+	lastTool          string
 	continuationInput *core.Message // exact preaccepted prompt, retained across async launch
 	initialInput      *core.Message
 	inbox             *runInbox
@@ -187,7 +190,6 @@ func (r *preparedRun) forwardEvent(ctx context.Context, ev core.Event) {
 		}
 		r.recordUsage(event.Response)
 	case sdkagent.ToolStart:
-		r.toolStarted = true
 		if r.pendingTools == 0 {
 			r.batchTools = nil
 			r.batchCwd, r.batchCwdIdx = "", -1
@@ -307,6 +309,16 @@ func (e *Executor) executePreparedRun(ctx context.Context, run *preparedRun) (ou
 		if event, ok := ev.(sdkagent.MessageAdded); ok && event.Message.Role == ai.RoleUser && run.inbox != nil {
 			run.inbox.signalCapacity()
 		}
+		if event, ok := ev.(sdkagent.ToolEnd); ok {
+			// A finished tool call is a safe boundary: everything before it is in
+			// the transcript, so a restart continues after it instead of
+			// repeating it. Failed calls count too — the failure is recorded.
+			run.toolSteps++
+			run.lastTool = event.Name
+			if run.progress != nil {
+				run.progress(run.toolSteps, run.lastTool, run.currentCwd())
+			}
+		}
 		if event, ok := ev.(sdkagent.ToolEnd); ok && e.postTool != nil {
 			effect, _ := run.sideEffects.Load(event.ID)
 			if err := e.postTool(run.hooks, core.ToolResult{ToolCallID: event.ID, ToolName: event.Name, Content: event.Result.Content, IsError: event.Err != nil}, effect); err != nil {
@@ -353,34 +365,10 @@ func (e *Executor) executePreparedRun(ctx context.Context, run *preparedRun) (ou
 	if run.inbox == nil {
 		run.inbox = newRunInbox(ctx, inboxID, run.recording)
 	}
-	// One safe fallback, never an outer replay of a tool-bearing execution.
-	// Reuse the exact conversation and native writer; do not append the task
-	// or continuation instruction again. The inbox stays registered across the
-	// handoff, so mail sent while the fallback is built waits for it.
-	fallbackModel := false
-	result, err := run.inbox.run(ctx, ag, run.cfg.maxSteps, func(err error) bool {
-		fallbackModel = ctx.Err() == nil && run.recording.Err() == nil && (run.recorder == nil || run.recorder.Err() == nil) && !run.toolStarted && shouldRetryWithParentModel(err, run.cfg.modelID, e.parentModelID)
-		return fallbackModel
-	})
-	if fallbackModel {
-		messages := ag.Messages()
-		run.cfg.provider, run.cfg.modelID = e.provider, e.parentModelID
-		if run.recording != nil {
-			if updateErr := run.recording.Append(ctx, session.Event{Type: session.EventSessionUpdate, Payload: session.SessionUpdatePayload{Config: &session.ConfigPatch{Provider: session.SetField(e.provider.Name()), Model: session.SetField(e.parentModelID)}}}); updateErr != nil {
-				return result, updateErr
-			}
-		}
-		if run.rebindHooks != nil {
-			run.rebindHooks(run.cfg.provider, run.cfg.modelID)
-		}
-		fallback, cleanupFallback, buildErr := e.buildAgent(ctx, run, onToolExec, onEvent)
-		if buildErr != nil {
-			return result, buildErr
-		}
-		defer cleanupFallback()
-		fallback.SetMessages(messages)
-		result, err = run.inbox.run(ctx, fallback, run.cfg.maxSteps, nil)
-	}
+	// A provider failure ends this execution on the model it was given. The run
+	// pauses at its checkpoint and a restart continues from there, so nothing
+	// replays silently and nothing trades the chosen model for the parent's.
+	result, err := run.inbox.run(ctx, ag, run.cfg.maxSteps)
 	if err != nil {
 		if result != nil {
 			return result, err
@@ -484,5 +472,6 @@ func (e *Executor) finalizeResult(run *preparedRun, result *core.Result, success
 		Duration:         time.Since(run.startedAt),
 		Activity:         append([]string(nil), run.activity...),
 		Error:            errMsg,
+		TaskID:           run.req.TaskID,
 	}
 }

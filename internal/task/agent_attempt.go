@@ -36,6 +36,18 @@ func (t *AgentTask) CompleteAttempt(n int, err error) {
 	t.finalizeAttempt(n, status, text)
 }
 
+// PauseAttempt retires the execution at its checkpoint instead of failing it.
+// The caller decided the failure is retryable — a 429, an overloaded backend, a
+// dropped stream — so the task stays resumable: its session, attempts and
+// checkpoint survive, and nobody has to redo work the run already finished.
+func (t *AgentTask) PauseAttempt(n int, err error) {
+	text := "stopped at checkpoint"
+	if err != nil {
+		text = err.Error()
+	}
+	t.finalizeAttempt(n, StatusPaused, text)
+}
+
 // StopAttempt cancels only the execution selected by the caller's snapshot.
 func (t *AgentTask) StopAttempt(n int) error {
 	t.mu.Lock()

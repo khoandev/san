@@ -17,12 +17,19 @@ type RateLimitRequest struct {
 	Title  string        // "Provider rate limit", "Provider overloaded", "Connection lost"
 	Detail string        // the provider's error, verbatim
 	Hint   time.Duration // the provider's Retry-After; 0 when it gave none
+	// TaskID names the paused subagent this failure stopped. Empty means the
+	// main turn failed, which is what Restart runs again.
+	TaskID string
 }
 
-// RateLimitChoiceMsg answers the dialog. Restart asks for the turn that failed
-// to run again over the conversation as it stands; the zero value closes it and
-// leaves the turn where it stopped.
-type RateLimitChoiceMsg struct{ Restart bool }
+// RateLimitChoiceMsg answers the dialog. Restart asks for the work that failed
+// to run again over the conversation as it stands — the main turn, or the paused
+// task named by TaskID; the zero value closes it and leaves the work where it
+// stopped.
+type RateLimitChoiceMsg struct {
+	Restart bool
+	TaskID  string
+}
 
 // RateLimitModel is the docked dialog a provider failure raises: what failed,
 // how long the provider asked to wait, and the two things a person can do
@@ -90,8 +97,9 @@ func (p *RateLimitModel) HandleKeypress(msg tea.KeyMsg) tea.Cmd {
 // choose answers the dialog once. The dialog closes with the answer, so a
 // second keypress cannot answer it again.
 func (p *RateLimitModel) choose(restart bool) tea.Cmd {
+	taskID := p.request.TaskID
 	p.Hide()
-	return func() tea.Msg { return RateLimitChoiceMsg{Restart: restart} }
+	return func() tea.Msg { return RateLimitChoiceMsg{Restart: restart, TaskID: taskID} }
 }
 
 // Render implements overlayPanel.
@@ -128,7 +136,12 @@ func (p *RateLimitModel) waitText() string {
 // buttons renders the two answers, the focused one reversed like every other
 // button row in the docked panels.
 func (p *RateLimitModel) buttons() string {
-	labels := []string{"Close", "Restart"}
+	restart := "Restart"
+	if p.request.TaskID != "" {
+		// The answer restarts a paused worker, not the failed turn: say which.
+		restart = "Restart task"
+	}
+	labels := []string{"Close", restart}
 	parts := make([]string, len(labels))
 	for i, label := range labels {
 		if i == p.cursor {

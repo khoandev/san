@@ -160,7 +160,13 @@ func taskCompletionMessage(info task.TaskInfo) (broker.Message, bool) {
 	case result != "":
 		b.WriteString(tool.EscapeXMLText(result))
 	}
-	if info.Status == task.StatusFailed && info.Type == task.TaskTypeAgent && info.AgentSessionID != "" {
+	switch {
+	case info.Status == task.StatusPaused && info.Type == task.TaskTypeAgent && info.AgentSessionID != "":
+		// A paused task keeps its checkpoint and transcript, so the notice asks
+		// for a restart rather than a plan: the work continues where it stopped.
+		b.WriteString("\n\nRestart available. ")
+		b.WriteString(tool.EscapeXMLText(checkpointRestartInstruction(info)))
+	case info.Status == task.StatusFailed && info.Type == task.TaskTypeAgent && info.AgentSessionID != "":
 		b.WriteString("\n\nRecovery decision required: inspect the failure and available partial findings. Choose whether to finish directly, continue the existing worker, or report a blocker. For a safe continuation, use SendMessage with to set to this task ID and message containing only a short corrective instruction; the original child session is restored internally. Do not copy its full history into the parent or blindly repeat uncertain side effects. Never bypass a denied command.")
 	}
 	b.WriteString("\n</task-notification>")
@@ -219,6 +225,10 @@ func formatStatus(status task.TaskStatus) string {
 	switch status {
 	case task.StatusCompleted:
 		return "completed"
+	case task.StatusPaused:
+		// Paused is a result the parent must see: the work stopped short, and
+		// only a notice tells the parent a restart is still possible.
+		return "paused"
 	case task.StatusFailed:
 		return "failed"
 	case task.StatusKilled:

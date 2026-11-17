@@ -412,6 +412,10 @@ type AgentResult struct {
 	Duration         time.Duration
 	Activity         []string
 	Error            string
+	TaskID           string
+	// Restartable reports that a failed run stopped on a provider failure the
+	// task can continue from: its session and progress are still there.
+	Restartable bool
 }
 
 const (
@@ -423,8 +427,8 @@ const (
 
 // modelAliases maps short model aliases to current-generation model ids.
 // Un-dated ids resolve on Anthropic-family providers (API and Vertex both
-// serve these prefixes); a miss falls back to the parent model via
-// shouldRetryWithParentModel.
+// serve these prefixes); an unknown name stays as typed and fails visibly
+// rather than trading the chosen model for the parent's.
 var modelAliases = map[string]string{
 	"sonnet": "claude-sonnet-4-6",
 	"opus":   "claude-opus-4-7",

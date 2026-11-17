@@ -43,6 +43,7 @@ type AgentTask struct {
 	launchState      any
 	permissionMode   string           // Effective mode resolved before the worker starts.
 	model            string           // Resolved model id, reported once the launch is prepared.
+	checkpoint       *Checkpoint      // Last safe boundary a paused run resumes from.
 	progress         string           // Latest non-metadata activity for the live tracker.
 	outputErr        string           // First output-log failure; a nonempty path alone is not proof of durability.
 	liveView         string           // Current structured progress, if the caller supplies one.
@@ -303,16 +304,23 @@ func (t *AgentTask) finalizeAttempt(generation int, status TaskStatus, errText s
 	done := t.done
 	t.finishing = true
 	outputFile := t.OutputFile
+	checkpoint := t.checkpoint
 	t.mu.Unlock()
 
 	// File I/O and done channel outside lock
+	metadata := map[string]any{
+		"attempt": generation,
+		"error":   errText,
+	}
+	// A paused execution leaves its boundary beside its status, so a restart
+	// reads the checkpoint from the record instead of this process's memory.
+	if checkpoint != nil {
+		metadata["checkpoint"] = checkpoint
+	}
 	t.recordOutput(outputFile, outputRecord{
-		Event:  "task.completed",
-		Status: string(status),
-		Metadata: map[string]any{
-			"attempt": generation,
-			"error":   errText,
-		},
+		Event:    "task.completed",
+		Status:   string(status),
+		Metadata: metadata,
 	})
 
 	if !t.foreground {
@@ -404,6 +412,13 @@ func (t *AgentTask) statusLocked(limit int) TaskInfo {
 		attempts = append([]AttemptInfo(nil), t.attempts...)
 	}
 	output, truncated := boundBuffer(&t.attemptOutput, limit)
+	// A snapshot copies the boundary: readers report progress from it while the
+	// live attempt may already be publishing the next one.
+	var checkpoint *Checkpoint
+	if t.checkpoint != nil {
+		boundary := *t.checkpoint
+		checkpoint = &boundary
+	}
 	return TaskInfo{
 		Attempt:         t.attempt,
 		Attempts:        attempts,
@@ -429,6 +444,7 @@ func (t *AgentTask) statusLocked(limit int) TaskInfo {
 		StepCount:        t.StepCount,
 		TokenUsage:       t.TokenUsage,
 		LiveView:         t.liveView,
+		Checkpoint:       checkpoint,
 	}
 }
 

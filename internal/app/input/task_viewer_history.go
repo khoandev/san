@@ -9,7 +9,7 @@ import (
 
 func taskViewTerminal(item TaskViewItem) bool {
 	switch item.Status {
-	case task.StatusCompleted, task.StatusFailed, task.StatusStopped, task.StatusKilled, "interrupted":
+	case task.StatusCompleted, task.StatusFailed, task.StatusPaused, task.StatusStopped, task.StatusKilled, "interrupted":
 		return true
 	default:
 		// Unknown states must not silently disappear into history.

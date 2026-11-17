@@ -128,10 +128,12 @@ func (e *Engine) Advise(ctx context.Context, transcript string) (note string, st
 		Tools:          tools,
 		// Static allowlist, no interactive resolver: a review must never prompt
 		// the TUI from its background goroutine.
-		Gate:               tool.Permission(readOnlyGate(tools)),
-		MaxSteps:           defaultMaxSteps,
-		MaxTurnRetries:     core.SilentRetries, // nobody is watching: ride out a transient failure
-		OutboxBuf:          -1,                 // headless fork, driven through ThinkAct
+		Gate:     tool.Permission(readOnlyGate(tools)),
+		MaxSteps: defaultMaxSteps,
+		// A provider failure ends the review on the model it was given; nobody
+		// asked for a silent replay, and none is spent.
+		MaxTurnRetries:     0,
+		OutboxBuf:          -1, // headless fork, driven through ThinkAct
 		OnEvent:            e.cfg.OnEvent,
 		InferenceAdmission: e.cfg.InferenceAdmission,
 		ToolAdmission:      e.cfg.ToolAdmission,

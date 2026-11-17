@@ -19,6 +19,16 @@ type continuationState struct {
 	cwd, sessionID, parent, taskID string
 }
 
+// sessionID is the durable child session this run writes to, or "" before the
+// session lease exists. A checkpoint taken mid-run records it so a restart
+// resumes the same transcript instead of opening a second one.
+func (r *preparedRun) sessionID() string {
+	if r.checkpoint == nil {
+		return ""
+	}
+	return r.checkpoint.sessionID
+}
+
 func newContinuationState(run *preparedRun, parent, taskID string) *continuationState {
 	state := &continuationState{originalPrompt: run.originalPrompt, cfg: run.cfg, req: run.req, cwd: run.cwd, parent: parent, taskID: taskID}
 	state.req.OnIdentity = nil

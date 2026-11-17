@@ -191,7 +191,7 @@ type Config struct {
 	CompactFunc             func(ctx context.Context, msgs []Message) (Compaction, error) // optional: summarize messages for compaction
 	MaxSteps                int                                                           // max LLM inference steps per turn, 0 = unlimited
 	MaxContinuations        int                                                           // how many times a model cut off by the output cap is asked to carry on, 0 = use default (3)
-	MaxTurnRetries          int                                                           // silent replays the loop may spend on a transient failure, 0 = none
+	MaxTurnRetries          int                                                           // silent replays the loop may spend on a transient failure, 0 = none; san runs ask for none
 	StreamFirstChunkTimeout time.Duration                                                 // abort if no first chunk arrives within this long, 0 = use default (5m)
 	StreamIdleTimeout       time.Duration                                                 // abort a stream that goes silent between chunks for this long, 0 = use default (60s)
 	InboxBuf                int                                                           // inbox channel buffer size, default 16
@@ -201,17 +201,13 @@ type Config struct {
 }
 
 // Deliberately small: a continuation asks a model cut off by the output cap
-// to carry on, and an unattended run rides out a brief blip. Nothing else.
+// to carry on. Nothing else. No run asks for a silent replay of a transient
+// failure: it ends the turn, or pauses the task on its checkpoint, so the
+// failure reaches the person instead of hiding behind spent tokens.
 const (
 	// Three, because a fourth continuation of the same answer is a prompt
 	// problem rather than a budget one.
 	defaultMaxContinuations = 3
-	// SilentRetries is the replay budget for a run nobody is watching: an
-	// unattended agent rides out a transient failure instead of ending its
-	// turn on it. A watched turn spends none — the failure reaches the
-	// person as a dialog, with the provider's own wait in it, and a silent
-	// replay would only trade that dialog for a wait nobody sees.
-	SilentRetries = 2
 	// Generous, because a reasoning model may think a long time before its
 	// first token. It only catches a connection that hangs at open.
 	defaultFirstChunkTimeout = 5 * time.Minute

@@ -142,7 +142,7 @@ func TestInboxPendingLimitRecoversAfterConsumption(t *testing.T) {
 	}, aitest.Says("second"))
 	ag := core.NewAgent(core.Config{Client: func([]core.Message) (*ai.Client, error) { return driver.Client(), nil }, System: core.NewSystem(), Tools: core.NewTools(), OutboxBuf: -1, MaxSteps: 2})
 	ag.Append(core.UserMessage("initial task", nil))
-	result, err := inbox.run(context.Background(), ag, 2, nil)
+	result, err := inbox.run(context.Background(), ag, 2)
 	if err != nil || result.Content != "second" || result.Steps != 2 || ag.Pending() != 0 {
 		t.Fatalf("inbox did not drain: %+v, %v", result, err)
 	}
@@ -161,12 +161,12 @@ func TestBackgroundInboxCleanupBeforeExecution(t *testing.T) {
 			e := NewExecutor(continuationProvider{driver}, t.TempDir(), "aitest", nil)
 			bindContinuationSessions(t, e, store, parent)
 			if !cancelLaunch {
-				e.SetChildHooks(func(child *session.Session, _ llm.Provider, _ string) (hook.Handler, func(llm.Provider, string), func()) {
+				e.SetChildHooks(func(child *session.Session, _ llm.Provider, _ string) (hook.Handler, func()) {
 					return childStartHooks{dispatch: func(event hook.EventType) {
 						if event == hook.SubagentStart {
 							_ = child.Close()
 						}
-					}}, nil, func() {}
+					}}, func() {}
 				})
 			}
 			worker, err := e.RunBackground(tool.AgentExecRequest{Prompt: "work", OnIdentity: func(identity toolresult.AgentIdentity) {
@@ -210,4 +210,44 @@ func TestBackgroundInboxCleanupBeforeExecution(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResumeRejectedBeforeAttemptReleasesInbox(t *testing.T) {
+	store, parent := continuationSessions(t, "resume-owner")
+	e := NewExecutor(continuationProvider{aitest.New(aitest.Hangs())}, t.TempDir(), "aitest", nil)
+	bindContinuationSessions(t, e, store, parent)
+	worker, err := e.RunBackground(tool.AgentExecRequest{Prompt: "original objective"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { task.Default().Remove(worker.GetID()) })
+	if err := worker.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !worker.WaitForCompletion(5 * time.Second) {
+		t.Fatal("stopped worker did not settle")
+	}
+	before := worker.GetStatus()
+	history, err := store.Read(context.Background(), before.AgentSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.RunBackground(tool.AgentExecRequest{ResumeTaskID: worker.GetID(), Prompt: "continue"}); err == nil {
+		t.Fatal("deliberately stopped worker resumed")
+	}
+	if after := worker.GetStatus(); after.Attempt != before.Attempt || after.Status != before.Status {
+		t.Fatalf("rejected continuation changed lifecycle: before=%+v after=%+v", before, after)
+	}
+	if err := broker.SendErr(broker.Message{To: worker.GetID(), Content: "after rejection"}); !errors.Is(err, broker.ErrNoRecipient) {
+		t.Fatalf("rejected continuation leaked its route: %v", err)
+	}
+	child, err := store.Open(context.Background(), before.AgentSessionID)
+	if err != nil {
+		t.Fatalf("rejected continuation leaked its writer claim: %v", err)
+	}
+	snapshot := child.Snapshot()
+	if len(snapshot.ActiveMessages()) != len(history.ActiveMessages()) {
+		t.Error("rejected continuation changed the conversation history")
+	}
+	_ = child.Close()
 }

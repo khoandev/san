@@ -93,11 +93,11 @@ func TestThinkActSurfacesTransientStreamErrorImmediately(t *testing.T) {
 	}
 }
 
-// An unattended run asks for a replay budget and gets one: the failure rides
-// out instead of ending the turn.
+// The knob still works for a caller that asks for a budget, even though no san
+// run asks for one: the failure rides out instead of ending the turn.
 func TestThinkActReplaysATransientFailureWhenTheBudgetAsks(t *testing.T) {
 	llm := failsThenAnswers(stalled, 2)
-	a := newRetryAgent(t, llm, SilentRetries, 0)
+	a := newRetryAgent(t, llm, 2, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

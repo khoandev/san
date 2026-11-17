@@ -52,11 +52,12 @@ provides; when san grows a generic piece, move it to sdk-go and drop san's
 copy. san keeps its own policy and UI. See sdk-go's CONTRIBUTING.md, "What
 belongs here".
 
-A watched turn spends no silent replay: a transient provider failure — a 429,
-an overloaded backend, a dropped connection — ends the turn on the first
-failure and raises the provider-failure dialog, which carries the provider's
-own wait. Unattended runs (subagents, advisor, self-learn) opt into
-`core.SilentRetries` instead, because nobody is there to press Restart.
+No run spends a silent replay: a transient provider failure — a 429, an
+overloaded backend, a dropped connection — ends the work on the first failure.
+A watched turn raises the provider-failure dialog, which carries the provider's
+own wait. An unattended run (subagent, advisor, self-learn) stops on the model
+it was given: it never trades that model for the parent's, and a subagent
+leaves a paused task at its checkpoint so the user can restart it from there.
 
 ## Editing
 

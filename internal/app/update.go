@@ -242,6 +242,8 @@ func (m *model) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.stopViewedTask(msg)
 	case input.TaskContinueMsg:
 		return m, m.continueViewedTask(msg)
+	case input.TaskRestartMsg:
+		return m, m.restartViewedTask(msg)
 	case input.TaskReviewApprovalMsg:
 		return m, m.reviewTaskApproval(msg)
 	case input.TaskTranscriptMsg:

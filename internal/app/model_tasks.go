@@ -193,7 +193,11 @@ func (m *model) taskSnapshots() []input.TaskViewItem {
 }
 
 func canContinueTask(info task.TaskInfo) bool {
-	return info.Type == task.TaskTypeAgent && info.AgentSessionID != "" && (info.Status == task.StatusFailed || info.Status == task.StatusCompleted) && task.RecoveryBudgetAvailable(info.Attempts)
+	// A paused task stopped on a retryable failure at a checkpoint: its session
+	// is exactly what a continuation continues, so it is as continuable as a
+	// finished one.
+	resumable := info.Status == task.StatusFailed || info.Status == task.StatusCompleted || info.Status == task.StatusPaused
+	return info.Type == task.TaskTypeAgent && info.AgentSessionID != "" && resumable && task.RecoveryBudgetAvailable(info.Attempts)
 }
 
 // continueViewedTask asks main to choose a safe incremental instruction. This
@@ -221,8 +225,89 @@ func (m *model) continueViewedTask(msg input.TaskContinueMsg) tea.Cmd {
 	if info.Error != "" {
 		body += "Failure: " + info.Error + "\n"
 	}
-	body += "Choose a safe continuation based on the available summary. Use SendMessage with to set to this task ID and message containing only a short corrective/follow-up instruction. Its original conversation is restored internally; do not copy the full child transcript into the main context. Check uncertain side effects before retrying and never repeat denied commands. If continuing is unsafe or unavailable, explain the blocker instead."
+	if info.Status == task.StatusPaused {
+		// A paused task needs no new instruction: the checkpoint says where the
+		// work stopped, so this continuation restarts that work instead of
+		// asking the model to invent a replacement for it.
+		body += checkpointRestartInstruction(info)
+	} else {
+		body += "Choose a safe continuation based on the available summary. Use SendMessage with to set to this task ID and message containing only a short corrective/follow-up instruction. Its original conversation is restored internally; do not copy the full child transcript into the main context. Check uncertain side effects before retrying and never repeat denied commands. If continuing is unsafe or unavailable, explain the blocker instead."
+	}
 	content := fmt.Sprintf("<agent-message from=\"task-control\" subject=\"Continue task %s\">\n%s\n</agent-message>", html.EscapeString(info.ID), html.EscapeString(body))
+	message := m.showNoticeLine(mainNotice{FromAgent: true, Content: content})
+	return m.SubmitToAgent(message)
+}
+
+// restartViewedTask confirms a paused task's restart through the same dialog a
+// failed turn uses. The dialog carries the task's own failure, and its answer
+// restarts that task from the checkpoint, so nothing about the pause is retyped
+// or guessed.
+func (m *model) restartViewedTask(msg input.TaskRestartMsg) tea.Cmd {
+	if !m.consumeTaskAction(msg.ViewID) {
+		return nil
+	}
+	if m.services.Task == nil {
+		m.resumeTaskViewer()
+		return nil
+	}
+	worker, exists := m.services.Task.Get(msg.TaskID)
+	if !exists {
+		m.resumeTaskViewer()
+		return nil
+	}
+	info := worker.GetStatus()
+	if info.Status != task.StatusPaused || info.Attempt != msg.Attempt || !canContinueTask(info) {
+		m.resumeTaskViewer()
+		return nil
+	}
+	m.hideTaskViewer()
+	if m.openTaskRestartDialog(msg.TaskID) {
+		return nil
+	}
+	// AutoPilot answers for itself: restart without the dialog.
+	return m.restartPausedTask(msg.TaskID)
+}
+
+// checkpointRestartInstruction is the continuation a paused task gets: the task
+// id, the progress its checkpoint already holds, and the exact command that
+// restarts it from there. All three are what a restart needs, and none of them
+// should have to be guessed by whoever reads the notice.
+func checkpointRestartInstruction(info task.TaskInfo) string {
+	steps, lastTool := info.StepCount, ""
+	if info.Checkpoint != nil {
+		if info.Checkpoint.Steps > 0 {
+			steps = info.Checkpoint.Steps
+		}
+		lastTool = info.Checkpoint.LastToolCall
+	}
+	progress := fmt.Sprintf("%d completed step(s)", steps)
+	if lastTool != "" {
+		progress += fmt.Sprintf(", last completed tool call %q", lastTool)
+	}
+	return fmt.Sprintf("The task paused at a checkpoint after %s. Restart it from there: call SendMessage with to set to %q and message containing only \"Resume from the checkpoint and finish the remaining work.\" The child session, its transcript and the work up to that boundary are restored, so do not redo completed steps, do not blindly repeat uncertain side effects, and do not spawn a replacement worker.", progress, info.ID)
+}
+
+// restartPausedTask restarts a paused subagent from its checkpoint without a new
+// brief. Like every task action it goes through main: the app never launches a
+// worker itself, so the permission gate and the child's own policy still apply.
+func (m *model) restartPausedTask(taskID string) tea.Cmd {
+	if m.services.Task == nil {
+		return nil
+	}
+	worker, exists := m.services.Task.Get(taskID)
+	if !exists {
+		return nil
+	}
+	info := worker.GetStatus()
+	if info.Status != task.StatusPaused || (info.ParentSessionID != "" && info.ParentSessionID != m.sessionID()) {
+		return nil
+	}
+	body := fmt.Sprintf("The user restarts task %q (%s) from its checkpoint.\n", info.ID, info.Description)
+	if info.Error != "" {
+		body += "Failure: " + info.Error + "\n"
+	}
+	body += checkpointRestartInstruction(info)
+	content := fmt.Sprintf("<agent-message from=\"task-control\" subject=\"Restart task %s\">\n%s\n</agent-message>", html.EscapeString(info.ID), html.EscapeString(body))
 	message := m.showNoticeLine(mainNotice{FromAgent: true, Content: content})
 	return m.SubmitToAgent(message)
 }

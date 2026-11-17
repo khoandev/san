@@ -47,6 +47,14 @@ type TaskContinueMsg struct {
 	Attempt int
 }
 
+// TaskRestartMsg asks to restart a task that paused at its checkpoint. It is
+// not a continuation: nothing new has to be said, only confirmed.
+type TaskRestartMsg struct {
+	TaskID  string
+	ViewID  uint64
+	Attempt int
+}
+
 type TaskReviewApprovalMsg struct {
 	TaskID string
 	ViewID uint64
@@ -389,10 +397,15 @@ func (v *TaskViewer) HandleKeypress(key tea.KeyMsg) tea.Cmd {
 			v.rebuild()
 		}
 	case "c":
-		if item, ok := v.live(v.selected); ok && !item.Recorded && item.CanContinue && (item.Status == task.StatusFailed || item.Status == task.StatusCompleted) {
+		if item, ok := v.live(v.selected); ok && !item.Recorded && item.CanContinue && (item.Status == task.StatusFailed || item.Status == task.StatusCompleted || item.Status == task.StatusPaused) {
 			id, viewID, attempt := item.ID, v.viewID, item.Attempt
 			v.Suspend()
 			v.pendingAction = true
+			if item.Status == task.StatusPaused {
+				// A paused task restarts from its checkpoint: no instruction is
+				// needed, only the confirmation the provider dialog gives.
+				return func() tea.Msg { return TaskRestartMsg{TaskID: id, ViewID: viewID, Attempt: attempt} }
+			}
 			return func() tea.Msg { return TaskContinueMsg{TaskID: id, ViewID: viewID, Attempt: attempt} }
 		}
 	case "r":
@@ -515,9 +528,15 @@ func (v *TaskViewer) hint() string {
 			hint = strings.Replace(hint, "s stop", "m steer · s stop", 1)
 		}
 	}
-	if item, ok := v.live(v.selected); ok && !item.Recorded && item.CanContinue && (item.Status == task.StatusFailed || item.Status == task.StatusCompleted) {
+	if item, ok := v.live(v.selected); ok && !item.Recorded && item.CanContinue && (item.Status == task.StatusFailed || item.Status == task.StatusCompleted || item.Status == task.StatusPaused) {
 		label := "c ask main to continue"
-		if v.width < 36 {
+		if item.Status == task.StatusPaused {
+			// Restart, not continue: the checkpoint already says what remains.
+			label = "c restart from checkpoint"
+			if v.width < 36 {
+				label = "c restart"
+			}
+		} else if v.width < 36 {
 			label = "c continue"
 		}
 		hint = strings.ReplaceAll(hint, "s stop · r approval", label)
@@ -566,9 +585,12 @@ func taskViewStage(item TaskViewItem) string {
 			return "awaiting approval"
 		}
 		return "running"
-	case task.StatusCompleted, task.StatusFailed:
+	case task.StatusCompleted, task.StatusFailed, task.StatusPaused:
 		if item.CanContinue {
 			return "idle"
+		}
+		if item.Status == task.StatusPaused {
+			return "paused"
 		}
 	case task.StatusStopped, task.StatusKilled:
 		return "stopped"

@@ -51,7 +51,7 @@ type Executor struct {
 	defaultModel               string // Configured model for the default worker; empty inherits.
 	parentPermissionModeGetter func() PermissionMode
 	hooks                      hook.Handler
-	childHooks                 func(*session.Session, llm.Provider, string) (hook.Handler, func(llm.Provider, string), func())
+	childHooks                 func(*session.Session, llm.Provider, string) (hook.Handler, func())
 	store                      *session.Store
 	parent                     *session.Session
 	parentSessionID            string              // Parent session ID for linking subagent sessions
@@ -104,7 +104,7 @@ func (e *Executor) ConfigureOwner(tasks *task.Manager, registry *Registry, permi
 
 // SetChildHooks supplies a fresh handler bound to the created child's owner.
 // It must not reconfigure a handler shared with the parent or another child.
-func (e *Executor) SetChildHooks(factory func(*session.Session, llm.Provider, string) (hook.Handler, func(llm.Provider, string), func())) {
+func (e *Executor) SetChildHooks(factory func(*session.Session, llm.Provider, string) (hook.Handler, func())) {
 	e.childHooks = factory
 }
 
@@ -368,7 +368,7 @@ func (e *Executor) runPrepared(ctx context.Context, run *preparedRun) (out *Agen
 		return nil, err
 	}
 	if run.hookFactory != nil && !run.hooksBound {
-		run.hooks, run.rebindHooks, run.stopHooks = run.hookFactory(run.recording, run.cfg.provider, run.cfg.modelID)
+		run.hooks, run.stopHooks = run.hookFactory(run.recording, run.cfg.provider, run.cfg.modelID)
 		run.hooksBound = true
 	}
 	e.logRunStart(run)
@@ -385,6 +385,10 @@ func (e *Executor) runPrepared(ctx context.Context, run *preparedRun) (out *Agen
 	res, err := e.executePreparedRun(ctx, run)
 	if err != nil {
 		if unfinished := e.buildUnfinishedAgentResult(run, res); unfinished != nil {
+			// A transient failure leaves the session and the steps behind it
+			// intact, so the caller can restart this task from its checkpoint
+			// instead of redoing the work.
+			unfinished.Restartable = ai.IsRetryable(err)
 			return unfinished, err
 		}
 		e.fireSubagentStop(run.hooks, run.req, run.hookID, "", "")
@@ -424,10 +428,27 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 			return nil, fmt.Errorf("task is currently running")
 		}
 		state, ok := agentTask.LaunchState().(*continuationState)
-		if !ok || state.sessionID == "" {
+		if !ok {
 			cancel()
 			return nil, fmt.Errorf("native continuation checkpoint unavailable")
 		}
+		// The saved checkpoint, not this process's memory, says where the work
+		// stopped. Copy the launch state so a restart resumes in the checkpoint's
+		// session without rewriting the state a later read still depends on.
+		boundary, checkpointed := agentTask.Checkpoint()
+		if checkpointed && boundary.Version != task.CheckpointVersion {
+			cancel()
+			return nil, fmt.Errorf("checkpoint version %d is not readable by this build (want %d)", boundary.Version, task.CheckpointVersion)
+		}
+		resume := *state
+		if boundary.SessionID != "" {
+			resume.sessionID = boundary.SessionID
+		}
+		if resume.sessionID == "" {
+			cancel()
+			return nil, fmt.Errorf("native continuation checkpoint unavailable")
+		}
+		state = &resume
 		// The frozen configuration, not the request name: an unnamed call may
 		// have been substituted by the parent's posture at launch, and a
 		// continuation must keep checking the definition it actually ran.
@@ -458,10 +479,27 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 		next.OnTextDelta, next.OnTextEnd = req.OnTextDelta, req.OnTextEnd
 		next.OnToolStart, next.OnToolResult = req.OnToolStart, req.OnToolResult
 		next.ActivityMaxChars = req.ActivityMaxChars
+		// A restart is not new work: with no brief of its own it continues from
+		// the checkpoint's boundary instead of redoing what already finished.
+		if strings.TrimSpace(next.Prompt) == "" {
+			next.Prompt = restartInstruction(boundary)
+		}
 		// Each explicit continuation gets a finite step budget. Retain the
 		// original budget unless the caller explicitly supplies a new one;
 		// configuration, model and permission policy remain frozen.
 		cfg := *state.cfg
+		// The checkpoint outranks this process's memory of the launch: a restart
+		// runs on the model, effort and tier the work was approved with, so a
+		// restart can never quietly move a paused task onto another binding.
+		if boundary.Model != "" {
+			cfg.modelID = boundary.Model
+		}
+		if boundary.Effort != "" {
+			cfg.effort = boundary.Effort
+		}
+		if boundary.Tier != "" {
+			next.Tier = boundary.Tier
+		}
 		if req.MaxSteps > 0 {
 			cfg.maxSteps = req.MaxSteps
 		}
@@ -521,6 +559,20 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 	agentTask.SetPermissionMode(string(run.cfg.permMode))
 	agentTask.SetModel(run.cfg.modelID)
 	run.onSession = func(sessionID string) { agentTask.SetIdentity(identity, sessionID) }
+	// Every finished tool call is a safe boundary, so the checkpoint advances
+	// while the run is still going: a provider failure then costs the step that
+	// failed, not the work that succeeded before it.
+	run.progress = func(steps int, tool, cwd string) {
+		agentTask.SetCheckpoint(task.Checkpoint{
+			SessionID:    run.sessionID(),
+			Steps:        steps,
+			Model:        run.cfg.modelID,
+			Effort:       run.cfg.effort,
+			Tier:         run.req.Tier,
+			Cwd:          cwd,
+			LastToolCall: tool,
+		})
+	}
 
 	run.req.TaskID = agentTask.GetID()
 	run.reportIdentity() // Report on the spawning call, before returning the launch.
@@ -560,7 +612,14 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 				agentTask.UpdateProgress(result.StepCount, result.TokenUsage.Input+result.TokenUsage.Output)
 			}
 			agentTask.AppendOutput([]byte(fmt.Sprintf("Error: %v\n", err)))
-			agentTask.CompleteAttempt(generation, err)
+			// A retryable provider failure pauses the task at its checkpoint
+			// instead of failing it: the work already done is still reachable,
+			// and a restart continues where this execution stopped.
+			if ai.IsRetryable(err) {
+				agentTask.PauseAttempt(generation, err)
+			} else {
+				agentTask.CompleteAttempt(generation, err)
+			}
 			return
 		}
 
@@ -582,7 +641,10 @@ func (e *Executor) RunBackground(req tool.AgentExecRequest) (*task.AgentTask, er
 }
 
 func (e *Executor) validateRequest(req tool.AgentExecRequest) error {
-	if strings.TrimSpace(req.Prompt) == "" {
+	// A restart resumes work the checkpoint already describes, so it carries no
+	// brief of its own: the child transcript holds the instructions and the
+	// checkpoint holds the boundary. Only new work has to say what it wants.
+	if strings.TrimSpace(req.Prompt) == "" && req.ResumeTaskID == "" {
 		return fmt.Errorf("agent prompt cannot be empty")
 	}
 	switch strings.TrimSpace(req.Mode) {
@@ -591,6 +653,25 @@ func (e *Executor) validateRequest(req tool.AgentExecRequest) error {
 	default:
 		return fmt.Errorf("invalid agent mode %q: must be explore, edit, or default", req.Mode)
 	}
+}
+
+// restartInstruction is the brief a restart runs with. The checkpoint already
+// knows how far the work got, so a restart continues from that boundary instead
+// of asking the user to retype what the interruption threw away.
+func restartInstruction(boundary task.Checkpoint) string {
+	if boundary.Steps == 0 && boundary.LastToolCall == "" {
+		// A run that stopped before its first safe boundary keeps only its
+		// session, so the restart must not claim progress it never recorded.
+		return "Resume the interrupted task in its own session. Verify the current state of anything the stopped attempt may have left half-done, then finish the remaining work and report what you completed."
+	}
+	resume := "Resume the interrupted task from its checkpoint. "
+	if boundary.Steps > 0 {
+		resume += fmt.Sprintf("%d tool call(s) already completed; do not repeat that work. ", boundary.Steps)
+	}
+	if boundary.LastToolCall != "" {
+		resume += fmt.Sprintf("The last completed tool call was %q. ", boundary.LastToolCall)
+	}
+	return resume + "Verify the current state of anything a failed tool call may have left half-done, then finish the remaining work and report what you completed."
 }
 
 func baseAgentConfig() *AgentConfig {
@@ -902,10 +983,12 @@ func (e *Executor) buildAgent(ctx context.Context, run *preparedRun, onToolExec 
 		Gate:            gate,
 		CompactFunc:     subagentCompactFunc(llmClient, run.originalPrompt, run.recording),
 		MaxSteps:        rc.maxSteps,
-		MaxTurnRetries:  core.SilentRetries, // nobody is watching: ride out a transient failure
-		OutboxBuf:       -1,
-		OnEvent:         onEvent,
-		ResultFilter:    e.resultFilter(run),
+		// A provider failure ends the run on the model the user chose; the task
+		// pauses at its checkpoint and a restart continues from there.
+		MaxTurnRetries: 0,
+		OutboxBuf:      -1,
+		OnEvent:        onEvent,
+		ResultFilter:   e.resultFilter(run),
 	}
 	if recorder != nil {
 		var instructions []session.NamedInstruction
@@ -1230,21 +1313,6 @@ func (e *Executor) effectiveModelNameAtTier(config *AgentConfig, name, tier stri
 		return assignment.ModelID
 	}
 	return e.parentModelID
-}
-
-func shouldRetryWithParentModel(err error, modelID, parentModelID string) bool {
-	if err == nil || parentModelID == "" || modelID == "" || modelID == parentModelID {
-		return false
-	}
-	var admission *ai.AdmissionError
-	var agentAdmission *sdkagent.AdmissionError
-	var recording *llm.RecordingError
-	var hookRecording *hook.RecordingError
-	if errors.As(err, &admission) || errors.As(err, &agentAdmission) || errors.As(err, &recording) || errors.As(err, &hookRecording) {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "model_not_found") || strings.Contains(msg, "model not found") || strings.Contains(msg, "model_not_exist")
 }
 
 // operationMode maps a subagent PermissionMode to the setting.OperationMode that

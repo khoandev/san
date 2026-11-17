@@ -58,14 +58,14 @@ func TestChildHookDrainPrecedesWriterClose(t *testing.T) {
 	}
 	stopped, drained := false, false
 	var childID string
-	e.SetChildHooks(func(child *session.Session, _ llm.Provider, _ string) (hook.Handler, func(llm.Provider, string), func()) {
+	e.SetChildHooks(func(child *session.Session, _ llm.Provider, _ string) (hook.Handler, func()) {
 		childID = child.ID()
 		handler := childStartHooks{dispatch: func(event hook.EventType) {
 			if event == hook.SubagentStop {
 				stopped = true
 			}
 		}}
-		return handler, nil, func() {
+		return handler, func() {
 			if !stopped {
 				t.Error("child handler drained before stop dispatch")
 			}
@@ -121,8 +121,8 @@ func TestChildPostToolRecordingFailureBlocksNextInference(t *testing.T) {
 	}
 	sentinel := errors.New("post tool hook recording failed")
 	handler := childStartHooks{dispatch: func(hook.EventType) {}}
-	e.SetChildHooks(func(*session.Session, llm.Provider, string) (hook.Handler, func(llm.Provider, string), func()) {
-		return handler, nil, func() {}
+	e.SetChildHooks(func(*session.Session, llm.Provider, string) (hook.Handler, func()) {
+		return handler, func() {}
 	})
 	e.SetPostTool(func(got hook.Handler, _ core.ToolResult, _ any) error {
 		if got == nil {

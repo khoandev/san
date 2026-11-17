@@ -46,6 +46,8 @@ func (a *ExecutorAdapter) Run(ctx context.Context, req tool.AgentExecRequest) (*
 		Duration:          result.Duration,
 		Activity:          result.Activity,
 		Error:             result.Error,
+		TaskID:            result.TaskID,
+		Restartable:       result.Restartable,
 	}, err
 }
 

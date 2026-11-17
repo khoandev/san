@@ -191,6 +191,12 @@ type AgentExecResult struct {
 	Duration          time.Duration
 	Activity          []string
 	Error             string
+	// TaskID addresses the run for a continuation. It is how the parent tells
+	// the user (or itself) where the work stopped and how to go on.
+	TaskID string
+	// Restartable reports that a failed run left a checkpoint the task can be
+	// restarted from, so its work is paused rather than lost.
+	Restartable bool
 }
 
 // AgentTaskInfo contains info about a background agent task.

@@ -46,11 +46,11 @@ func newHeadlessExecutor(provider llm.Provider, cwd, model string, settings *set
 		return headlessPermissionResolver{policy: policy}
 	}, nil)
 	executor.SetDisabledTools(setting.WithDefaultDisabledTools(settings.DisabledTools))
-	executor.SetChildHooks(func(owner *session.Session, provider llm.Provider, model string) (hook.Handler, func(llm.Provider, string), func()) {
+	executor.SetChildHooks(func(owner *session.Session, provider llm.Provider, model string) (hook.Handler, func()) {
 		projection := owner.Snapshot()
 		engine := hook.NewEngine(settings, owner.ID(), projection.Identity().InitialCWD, owner.Path())
 		bindSessionHooks(engine, provider, owner, model)
-		return engine, func(provider llm.Provider, model string) { bindSessionHooks(engine, provider, owner, model) }, engine.Shutdown
+		return engine, engine.Shutdown
 	})
 	executor.SetPostTool(func(handler hook.Handler, result core.ToolResult, effect any) error {
 		engine, _ := handler.(*hook.Engine)

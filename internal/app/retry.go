@@ -9,6 +9,10 @@
 // Nothing waits behind the dialog: the first failure of that kind ends the
 // turn, so the wait the provider asked for is the one the dialog shows.
 //
+// The same dialog answers for a subagent that paused at its checkpoint: its
+// task keeps the session and the progress, so Restart continues that work from
+// the boundary instead of re-running the turn.
+//
 // AutoPilot never sees the dialog: an unattended run recovers through its own
 // backoff (autopilotRecoverCmd), with no hand to press a button.
 package app
@@ -21,6 +25,7 @@ import (
 
 	"github.com/genai-io/san/internal/app/conv"
 	"github.com/genai-io/san/internal/app/input"
+	"github.com/genai-io/san/internal/task"
 )
 
 // openRetryDialog raises the dialog for a failed turn a retry could still save.
@@ -31,6 +36,29 @@ func (m *model) openRetryDialog(err error) bool {
 		return false
 	}
 	m.userInput.RateLimit.Show(retryRequest(err), m.env.Width, m.env.Height)
+	return true
+}
+
+// openTaskRestartDialog raises the same dialog for a task that paused at its
+// checkpoint. The task's own failure is the detail, so the user reads what the
+// provider said once; the answer restarts that task, not the session's turn.
+func (m *model) openTaskRestartDialog(taskID string) bool {
+	if taskID == "" || m.services.Task == nil || m.autopilotEngaged() {
+		return false
+	}
+	worker, exists := m.services.Task.Get(taskID)
+	if !exists {
+		return false
+	}
+	info := worker.GetStatus()
+	if info.Status != task.StatusPaused || (info.ParentSessionID != "" && info.ParentSessionID != m.sessionID()) {
+		return false
+	}
+	m.userInput.RateLimit.Show(input.RateLimitRequest{
+		Title:  "Subagent paused at a checkpoint",
+		Detail: info.Error,
+		TaskID: info.ID,
+	}, m.env.Width, m.env.Height)
 	return true
 }
 
@@ -68,6 +96,11 @@ func (m *model) handleRateLimitChoice(msg input.RateLimitChoiceMsg) tea.Cmd {
 	m.userInput.RateLimit.Hide()
 	if !msg.Restart {
 		return nil
+	}
+	if msg.TaskID != "" {
+		// A paused task restarts itself: its checkpoint already holds the
+		// instruction, so only main has to send the continuation.
+		return m.restartPausedTask(msg.TaskID)
 	}
 	start, err := m.ensureAgentRuntime()
 	if err != nil {
